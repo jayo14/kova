@@ -1,0 +1,102 @@
+version: "3.9"
+
+# Kova runtime topology:
+#
+#   frontend  (Next.js)  ── HTTP/WS ──>  backend  (FastAPI API + SSE + WS gateway)
+#                                          │
+#                                          ├── Celery broker ──> redis (db 1)
+#                                          ├── events/frames ──> redis (db 0)
+#                                          └── Postgres ──> postgres  (or external Supabase)
+#                                          │
+#                                          ▼
+#                                     kova-worker (Celery, owns Playwright/Chromium)
+#
+# Supabase (auth JWTs + evidence storage) is EXTERNAL — set SUPABASE_PROJECT_REF
+# and SUPABASE_SERVICE_ROLE_KEY in backend/.env.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: kova
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI control API: REST + SSE + WebSocket viewport gateway.
+  # NEVER launches browsers in worker deployments; Chromium lives in kova-worker.
+  kova-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/kova
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  # Celery worker: owns Chromium. Each execution = one isolated browser context.
+  # concurrency=2 → at most 2 concurrent Chromium instances (~1-1.5GB RAM each).
+  # Scale by raising --concurrency, not by removing the limit.
+  kova-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/kova
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    env_file:
+      - ./backend/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  # Next.js frontend
+  kova-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://kova-api:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - kova-api
+
+volumes:
+  pgdata:
