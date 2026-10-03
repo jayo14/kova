@@ -44,8 +44,8 @@ def create_access_token(user: User) -> str:
         "aud": settings.OIDC_AUDIENCE or "authenticated",
     }
     # Since we are replacing the external Identity Provider, we must sign the JWT ourselves.
-    # We will use OIDC_CLIENT_ID or a dedicated JWT_SECRET environment variable (defaulting to a dev key).
-    secret = settings.OIDC_CLIENT_ID if settings.OIDC_CLIENT_ID else "dev-secret-key-change-me"
+    # We will use JWT_SECRET_KEY or a dedicated JWT_SECRET environment variable (defaulting to a dev key).
+    secret = settings.JWT_SECRET_KEY if settings.JWT_SECRET_KEY else "dev-secret-key-change-me"
     encoded_jwt = jwt.encode(to_encode, secret, algorithm="HS256")
     return encoded_jwt
 

@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     OIDC_ISSUER_URL: str | None = None
     OIDC_AUDIENCE: str = "authenticated"
-    OIDC_CLIENT_ID: str = ""
+    JWT_SECRET_KEY: str = ""
 
     @property
     def effective_jwt_issuer(self) -> str | None:
