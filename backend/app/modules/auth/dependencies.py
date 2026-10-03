@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 bearer_scheme = HTTPBearer(auto_error=False)
 
 def _get_jwt_secret() -> str:
-    return settings.OIDC_CLIENT_ID if settings.OIDC_CLIENT_ID else "dev-secret-key-change-me"
+    return settings.JWT_SECRET_KEY if settings.JWT_SECRET_KEY else "dev-secret-key-change-me"
 
 
 async def get_current_user(
