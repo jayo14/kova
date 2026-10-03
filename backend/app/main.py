@@ -51,6 +51,7 @@ app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(viewport.router)
 
 
+@app.get("/")
 @app.get("/health")
 @app.get("/api/v1/health")
 async def health():
