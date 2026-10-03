@@ -2,7 +2,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 import jwt
 import bcrypt as py_bcrypt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from app.modules.email.service import email_service
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +59,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_session)):
+async def register(req: RegisterRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_session)):
     result = await db.execute(select(User).where(User.email == req.email))
     existing_user = result.scalar_one_or_none()
     if existing_user:
@@ -74,6 +75,11 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_session)
     await db.refresh(new_user)
 
     token = create_access_token(new_user)
+    
+    # Send welcome email asynchronously
+    html_content = f"<h2>Welcome to Kova, {new_user.name or 'User'}!</h2><p>Your autonomous software testing journey starts here.</p>"
+    background_tasks.add_task(email_service.send_email, new_user.email, "Welcome to Kova", html_content)
+    
     return TokenResponse(
         access_token=token,
         user={"id": str(new_user.id), "email": new_user.email, "name": new_user.name},
@@ -101,3 +107,27 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_session)):
 @router.get("/me")
 async def get_me(user: User = Depends(get_current_user)):
     return {"id": str(user.id), "email": user.email, "name": user.name}
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+
+@router.post("/reset-password")
+async def reset_password(req: ResetPasswordRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_session)):
+    result = await db.execute(select(User).where(User.email == req.email))
+    user = result.scalar_one_or_none()
+    
+    if user:
+        # Generate a temporary reset JWT
+        expires = datetime.now(timezone.utc) + timedelta(hours=1)
+        to_encode = {"exp": expires, "sub": str(user.id), "type": "reset"}
+        secret = settings.JWT_SECRET_KEY if settings.JWT_SECRET_KEY else "dev-secret-key-change-me"
+        reset_token = jwt.encode(to_encode, secret, algorithm="HS256")
+        
+        # In a real setup you'd have the frontend URL in env vars, using localhost:3000 for local test
+        reset_link = f"http://localhost:3000/auth/reset-password?token={reset_token}"
+        
+        html_content = f"<h2>Password Reset</h2><p>Click <a href='{reset_link}'>here</a> to reset your password. This link expires in 1 hour.</p>"
+        background_tasks.add_task(email_service.send_email, user.email, "Reset your Kova password", html_content)
+        
+    # Always return success to prevent email enumeration
+    return {"message": "If that email exists, we sent a password reset link."}
