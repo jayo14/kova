@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import jwt
-from passlib.hash import bcrypt
+import bcrypt as py_bcrypt
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
@@ -50,6 +50,13 @@ def create_access_token(user: User) -> str:
     return encoded_jwt
 
 
+def hash_password(password: str) -> str:
+    return py_bcrypt.hashpw(password.encode("utf-8"), py_bcrypt.gensalt()).decode("utf-8")
+
+def verify_password(password: str, hashed: str) -> bool:
+    return py_bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
+
+
 @router.post("/register", response_model=TokenResponse)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_session)):
     result = await db.execute(select(User).where(User.email == req.email))
@@ -59,7 +66,7 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_session)
 
     new_user = User(
         email=req.email,
-        password_hash=bcrypt.hash(req.password),
+        password_hash=hash_password(req.password),
         name=req.name,
     )
     db.add(new_user)
@@ -81,7 +88,7 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_session)):
     if not user or not user.password_hash:
         raise HTTPException(status_code=401, detail="Invalid email or password")
         
-    if not bcrypt.verify(req.password, user.password_hash):
+    if not verify_password(req.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_access_token(user)
