@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 import { updateProfile } from "@/lib/auth/settings";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button } from "@/components/ui/button";

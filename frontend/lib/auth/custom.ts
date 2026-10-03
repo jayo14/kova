@@ -1,5 +1,7 @@
-// Mock Supabase Auth Client to drop-in replace @supabase/ssr
 import Cookies from "js-cookie";
+
+export type User = { id: string; email: string; name?: string; user_metadata?: any };
+export type Session = { access_token: string; user: User };
 
 export class CustomAuthClient {
   private listeners: any[] = [];
@@ -59,6 +61,24 @@ export class CustomAuthClient {
       }
     },
     
+    signUp: async ({ email, password, options }: any) => {
+      try {
+        const res = await fetch("/api/v1/auth/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password, name: options?.data?.name })
+        });
+        const data = await res.json();
+        if (!res.ok) return { data: { user: null }, error: new Error(data.detail || "Registration failed") };
+        
+        Cookies.set("access_token", data.access_token, { expires: 7, path: '/' });
+        this.notify(data.session);
+        return { data: { user: data.user, session: { access_token: data.access_token, user: data.user } }, error: null };
+      } catch (err) {
+        return { data: { user: null }, error: err };
+      }
+    },
+    
     signOut: async () => {
       Cookies.remove("access_token", { path: '/' });
       this.notify(null);
@@ -76,16 +96,26 @@ export class CustomAuthClient {
       };
     },
 
-    resetPasswordForEmail: async (email: string) => {
-      return { error: new Error("Not implemented in custom auth") };
+    resetPasswordForEmail: async (email: string, options?: any) => {
+      return { data: { user: null }, error: new Error("Not implemented in custom auth") };
+    },
+    
+    exchangeCodeForSession: async (code: string) => {
+      return { data: { session: null }, error: new Error("Not implemented in custom auth") };
     },
     
     updateUser: async (attrs: any) => {
-      return { error: new Error("Not implemented in custom auth") };
+      return { data: { user: null }, error: new Error("Not implemented in custom auth") };
     },
     
     refreshSession: async () => {
       return await this.auth.getSession();
+    },
+    
+    admin: {
+      deleteUser: async (id: string) => {
+        return { data: { user: null }, error: new Error("Not implemented in custom auth") };
+      }
     }
   };
 

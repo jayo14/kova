@@ -15,7 +15,7 @@ import {
   DialogFooter,
   DialogClose,
 } from "@/components/ui/dialog";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 
 interface DangerZoneProps {
   user: User;

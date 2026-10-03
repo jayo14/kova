@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 import { signOut } from "@/lib/auth/settings";
 import { AccountSection } from "./account-section";
 import { PasswordSection } from "./password-section";

@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession, getUser } from "./session";
 import { resolveUserOrganization, getActiveOrganization } from "./organization";
-import type { Session, User } from "@supabase/supabase-js";
+import type { Session, User } from "@/lib/auth/custom";
 import type { Organization } from "@/lib/types";
 
 export interface AuthenticatedContext {
