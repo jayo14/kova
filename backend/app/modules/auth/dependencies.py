@@ -24,24 +24,21 @@ def _get_jwk_client() -> PyJWKClient | None:
     if _jwk_failed:
         return None
     if _jwk_client is None:
-        project_ref = settings.SUPABASE_PROJECT_REF
-        if not project_ref or project_ref == "127.0.0.1":
+        issuer_url = settings.OIDC_ISSUER_URL
+        if not issuer_url:
             if settings.is_production:
                 # Production must never silently fall back to a shared dev user:
                 # every request would coalesce into one identity with full
                 # cross-user access. Refuse instead.
                 raise RuntimeError(
-                    "Refusing to start: SUPABASE_PROJECT_REF is not configured "
+                    "Refusing to start: OIDC_ISSUER_URL is not configured "
                     "and the dev auth bypass is disabled in production."
                 )
-            logger.warning("Supabase not configured — auth disabled in dev mode")
+            logger.warning("OIDC not configured — auth disabled in dev mode")
             _jwk_failed = True
             return None
         try:
-            jwks_url = (
-                f"https://{project_ref}"
-                ".supabase.co/auth/v1/.well-known/jwks.json"
-            )
+            jwks_url = f"{issuer_url.rstrip('/')}/.well-known/jwks.json"
             _jwk_client = PyJWKClient(jwks_url, cache_keys=True)
         except Exception as e:
             logger.warning("Failed to init JWK client: %s", e)
@@ -70,7 +67,7 @@ async def get_current_user(
         return await user_repo.get_or_create(default_id, "dev@kova.local", "Dev User")
 
     if not credentials:
-        if settings.SUPABASE_PROJECT_REF == "127.0.0.1":
+        if not settings.OIDC_ISSUER_URL:
             default_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
             user_repo = UserRepository(db)
             return await user_repo.get_or_create(default_id, "dev@kova.local", "Dev User")
@@ -85,7 +82,7 @@ async def get_current_user(
         signing_key = jwk_client.get_signing_key_from_jwt(token)
 
         decode_options: dict = {"require": ["exp", "sub"]}
-        audience = settings.SUPABASE_JWT_AUDIENCE
+        audience = settings.OIDC_AUDIENCE
         issuer = settings.effective_jwt_issuer
         if not audience:
             decode_options["verify_aud"] = False
