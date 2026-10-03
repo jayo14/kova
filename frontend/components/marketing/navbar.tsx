@@ -14,7 +14,7 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { createClient } from "@/lib/auth/client";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 
 const navLinks = [
   { label: "Product", href: "#product" },
@@ -37,7 +37,7 @@ export function Navbar() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
       setUser(session?.user ?? null);
     });
 

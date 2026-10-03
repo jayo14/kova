@@ -6,7 +6,7 @@ import { AppHeader } from "./app-header";
 import { MobileNav } from "./mobile-nav";
 import { useAuthStore } from "@/lib/store";
 import { resolveUserOrganization } from "@/lib/auth/organization";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 
 interface AppShellProps {
   children: ReactNode;

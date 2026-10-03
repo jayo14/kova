@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { createClient } from "@/lib/auth/client";
 import { clearPendingIntent } from "@/lib/auth/pending-intent";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 
 interface UserMenuProps {
   user: User;

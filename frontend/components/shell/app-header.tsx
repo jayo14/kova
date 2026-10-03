@@ -4,7 +4,7 @@ import { Logo } from "@/components/shared/logo";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button } from "@/components/ui/button";
 import { UserMenu } from "./user-menu";
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 
 interface AppHeaderProps {
   user: User;

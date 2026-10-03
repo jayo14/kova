@@ -1,4 +1,4 @@
-import type { User } from "@supabase/supabase-js";
+import type { User } from "@/lib/auth/custom";
 import { createClient } from "./client";
 
 function mapAuthError(errorMsg?: string, fallback = "Something went wrong. Try again."): string {
