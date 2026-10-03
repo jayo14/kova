@@ -97,7 +97,17 @@ export class CustomAuthClient {
     },
 
     resetPasswordForEmail: async (email: string, options?: any) => {
-      return { data: { user: null }, error: new Error("Not implemented in custom auth") };
+      try {
+        const res = await fetch("/api/v1/auth/reset-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email })
+        });
+        if (!res.ok) return { data: { user: null }, error: new Error("Failed to send reset email") };
+        return { data: { user: null }, error: null };
+      } catch (err) {
+        return { data: { user: null }, error: err };
+      }
     },
     
     exchangeCodeForSession: async (code: string) => {
