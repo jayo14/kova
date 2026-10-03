@@ -4,7 +4,6 @@ Stores evidence artifacts in a private S3 bucket. Returns short-lived signed URL
 """
 
 import logging
-import uuid
 import boto3
 from botocore.exceptions import ClientError
 
@@ -38,7 +37,7 @@ class EvidenceStorage:
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             return
 
-        bucket = settings.storage_bucket("evidence")
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
         s3 = self._get_s3_client()
 
         try:
@@ -77,9 +76,14 @@ class EvidenceStorage:
         )
         filename = f"{evidence_id}{ext}"
         object_path = f"executions/{execution_id}/evidence/{filename}"
+        
+        if settings.RUMPTYCLOUD_BUCKET_NAME:
+            prefix = settings.storage_bucket("evidence")
+            object_path = f"{prefix}/{object_path}"
+            
         self._ensure_bucket()
 
-        bucket = settings.storage_bucket("evidence")
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
         s3 = self._get_s3_client()
 
         try:
@@ -102,7 +106,7 @@ class EvidenceStorage:
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             return None
 
-        bucket = settings.storage_bucket("evidence")
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
         s3 = self._get_s3_client()
 
         try:
@@ -122,7 +126,7 @@ class EvidenceStorage:
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             return False
 
-        bucket = settings.storage_bucket("evidence")
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
         s3 = self._get_s3_client()
 
         try:
