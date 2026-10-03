@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     RUMPTYCLOUD_S3_ENDPOINT: str = "https://s3.rumptycloud.com"
     RUMPTYCLOUD_ACCESS_KEY_ID: str = ""
     RUMPTYCLOUD_SECRET_ACCESS_KEY: str = ""
+    RUMPTYCLOUD_BUCKET_NAME: str = ""
+    RUMPTYCLOUD_PUBLIC_URL_PREFIX: str = ""
     STORAGE_BUCKET_PREFIX: str = "kova"
 
     OIDC_ISSUER_URL: str | None = None

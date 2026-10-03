@@ -39,7 +39,7 @@ class ScreenshotStorage:
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             return
 
-        bucket = settings.storage_bucket("screenshots")
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
         s3 = self._get_s3_client()
 
         try:
@@ -83,7 +83,13 @@ class ScreenshotStorage:
         object_path = f"{folder}/{exploration_id}/{filename}"
         self._ensure_bucket()
 
-        bucket = settings.storage_bucket("screenshots")
+        # Fallback to older style if RUMPTYCLOUD_BUCKET_NAME is not provided
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
+        # Prefix the object path with the logical bucket prefix if a unified bucket is used
+        if settings.RUMPTYCLOUD_BUCKET_NAME:
+            prefix = settings.storage_bucket("screenshots")
+            object_path = f"{prefix}/{object_path}"
+            
         s3 = self._get_s3_client()
 
         try:
@@ -93,8 +99,11 @@ class ScreenshotStorage:
                 Body=screenshot_bytes,
                 ContentType=content_type,
             )
-            # Assuming virtual-host style or path-style URL
-            public_url = f"{settings.RUMPTYCLOUD_S3_ENDPOINT}/{bucket}/{object_path}"
+            # Use custom public URL prefix if available (e.g. assets.rumptycloud.app/...)
+            if settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX:
+                public_url = f"{settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX}/{object_path}"
+            else:
+                public_url = f"{settings.RUMPTYCLOUD_S3_ENDPOINT}/{bucket}/{object_path}"
             logger.debug("Uploaded screenshot to S3: %s", object_path)
             return {
                 "screenshot_url": public_url,
@@ -136,8 +145,16 @@ class ScreenshotStorage:
         """Get public URL for a screenshot key."""
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not exploration_id:
             return None
-        bucket = settings.storage_bucket("screenshots")
         object_path = f"{folder}/{exploration_id}/{key}"
+        
+        if settings.RUMPTYCLOUD_BUCKET_NAME:
+            prefix = settings.storage_bucket("screenshots")
+            object_path = f"{prefix}/{object_path}"
+            
+        if settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX:
+            return f"{settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX}/{object_path}"
+            
+        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
         return f"{settings.RUMPTYCLOUD_S3_ENDPOINT}/{bucket}/{object_path}"
 
 
