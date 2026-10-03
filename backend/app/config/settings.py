@@ -40,24 +40,18 @@ class Settings(BaseSettings):
             origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
         return list(dict.fromkeys(origins))
 
-    SUPABASE_URL_OVERRIDE: str | None = None
-    SUPABASE_PROJECT_REF: str = "127.0.0.1"
-    SUPABASE_JWT_ISSUER: str | None = None
-    SUPABASE_JWT_AUDIENCE: str = "authenticated"
+    RUMPTYCLOUD_S3_ENDPOINT: str = "https://s3.rumptycloud.com"
+    RUMPTYCLOUD_ACCESS_KEY_ID: str = ""
+    RUMPTYCLOUD_SECRET_ACCESS_KEY: str = ""
+    STORAGE_BUCKET_PREFIX: str = "kova"
+
+    OIDC_ISSUER_URL: str | None = None
+    OIDC_AUDIENCE: str = "authenticated"
+    OIDC_CLIENT_ID: str = ""
 
     @property
     def effective_jwt_issuer(self) -> str | None:
-        """JWT issuer: explicit override or auto-derived from project ref.
-
-        Supabase v2 JWTs use ``https://<ref>.supabase.co/auth/v1`` as issuer.
-        """
-        if self.SUPABASE_JWT_ISSUER:
-            return self.SUPABASE_JWT_ISSUER
-        if self.SUPABASE_PROJECT_REF and self.SUPABASE_PROJECT_REF != "127.0.0.1":
-            return f"https://{self.SUPABASE_PROJECT_REF}.supabase.co/auth/v1"
-        return None
-    SUPABASE_SERVICE_ROLE_KEY: str = ""
-    STORAGE_BUCKET_PREFIX: str = "kova"
+        return self.OIDC_ISSUER_URL
     TEMPMAIL_SERVICE_URL: str = ""   # e.g. http://localhost:8200 (fixture mail service)
     TEMPMAIL_API_KEY: str = ""
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -74,14 +68,6 @@ class Settings(BaseSettings):
     def effective_debug(self) -> bool:
         """DEBUG is always False in production regardless of env var."""
         return self.DEBUG and not self.is_production
-
-    @property
-    def supabase_url(self) -> str:
-        if self.SUPABASE_URL_OVERRIDE:
-            return self.SUPABASE_URL_OVERRIDE.rstrip("/")
-        if self.SUPABASE_PROJECT_REF and self.SUPABASE_PROJECT_REF != "127.0.0.1":
-            return f"https://{self.SUPABASE_PROJECT_REF}.supabase.co"
-        return ""
 
     def storage_bucket(self, purpose: str) -> str:
         """Get a bucket name for a given purpose.
