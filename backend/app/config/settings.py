@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    RESEND_API_KEY: str = ""
     model_config = {
         "env_file": (".env", "backend/.env", "../backend/.env"),
         "env_file_encoding": "utf-8",
