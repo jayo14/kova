@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import credentials, executions, exploration, flows, projects, viewport
+from app.api.routes import auth, credentials, executions, exploration, flows, projects, viewport
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
 
@@ -42,6 +42,7 @@ else:
         allow_headers=["*"],
     )
 
+app.include_router(auth.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(credentials.router, prefix="/api/v1")
 app.include_router(flows.router, prefix="/api/v1")
