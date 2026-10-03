@@ -20,6 +20,7 @@ dependencies = [
     "itsdangerous>=2.2,<3.0",
     "python-multipart>=0.0.18,<1.0",
     "PyJWT>=2.9,<3.0",
+    "passlib[bcrypt]>=1.7,<2.0",
     "cryptography>=44.0,<45.0",
 ]
 
