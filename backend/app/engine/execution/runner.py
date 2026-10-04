@@ -821,21 +821,77 @@ class FlowRunner:
         )
 
         if not result["success"]:
-            # Capture failure snapshot so UI displays the browser state at failure
-            try:
-                fail_ss = await self._capture_live_snapshot(
-                    browser, str(ctx.execution_id), step_index=step_index, action_type=action_type, state="failed"
-                )
-                ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {**fail_ss, "failed": True})
-                await self._emit_events(ctx, event_recorder)
-            except Exception:
-                pass
             error_type = result.get("error", {}).get("type", "action_failed")
             error_code = _map_error_code(error_type)
-            raise ExecutionError(
-                f"Action failed at step {step_index}: {result.get('error', {}).get('message', 'Unknown')}",
-                error_code=error_code,
-            )
+
+            # At the point where a step fails target resolution, call AgentExecutor only if ai_settings.ai_enabled
+            if error_code == ErrorCode.TARGET_NOT_FOUND:
+                from app.engine.ai.settings import ai_settings
+                if ai_settings.ai_enabled:
+                    try:
+                        from app.engine.ai.executor import AgentExecutor
+                        from app.engine.ai.provider import get_ai_provider
+                        from app.engine.ai.reasoner import AgentReasoner
+                        from app.engine.ai.validator import validate_action
+
+                        ai_provider = get_ai_provider()
+                        if ai_provider:
+                            agent_executor = AgentExecutor(
+                                execution_id=uuid.UUID(ctx.execution_id) if ctx.execution_id else uuid.uuid4(),
+                                reasoner=AgentReasoner(provider=ai_provider),
+                                email_provider=None,
+                                credential_store=action_executor._credential_store,
+                            )
+                            alt_target = await agent_executor.heal_target(
+                                browser=browser,
+                                step=raw_action,
+                                error_message=result.get("error", {}).get("message", "Target not found"),
+                                observation=observation,
+                            )
+                            if alt_target:
+                                candidate_action = dict(raw_action)
+                                candidate_action["target"] = alt_target
+                                if validate_action(candidate_action):
+                                    logger.info(
+                                        "AI proposed alternate target for step %d: %s",
+                                        step_index,
+                                        alt_target,
+                                    )
+                                    ctx.record_event("ai_assisted", {
+                                        "step": step_index,
+                                        "original_target": raw_action.get("target"),
+                                        "alternate_target": alt_target,
+                                        "action": raw_action.get("type"),
+                                    })
+                                    await self._emit_events(ctx, event_recorder)
+
+                                    retry_result = await action_executor.execute(
+                                        candidate_action,
+                                        execution_id=uuid.UUID(ctx.execution_id) if ctx.execution_id else None,
+                                    )
+                                    if retry_result.get("success"):
+                                        result = retry_result
+                                        raw_action = candidate_action
+                                        action_type = raw_action.get("type", "")
+                    except Exception as ai_err:
+                        logger.warning("AI target healing failed: %s", ai_err)
+
+            if not result["success"]:
+                # Capture failure snapshot so UI displays the browser state at failure
+                try:
+                    fail_ss = await self._capture_live_snapshot(
+                        browser, str(ctx.execution_id), step_index=step_index, action_type=action_type, state="failed"
+                    )
+                    ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {**fail_ss, "failed": True})
+                    await self._emit_events(ctx, event_recorder)
+                except Exception:
+                    pass
+                error_type = result.get("error", {}).get("type", "action_failed")
+                error_code = _map_error_code(error_type)
+                raise ExecutionError(
+                    f"Action failed at step {step_index}: {result.get('error', {}).get('message', 'Unknown')}",
+                    error_code=error_code,
+                )
 
         # No per-action screenshot — evidence screenshots are captured at
         # verification.passed, verification.failed, execution.completed, and
