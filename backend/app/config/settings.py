@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = ""
 
     @model_validator(mode="after")
-    def validate_jwt_secret_in_production(self) -> "Settings":
+    def validate_production_keys(self) -> "Settings":
         if self.is_production:
             if (
                 not self.JWT_SECRET_KEY
@@ -64,6 +64,23 @@ class Settings(BaseSettings):
             ):
                 raise ValueError(
                     "In production, JWT_SECRET_KEY must be set, cannot be 'dev-secret-key-change-me', and must be at least 32 characters long."
+                )
+            dev_fernet_key = "k9_8TqZfUvYx3W1eR7tL5mN2pQ4sA6dF8gH0jK2lM4o="
+            key = (self.CREDENTIAL_ENCRYPTION_KEY or "").strip()
+            if not key or key == dev_fernet_key:
+                raise ValueError(
+                    "In production, CREDENTIAL_ENCRYPTION_KEY must be set and cannot be the default dev key."
+                )
+            try:
+                import base64
+                raw = base64.urlsafe_b64decode(key.encode("utf-8"))
+                if len(raw) != 32:
+                    raise ValueError
+                from cryptography.fernet import Fernet
+                Fernet(key.encode("utf-8"))
+            except Exception:
+                raise ValueError(
+                    "In production, CREDENTIAL_ENCRYPTION_KEY must be a valid 32-byte url-safe base64-encoded Fernet key."
                 )
         return self
 
