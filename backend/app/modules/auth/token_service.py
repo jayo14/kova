@@ -50,3 +50,34 @@ async def verify_api_token(
         token_obj.last_used_at = datetime.now(timezone.utc)
         await db.flush()
     return token_obj
+
+
+async def list_api_tokens(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[ApiToken]:
+    stmt = select(ApiToken).where(
+        ApiToken.user_id == user_id,
+        ApiToken.revoked_at.is_(None),
+    ).order_by(ApiToken.created_at.desc())
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def delete_api_token(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    token_id: uuid.UUID,
+) -> bool:
+    stmt = select(ApiToken).where(
+        ApiToken.id == token_id,
+        ApiToken.user_id == user_id,
+        ApiToken.revoked_at.is_(None),
+    )
+    result = await db.execute(stmt)
+    token_obj = result.scalar_one_or_none()
+    if not token_obj:
+        return False
+    token_obj.revoked_at = datetime.now(timezone.utc)
+    await db.flush()
+    return True
