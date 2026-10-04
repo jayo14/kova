@@ -188,8 +188,12 @@ def test_ssrf_malicious_email_link_rejection():
     assert validate_email_link("http://127.0.0.1:8300/reset?token=abc", app_host=app_host) is True
 
 
-def test_subdomain_navigation_policy():
+def test_subdomain_navigation_policy(monkeypatch):
     """Subdomain validation allows trusted app subdomains while rejecting external hosts."""
+    def _mock_getaddrinfo(host, port, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _mock_getaddrinfo)
     app_host = "example.com"
     assert validate_email_link("https://auth.example.com/reset", app_host=app_host) is True
     assert validate_email_link("https://notexample.com/reset", app_host=app_host) is False
