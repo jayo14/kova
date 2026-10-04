@@ -36,6 +36,9 @@ class EventTypes:
     VERIFICATION_PASSED = "verification.passed"
     VERIFICATION_FAILED = "verification.failed"
 
+    # Network / Diagnostics
+    NETWORK_ERROR = "network.error"
+
     # Recovery
     RECOVERY_STARTED = "recovery.started"
 

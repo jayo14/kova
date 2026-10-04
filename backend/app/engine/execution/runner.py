@@ -14,6 +14,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 ALLOWED_NAMED_KEYS = {
     "Backspace",
@@ -216,6 +217,13 @@ class FlowRunner:
             ctx.record_event(EventTypes.BROWSER_STARTED, {"browser": "chromium"})
             await self._emit_events(ctx, event_recorder)
 
+            # Hook network errors to execution context
+            async def _record_network_error(err_data: dict[str, Any]):
+                ctx.record_event(EventTypes.NETWORK_ERROR, err_data)
+                await self._emit_events(ctx, event_recorder)
+
+            browser.on_network_error = _record_network_error
+
             # Observe URL/title changes for the viewport (framenavigated)
             nav_unbind = self._bind_nav_observer(browser, exec_id)
 
@@ -285,6 +293,7 @@ class FlowRunner:
                 # Pause gate before each step — drain input while paused
                 await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
                 ctx.current_step_index = i
+                browser.current_step_index = i
                 await publish_state(exec_id, "executing", browser.page.url, "")
                 try:
                     await self._capture_live_snapshot(browser, exec_id, step_index=i, state="observing")
@@ -318,13 +327,24 @@ class FlowRunner:
                     )]
                 )
 
-            ctx.record_event(EventTypes.VERIFICATION_PASSED, verification.to_dict())
+            if verification.passed:
+                ctx.record_event(EventTypes.VERIFICATION_PASSED, verification.to_dict())
+            else:
+                ctx.record_event(EventTypes.VERIFICATION_FAILED, verification.to_dict())
             await self._emit_events(ctx, event_recorder)
 
             if not verification.passed:
                 # Determine appropriate status based on failure reason
                 failed_checks = [c for c in verification.checks if not c.passed]
-                error_messages = [c.message for c in failed_checks]
+                error_messages = []
+                for c in failed_checks:
+                    exp_val = getattr(c, "expected", None)
+                    act_val = getattr(c, "actual", None)
+                    if exp_val is not None or act_val is not None:
+                        detail = f"{c.message} (expected: {exp_val!r}, got: {act_val!r})"
+                    else:
+                        detail = c.message
+                    error_messages.append(f"{c.type}: {detail}")
                 error_str = "; ".join(error_messages)
 
                 # Fail-closed condition problems (missing/unknown/malformed/vacuous
@@ -390,6 +410,37 @@ class FlowRunner:
 
             # Step 8: Capture evidence
             await self._capture_evidence(ctx, browser, verification, event_recorder)
+
+            # Enforce gate on 5xx or failed requests after submit/click steps
+            click_or_submit_indices = {
+                idx for idx, st in enumerate(flow_steps)
+                if str(st.get("type", "")).lower() in ("click", "submit")
+            }
+            if click_or_submit_indices:
+                first_submit_idx = min(click_or_submit_indices)
+                post_submit_errors = [
+                    err for err in getattr(browser, "network_errors", [])
+                    if err.get("step_index", 0) >= first_submit_idx
+                    and (err.get("status", 0) >= 500 or err.get("type") == "request_failed")
+                ]
+                if post_submit_errors:
+                    err = post_submit_errors[0]
+                    method = err.get("method", "POST")
+                    path = err.get("path") or urlparse(err.get("url", "")).path or "/"
+                    if err.get("status", 0) >= 500:
+                        net_err_msg = f"UI reported success but request {method} {path} returned {err.get('status')}"
+                    else:
+                        net_err_msg = f"UI reported success but request {method} {path} failed: {err.get('failure', 'request failed')}"
+
+                    from app.config.settings import settings
+                    if settings.FAIL_ON_NETWORK_ERRORS:
+                        logger.warning("Failing execution due to post-action network error: %s", net_err_msg)
+                        raise ExecutionError(
+                            net_err_msg,
+                            error_code=ErrorCode.VERIFICATION_FAILED,
+                        )
+                    else:
+                        logger.warning("Warning: %s (FAIL_ON_NETWORK_ERRORS is false)", net_err_msg)
 
             # Honest healing gate: if fail_on_healed is requested, reject runs that required AI healing
             ai_assisted_events = [e for e in ctx.events if e.get("type") == "ai_assisted"]

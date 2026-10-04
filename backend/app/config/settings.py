@@ -53,6 +53,7 @@ class Settings(BaseSettings):
     OIDC_ISSUER_URL: str | None = None
     OIDC_AUDIENCE: str = "authenticated"
     JWT_SECRET_KEY: str = ""
+    FAIL_ON_NETWORK_ERRORS: bool = True
 
     @model_validator(mode="after")
     def validate_production_keys(self) -> "Settings":
