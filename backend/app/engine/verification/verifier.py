@@ -330,6 +330,7 @@ class Verifier:
                     "Unknown conditions cannot be treated as success."
                 ),
             ))
+            return VerificationResult(passed=False, checks=checks)
 
         # Support both element_visible and element_present
         if "element_visible" in condition:
