@@ -9,10 +9,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 
+import logging
+import redis.asyncio as aioredis
+
 from app.infrastructure.database.session import get_session
 from app.modules.users.models import User
 from app.config.settings import settings
 from app.modules.auth.dependencies import get_current_user, _get_jwt_secret
+
+logger = logging.getLogger(__name__)
+
+async def _get_redis() -> aioredis.Redis | None:
+    try:
+        kwargs: dict[str, Any] = {"decode_responses": True}
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+        return aioredis.from_url(settings.REDIS_URL, **kwargs)
+    except Exception as e:
+        logger.debug("Failed to connect to redis: %s", e)
+        return None
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -184,8 +199,27 @@ async def confirm_reset_password(
             detail="Reset token has already been used",
         )
 
+    redis_client = await _get_redis()
+    redis_key = f"used_reset_jti:{token_id}"
+    if redis_client:
+        try:
+            val = await redis_client.get(redis_key)
+            if val:
+                _USED_RESET_TOKENS.add(token_id)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Reset token has already been used",
+                )
+        except HTTPException:
+            await redis_client.aclose()
+            raise
+        except Exception as e:
+            logger.debug("Redis error checking reset jti: %s", e)
+
     sub = payload.get("sub")
     if not sub:
+        if redis_client:
+            await redis_client.aclose()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Token missing subject",
@@ -194,6 +228,8 @@ async def confirm_reset_password(
     try:
         user_id = uuid.UUID(sub)
     except ValueError:
+        if redis_client:
+            await redis_client.aclose()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid user ID in token",
@@ -202,6 +238,8 @@ async def confirm_reset_password(
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
+        if redis_client:
+            await redis_client.aclose()
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
@@ -210,6 +248,19 @@ async def confirm_reset_password(
     user.password_hash = hash_password(req.new_password)
     _USED_RESET_TOKENS.add(token_id)
     await db.commit()
+
+    if redis_client:
+        try:
+            exp = payload.get("exp")
+            ttl = 3600
+            if exp:
+                remaining = int(exp - datetime.now(timezone.utc).timestamp())
+                ttl = max(remaining, 60)
+            await redis_client.set(redis_key, "1", ex=ttl)
+        except Exception as e:
+            logger.debug("Redis error storing reset jti: %s", e)
+        finally:
+            await redis_client.aclose()
 
     return {"message": "Password reset successfully"}
 
@@ -254,7 +305,7 @@ class ApiTokenResponse(BaseModel):
     last_used_at: datetime | None = None
 
 
-@router.post("/auth/tokens", response_model=ApiTokenResponse, status_code=201)
+@router.post("/tokens", response_model=ApiTokenResponse, status_code=201)
 async def create_token(
     data: CreateApiTokenRequest,
     user: User = Depends(get_current_user),
@@ -271,4 +322,41 @@ async def create_token(
         created_at=token_obj.created_at,
         last_used_at=token_obj.last_used_at,
     )
+
+
+@router.get("/tokens", response_model=list[ApiTokenResponse])
+async def list_tokens(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """List all active API tokens for current user."""
+    from app.modules.auth.token_service import list_api_tokens
+    tokens = await list_api_tokens(db, user.id)
+    return [
+        ApiTokenResponse(
+            id=t.id,
+            name=t.name,
+            created_at=t.created_at,
+            last_used_at=t.last_used_at,
+        )
+        for t in tokens
+    ]
+
+
+@router.delete("/tokens/{id}", status_code=204)
+async def delete_token(
+    id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Revoke an API token."""
+    from app.modules.auth.token_service import delete_api_token
+    deleted = await delete_api_token(db, user.id, id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API token not found",
+        )
+    await db.commit()
+    return None
 

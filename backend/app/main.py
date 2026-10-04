@@ -28,7 +28,6 @@ if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
-        allow_origin_regex=r"https://.*\.onrender\.com",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["*"],
@@ -42,6 +41,7 @@ else:
         allow_headers=["*"],
     )
 
+app.include_router(auth.router)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(ci.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
