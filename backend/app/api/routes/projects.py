@@ -21,6 +21,17 @@ async def create_project(
     return await service.create_project(data, user_id=user.id)
 
 
+@router.post("/demo", response_model=ProjectRead, status_code=201)
+async def create_demo_project_endpoint(
+    base_url: str = "http://127.0.0.1:8090",
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    service = ProjectService(db)
+    return await service.create_demo_project(user_id=user.id, base_url=base_url)
+
+
+
 @router.get("/", response_model=list[ProjectRead])
 async def list_projects(
     skip: int = 0,

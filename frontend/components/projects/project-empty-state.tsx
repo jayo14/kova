@@ -1,9 +1,33 @@
+"use client";
+
+import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants, Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function ProjectEmptyState() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+
+  const handleTryDemo = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/v1/projects/demo", { credentials: "include", method: "POST" });
+      if (res.ok) {
+        const project = await res.json();
+        router.push(`/projects/${project.id}`);
+      } else {
+        router.push("/explore");
+      }
+    } catch {
+      router.push("/explore");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <section
       aria-label="No projects"
@@ -20,18 +44,30 @@ export function ProjectEmptyState() {
         No products yet
       </h3>
       <p className="text-body-sm text-muted-foreground max-w-sm mx-auto mb-5 leading-relaxed">
-        Give Kova a website and let it explore. Kova will map user journeys and establish your product context.
+        Give Kova a website and let it explore, or launch the interactive demo to see Kova detect planted UI and network bugs.
       </p>
-      <Link
-        href="/explore"
-        className={cn(
-          buttonVariants({ variant: "default" }),
-          "inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-body-sm font-medium shadow-sm transition-all"
-        )}
-      >
-        <span>Give Kova a product</span>
-        <MaterialIcon name="arrow_forward" size={16} />
-      </Link>
+      <div className="flex flex-wrap items-center justify-center gap-3">
+        <Link
+          href="/explore"
+          className={cn(
+            buttonVariants({ variant: "default" }),
+            "inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-body-sm font-medium shadow-sm transition-all"
+          )}
+        >
+          <span>Give Kova a product</span>
+          <MaterialIcon name="arrow_forward" size={16} />
+        </Link>
+        <Button
+          variant="outline"
+          onClick={handleTryDemo}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-body-sm font-medium shadow-sm transition-all"
+        >
+          <MaterialIcon name="play_circle" size={16} />
+          <span>{loading ? "Setting up..." : "Try the demo"}</span>
+        </Button>
+      </div>
     </section>
   );
 }
+
