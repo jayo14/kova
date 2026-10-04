@@ -461,13 +461,18 @@ class FlowRunner:
                 if page is None or page.is_closed():
                     await asyncio.sleep(interval)
                     continue
-                # Prefer higher-level state if control is human
-                ctrl = await get_control_state(execution_id)
-                if ctrl in ("human", "paused"):
-                    state = "paused"
+                try:
+                    ctrl = await get_control_state(execution_id)
+                    if ctrl in ("human", "paused"):
+                        state = "paused"
+                except Exception as ctrl_err:
+                    logger.debug("Control state read failed (graceful degradation): %s", ctrl_err)
                 ss_bytes = await page.screenshot(type="jpeg", quality=45, timeout=2000)
                 if ss_bytes:
-                    await publish_frame(execution_id, ss_bytes, state)
+                    try:
+                        await publish_frame(execution_id, ss_bytes, state)
+                    except Exception as frame_err:
+                        logger.debug("Frame broadcast failed (graceful degradation): %s", frame_err)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -537,7 +542,10 @@ class FlowRunner:
         try:
             ss_bytes = await browser.page.screenshot(type="jpeg", quality=45, timeout=2000)
             if ss_bytes:
-                await publish_frame(execution_id, ss_bytes, state)
+                try:
+                    await publish_frame(execution_id, ss_bytes, state)
+                except Exception as frame_err:
+                    logger.debug("Live frame publish failed (graceful degradation): %s", frame_err)
         except Exception as ss_err:
             logger.debug("Live frame capture failed: %s", ss_err)
 
