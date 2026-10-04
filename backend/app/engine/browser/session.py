@@ -7,11 +7,12 @@ Each execution gets its own isolated browser context.
 Cleanup happens automatically on success, failure, cancellation, exception, or timeout.
 """
 
+import asyncio
 import ipaddress
 import logging
 import re
 import socket
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from playwright.async_api import (
@@ -192,6 +193,9 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self.network_errors: list[dict[str, Any]] = []
+        self.current_step_index: int = 0
+        self.on_network_error: Callable[[dict[str, Any]], Any] | None = None
 
     async def start(self):
         """Launch browser and create isolated context + page."""
@@ -214,6 +218,86 @@ class BrowserSession:
             await route.continue_()
 
         await self._page.route("**/*", _intercept_navigation)
+
+        # Record same-origin responses >= 400, request failures, and page errors
+        async def _on_response(response):
+            try:
+                if response.status >= 400:
+                    page_url = self._page.url if self._page else ""
+                    page_parsed = urlparse(page_url)
+                    resp_parsed = urlparse(response.url)
+                    is_same_origin = (
+                        (page_parsed.netloc and resp_parsed.netloc == page_parsed.netloc)
+                        or (page_parsed.hostname and resp_parsed.hostname == page_parsed.hostname)
+                    )
+                    if is_same_origin:
+                        req = response.request
+                        err_entry = {
+                            "type": "http_error",
+                            "status": response.status,
+                            "method": req.method if req else "GET",
+                            "url": response.url,
+                            "path": resp_parsed.path or "/",
+                            "step_index": self.current_step_index,
+                        }
+                        self.network_errors.append(err_entry)
+                        if self.on_network_error:
+                            res = self.on_network_error(err_entry)
+                            if asyncio.iscoroutine(res):
+                                asyncio.create_task(res)
+            except Exception as e:
+                logger.debug("Error in response listener: %s", e)
+
+        async def _on_request_failed(request):
+            try:
+                page_url = self._page.url if self._page else ""
+                page_parsed = urlparse(page_url)
+                req_parsed = urlparse(request.url)
+                is_same_origin = (
+                    (page_parsed.netloc and req_parsed.netloc == page_parsed.netloc)
+                    or (page_parsed.hostname and req_parsed.hostname == page_parsed.hostname)
+                )
+                if is_same_origin:
+                    err_entry = {
+                        "type": "request_failed",
+                        "status": 0,
+                        "method": request.method,
+                        "url": request.url,
+                        "path": req_parsed.path or "/",
+                        "failure": request.failure or "Request failed",
+                        "step_index": self.current_step_index,
+                    }
+                    self.network_errors.append(err_entry)
+                    if self.on_network_error:
+                        res = self.on_network_error(err_entry)
+                        if asyncio.iscoroutine(res):
+                            asyncio.create_task(res)
+            except Exception as e:
+                logger.debug("Error in requestfailed listener: %s", e)
+
+        async def _on_page_error(error):
+            try:
+                err_entry = {
+                    "type": "page_error",
+                    "status": 0,
+                    "method": "PAGE",
+                    "url": self._page.url if self._page else "",
+                    "path": urlparse(self._page.url if self._page else "").path or "/",
+                    "failure": str(error),
+                    "step_index": self.current_step_index,
+                }
+                self.network_errors.append(err_entry)
+                if self.on_network_error:
+                    res = self.on_network_error(err_entry)
+                    if asyncio.iscoroutine(res):
+                        asyncio.create_task(res)
+            except Exception as e:
+                logger.debug("Error in pageerror listener: %s", e)
+
+        self._page.on("response", _on_response)
+        self._page.on("requestfailed", _on_request_failed)
+        self._page.on("pageerror", _on_page_error)
+
         logger.info("Browser session started")
 
     async def close(self):

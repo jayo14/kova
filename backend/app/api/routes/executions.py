@@ -526,10 +526,20 @@ def _render_report_html(
     error_message: str | None = None,
     shareable_url: str = "",
     ai_healed_steps: int = 0,
+    why_it_failed: str | None = None,
 ) -> str:
     passed = verification.get("passed", False)
     checks = verification.get("checks", [])
     badge_color = "#10b981" if (status_str == "COMPLETED" and passed) else ("#ef4444" if status_str == "FAILED" else "#f59e0b")
+
+    why_failed_banner = ""
+    if why_it_failed:
+        why_failed_banner = f"""
+        <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; color: #fca5a5;">
+            <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; color: #f87171; margin-bottom: 4px;">Why it failed</div>
+            <div style="font-size: 15px; color: #ffffff; font-weight: 500;">{why_it_failed}</div>
+        </div>
+        """
 
     healing_banner = ""
     if ai_healed_steps > 0:
@@ -663,6 +673,7 @@ def _render_report_html(
             <div class="badge">{status_str}</div>
         </div>
 
+        {why_failed_banner}
         {healing_banner}
         {error_banner}
 
@@ -772,6 +783,24 @@ async def get_execution_report(
         duration_ms = int((execution.completed_at - execution.started_at).total_seconds() * 1000)
     duration_str = f"{duration_ms} ms" if duration_ms is not None else "N/A"
 
+    is_success = (execution.status == ExecutionStatus.COMPLETED.value) and verification_dict.get("passed", False)
+    why_it_failed = None
+    if not is_success:
+        if execution.error_message:
+            why_it_failed = execution.error_message
+        else:
+            failed_checks = [c for c in verification_dict.get("checks", []) if not c.get("passed")]
+            if failed_checks:
+                c = failed_checks[0]
+                exp = c.get("expected")
+                act = c.get("actual")
+                if exp is not None or act is not None:
+                    why_it_failed = f"Expected {exp!r} for {c.get('type')}, but observed {act!r}."
+                else:
+                    why_it_failed = c.get("message") or f"Check {c.get('type')} failed."
+            else:
+                why_it_failed = "Execution did not complete required verification checks."
+
     html_content = _render_report_html(
         execution_id=exec_uuid,
         status_str=execution.status.value if hasattr(execution.status, "value") else str(execution.status),
@@ -782,6 +811,7 @@ async def get_execution_report(
         error_message=execution.error_message,
         shareable_url=shareable_url,
         ai_healed_steps=healed_steps_count,
+        why_it_failed=why_it_failed,
     )
 
     accept_header = request.headers.get("accept", "")
@@ -800,6 +830,7 @@ async def get_execution_report(
         "duration_ms": duration_ms,
         "error_code": execution.error_code,
         "error_message": execution.error_message,
+        "why_it_failed": why_it_failed,
         "verification": verification_dict,
         "ai_healed_steps": healed_steps_count,
         "healing_summary": healing_summary,
