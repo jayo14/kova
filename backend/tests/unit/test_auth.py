@@ -159,3 +159,103 @@ def test_production_refuses_weak_or_empty_jwt_secret():
     # Valid secret passes
     s = Settings(ENVIRONMENT="production", JWT_SECRET_KEY="a" * 32)
     assert s.JWT_SECRET_KEY == "a" * 32
+
+
+@pytest.mark.asyncio
+async def test_reset_password_confirm_flow(db_session: AsyncSession):
+    from app.api.routes.auth import verify_password
+    from app.modules.users.models import User
+
+    # Create test user
+    user = User(
+        id=uuid.uuid4(),
+        email="reset_flow@example.com",
+        name="Reset User",
+        password_hash="old_hash",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_db
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            # 1. Reset password confirm with token
+            reset_token = jwt.encode(
+                {"exp": 9999999999, "sub": str(user.id), "type": "reset", "jti": str(uuid.uuid4())},
+                _get_jwt_secret(),
+                algorithm="HS256",
+            )
+            
+            # Enforce min length of 8
+            resp = await c.post(
+                "/api/v1/auth/reset-password/confirm",
+                json={"token": reset_token, "new_password": "short"},
+            )
+            assert resp.status_code == 400
+            assert "8 characters" in resp.json()["detail"]
+
+            # Must check type == "reset"
+            wrong_type_token = jwt.encode(
+                {"exp": 9999999999, "sub": str(user.id), "type": "access"},
+                _get_jwt_secret(),
+                algorithm="HS256",
+            )
+            resp = await c.post(
+                "/api/v1/auth/reset-password/confirm",
+                json={"token": wrong_type_token, "new_password": "validNewPassword123!"},
+            )
+            assert resp.status_code == 400
+            assert "Invalid token type" in resp.json()["detail"]
+
+            # Valid confirm
+            resp = await c.post(
+                "/api/v1/auth/reset-password/confirm",
+                json={"token": reset_token, "new_password": "validNewPassword123!"},
+            )
+            assert resp.status_code == 200
+
+            # Single-use: using the same token again fails
+            resp = await c.post(
+                "/api/v1/auth/reset-password/confirm",
+                json={"token": reset_token, "new_password": "anotherNewPassword123!"},
+            )
+            assert resp.status_code == 400
+            assert "already been used" in resp.json()["detail"]
+
+            # Verify password was updated
+            await db_session.refresh(user)
+            assert verify_password("validNewPassword123!", user.password_hash)
+
+            # 2. Change password
+            auth_token = jwt.encode(
+                _auth_payload(sub=str(user.id)),
+                _get_jwt_secret(),
+                algorithm="HS256",
+            )
+            resp = await c.post(
+                "/api/v1/auth/change-password",
+                headers={"Authorization": f"Bearer {auth_token}"},
+                json={"new_password": "changedPassword123!"},
+            )
+            assert resp.status_code == 200
+            await db_session.refresh(user)
+            assert verify_password("changedPassword123!", user.password_hash)
+
+            # 3. Delete account
+            resp = await c.delete(
+                "/api/v1/auth/me",
+                headers={"Authorization": f"Bearer {auth_token}"},
+            )
+            assert resp.status_code == 200
+
+            # Verify user deleted
+            from sqlalchemy import select
+            res = await db_session.execute(select(User).where(User.id == user.id))
+            assert res.scalar_one_or_none() is None
+    finally:
+        app.dependency_overrides.clear()
+
