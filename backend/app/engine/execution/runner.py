@@ -10,9 +10,26 @@ Always transitions to terminal state on exit.
 import asyncio
 import logging
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
+
+ALLOWED_NAMED_KEYS = {
+    "Backspace",
+    "Delete",
+    "Enter",
+    "Tab",
+    "Escape",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+}
 
 from app.engine.browser.actions import ActionType
 from app.engine.browser.executor import ActionExecutor
@@ -90,6 +107,9 @@ class FlowRunner:
         - Always transitions to terminal state on exit
         - Events persisted throughout execution
     """
+
+    def __init__(self) -> None:
+        self._last_mouse_up: dict[str, tuple[float, int, int]] = {}
 
     async def execute(
         self,
@@ -607,16 +627,31 @@ class FlowRunner:
         """Process any pending user input from the control channel."""
         try:
             pending = await get_pending_input(execution_id)
+            if not hasattr(self, "_last_mouse_up"):
+                self._last_mouse_up = {}
             for msg in pending:
                 kind = msg.get("kind", "")
                 try:
-                    if kind == "click":
-                        x, y = msg.get("x", 0), msg.get("y", 0)
-                        await browser.page.mouse.click(x, y)
-                    elif kind == "mouse_down":
+                    if kind == "mouse_down":
+                        x, y = msg.get("x"), msg.get("y")
+                        if x is not None and y is not None:
+                            await browser.page.mouse.move(x, y)
                         await browser.page.mouse.down(button="left" if msg.get("button", 0) == 0 else "right")
                     elif kind == "mouse_up":
+                        x, y = msg.get("x"), msg.get("y")
+                        if x is not None and y is not None:
+                            await browser.page.mouse.move(x, y)
+                        self._last_mouse_up[execution_id] = (time.monotonic(), x or 0, y or 0)
                         await browser.page.mouse.up(button="left" if msg.get("button", 0) == 0 else "right")
+                    elif kind == "click":
+                        x, y = msg.get("x", 0), msg.get("y", 0)
+                        last_up = self._last_mouse_up.get(execution_id)
+                        if last_up is not None:
+                            last_time, last_x, last_y = last_up
+                            if (time.monotonic() - last_time) <= 0.100 and (abs(x - last_x) <= 20 and abs(y - last_y) <= 20):
+                                logger.debug("Ignoring redundant click arriving within 100ms of mouse_up (%d, %d)", x, y)
+                                continue
+                        await browser.page.mouse.click(x, y)
                     elif kind == "mouse_move":
                         x, y = msg.get("x", 0), msg.get("y", 0)
                         await browser.page.mouse.move(x, y)
@@ -625,11 +660,11 @@ class FlowRunner:
                         await browser.page.mouse.wheel(dx, dy)
                     elif kind == "key_down":
                         key = msg.get("key", "")
-                        if key and len(key) == 1:
+                        if key and (len(key) == 1 or key in ALLOWED_NAMED_KEYS):
                             await browser.page.keyboard.down(key)
                     elif kind == "key_up":
                         key = msg.get("key", "")
-                        if key and len(key) == 1:
+                        if key and (len(key) == 1 or key in ALLOWED_NAMED_KEYS):
                             await browser.page.keyboard.up(key)
                     elif kind == "type":
                         text = msg.get("text", "")

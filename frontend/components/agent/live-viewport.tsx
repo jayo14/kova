@@ -259,11 +259,7 @@ export function LiveViewport({
       setShowTakeoverDialog(true);
       return;
     }
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const { x, y } = getCanvasRelativeCoords(e, canvas);
-    sendInput({ kind: "click", x, y });
-  }, [isHumanControlled, sendInput]);
+  }, [isHumanControlled]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isHumanControlled) return;
