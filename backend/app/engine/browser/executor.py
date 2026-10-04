@@ -320,30 +320,31 @@ class ActionExecutor:
             except Exception:
                 pass
 
-            # Click and wait for navigation if one occurs
-            navigation_occurred = False
+            # Click immediately without stalling on 5s navigation timeout
+            initial_url = self.page.url
             try:
-                async with self.page.expect_navigation(
-                    wait_until="domcontentloaded",
-                    timeout=5000,
-                ):
-                    try:
-                        await locator.click(timeout=3000)
-                    except Exception:
-                        try:
-                            await locator.click(force=True, timeout=2000)
-                        except Exception:
-                            await locator.dispatch_event("click")
-                navigation_occurred = True
+                await locator.click(timeout=3000)
             except Exception:
-                # No navigation occurred within 5s — that's fine, click still happened
-                pass
-
-            # Brief wait for any dynamic content to settle after navigation
-            if navigation_occurred:
                 try:
-                    await self.page.wait_for_load_state("domcontentloaded", timeout=5000)
+                    await locator.click(force=True, timeout=2000)
                 except Exception:
+                    await locator.dispatch_event("click")
+
+            navigation_occurred = False
+            if self.page.url != initial_url:
+                navigation_occurred = True
+                try:
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=3000)
+                except Exception:
+                    pass
+            else:
+                # Brief check for asynchronous URL change triggered by click
+                try:
+                    await self.page.wait_for_url(lambda u: u != initial_url, timeout=300)
+                    navigation_occurred = True
+                    await self.page.wait_for_load_state("domcontentloaded", timeout=3000)
+                except Exception:
+                    # Non-navigating click completes quickly without 5s stall
                     pass
 
             return {"clicked": True, "navigation": navigation_occurred}
