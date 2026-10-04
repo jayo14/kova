@@ -102,6 +102,7 @@ class FlowRunner:
         timeout_seconds: int | None = None,
         objective: str | None = None,
         expected_outcome: str | None = None,
+        fail_on_healed: bool | None = None,
     ) -> dict[str, Any]:
         """Execute a flow.
 
@@ -115,6 +116,7 @@ class FlowRunner:
             timeout_seconds: Optional override for execution timeout.
             objective: Optional natural language objective.
             expected_outcome: Optional natural language expected outcome.
+            fail_on_healed: Optional flag to fail execution if AI healing was used.
 
         Returns:
             Execution result with events, observations, verification.
@@ -126,7 +128,7 @@ class FlowRunner:
                 self._execute_inner(
                     execution_id, flow_steps, success_condition,
                     credential_store, target_url, event_recorder,
-                    objective, expected_outcome,
+                    objective, expected_outcome, fail_on_healed,
                 ),
                 timeout=effective_timeout,
             )
@@ -153,8 +155,16 @@ class FlowRunner:
         event_recorder: Callable | None,
         objective: str | None = None,
         expected_outcome: str | None = None,
+        fail_on_healed: bool | None = None,
     ) -> dict[str, Any]:
         """Inner execution logic (without timeout wrapper)."""
+        if fail_on_healed is None:
+            try:
+                from app.engine.execution.control import get_execution_fail_on_healed
+                fail_on_healed = await get_execution_fail_on_healed(str(execution_id))
+            except Exception:
+                fail_on_healed = False
+
         if not success_condition and (objective or expected_outcome):
             from app.engine.verification.verifier import compile_expectation
             success_condition = await compile_expectation(objective or "", expected_outcome or "")
@@ -361,6 +371,14 @@ class FlowRunner:
             # Step 8: Capture evidence
             await self._capture_evidence(ctx, browser, verification, event_recorder)
 
+            # Honest healing gate: if fail_on_healed is requested, reject runs that required AI healing
+            ai_assisted_events = [e for e in ctx.events if e.get("type") == "ai_assisted"]
+            if fail_on_healed and ai_assisted_events:
+                raise ExecutionError(
+                    f"Execution passed with AI healing on {len(ai_assisted_events)} step(s), but fail_on_healed was requested",
+                    error_code="HEALED_EXECUTION_REJECTED",
+                )
+
             # Step 9: COMPLETED
             ctx.transition(ExecutionState.COMPLETED)
             ctx.completed_at = datetime.now(timezone.utc)
@@ -379,6 +397,7 @@ class FlowRunner:
                 "final_url": browser.page.url,
                 "final_title": await browser.page.title(),
                 "duration_ms": int((ctx.completed_at - ctx.started_at).total_seconds() * 1000),
+                "ai_healed_steps": len(ai_assisted_events),
             }
 
         except Exception as e:

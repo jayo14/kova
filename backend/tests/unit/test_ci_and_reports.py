@@ -160,3 +160,90 @@ async def test_execution_report_json_and_html(db_session):
             assert bad_resp.status_code == 401
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_execution_report_shows_honest_ai_healing(db_session):
+    from app.modules.executions.event_model import ExecutionEvent
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="healing-user@kova.local")
+        db_session.add(user)
+        await db_session.commit()
+
+        token_obj, raw_token = await create_api_token(db_session, user.id, name="Healing Token")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="P", base_url="https://example.com")
+        flow = Flow(id=uuid.uuid4(), project_id=project.id, name="F", steps=[])
+        execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+        db_session.add_all([project, flow, execution])
+        await db_session.commit()
+
+        # Add ai_assisted event
+        ev1 = ExecutionEvent(
+            execution_id=execution.id,
+            event_type="ai_assisted",
+            payload={"step": 1, "alternate_target": "#repaired-button"},
+        )
+        db_session.add(ev1)
+        await db_session.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/v1/executions/{execution.id}/report",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["ai_healed_steps"] == 1
+            assert "Passed with AI healing: 1 steps" in data["healing_summary"]
+            assert "Passed with AI healing: 1 steps" in data["html"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_ci_run_and_runner_fail_on_healed(db_session):
+    from app.engine.execution.control import get_execution_fail_on_healed
+    from app.engine.execution.runner import FlowRunner
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="ci-healed-user@kova.local")
+        db_session.add(user)
+        await db_session.commit()
+
+        token_obj, raw_token = await create_api_token(db_session, user.id, name="CI Token")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="P", base_url="https://example.com")
+        flow = Flow(id=uuid.uuid4(), project_id=project.id, name="F", steps=[])
+        db_session.add_all([project, flow])
+        await db_session.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/v1/ci/run",
+                json={
+                    "project_id": str(project.id),
+                    "flow_ids": [str(flow.id)],
+                    "fail_on_healed": True,
+                },
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert resp.status_code == 201
+            data = resp.json()
+            exec_id = data["executions"][0]["id"]
+            flag = await get_execution_fail_on_healed(exec_id)
+            assert flag is True
+    finally:
+        app.dependency_overrides.clear()
+
