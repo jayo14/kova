@@ -119,6 +119,32 @@ def validate_action_proposal(
     return proposal
 
 
+def validate_action(action: dict | ActionProposal) -> bool:
+    """Validate an action or action proposal.
+
+    Ensures action type is supported, values are safe, and targets are valid.
+    Returns True if valid; raises ProposalRejected on invalid.
+    """
+    if isinstance(action, dict):
+        action_type = action.get("type") or action.get("action", "")
+        if action_type not in RUNTIME_ACTIONS and action_type not in LOOP_ACTIONS:
+            raise ProposalRejected(f"unsupported action '{action_type}'")
+        val = str(action.get("value") or "")
+        _validate_value(val)
+        target = action.get("target")
+        if action_type in ("click", "type"):
+            if not target or not isinstance(target, dict) or not any(target.values()):
+                raise ProposalRejected(f"action '{action_type}' requires a valid target")
+            css = target.get("css", "")
+            if isinstance(css, str) and css.startswith(("http://", "https://")):
+                raise ProposalRejected("URLs cannot be used as CSS targets")
+        return True
+    elif isinstance(action, ActionProposal):
+        validate_action_proposal(action)
+        return True
+    return False
+
+
 def validate_journey_plan(plan: JourneyPlan) -> JourneyPlan:
     """Validate a full AI journey plan before it becomes executable steps."""
     if not plan.steps:

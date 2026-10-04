@@ -312,3 +312,48 @@ async def test_identity_email_never_regenerated(fixture_env, agent_credential_st
     await executor._handle_create_email(None, memory)
     assert memory.identity.email == first_email
     assert first_email  # was created exactly once
+
+
+@pytest.mark.asyncio
+async def test_benchmark_with_stub_ai_provider():
+    """Verify AgentExecutor runs smoothly with an active structured stub provider."""
+    from app.engine.ai.provider import AIProvider
+    from app.engine.ai.schemas import GoalInterpretation, ActionProposal
+
+    class StubProvider(AIProvider):
+        name = "stub"
+        @property
+        def model_name(self) -> str:
+            return "stub-v1"
+
+        async def generate_structured(self, system: str, prompt: str, schema):
+            if schema == GoalInterpretation:
+                return GoalInterpretation(
+                    goal="Test objective",
+                    domain="navigation",
+                    intent="exploration",
+                    needs_account=False,
+                    needs_email_capability=False,
+                    risk_level="low",
+                )
+            if schema == ActionProposal:
+                return ActionProposal(action="abort", reason="done testing")
+            return schema.model_validate({})
+
+    stub_provider = StubProvider()
+    executor = AgentExecutor(
+        execution_id=uuid.uuid4(),
+        reasoner=AgentReasoner(provider=stub_provider),
+        email_provider=None,
+        credential_store=CredentialStore(),
+    )
+    async with BrowserSession() as browser:
+        outcome = await executor.run(
+            browser,
+            objective="Inspect landing page",
+            target_url="http://127.0.0.1:9/",
+        )
+    assert outcome.status in ("UNVERIFIED", "FAILED", "NEEDS_INPUT")
+    # AI cannot unilaterally mark an execution COMPLETED
+    assert outcome.status != "COMPLETED"
+

@@ -105,6 +105,30 @@ class AgentExecutor:
             except Exception as e:
                 logger.warning("Agent event emit failed for %s: %s", event_type, e)
 
+    async def heal_target(
+        self,
+        browser: BrowserSession,
+        step: dict,
+        error_message: str,
+        observation: dict | None = None,
+    ) -> dict | None:
+        """Use AI reasoner to propose an alternate target when target resolution fails."""
+        obs = observation or await browser.observe()
+        memory = AgentMemory(self.execution_id, objective=f"Recover failed step: {step.get('type', '')}")
+        recovery = await self.reasoner.propose_recovery(
+            memory=memory,
+            failure=error_message,
+            failure_code="TARGET_NOT_FOUND",
+            observation=obs,
+        )
+        alt = recovery.alternative_target
+        if not alt and recovery.action and recovery.action.target:
+            alt = recovery.action.target
+        if alt:
+            from app.engine.ai.validator import _deterministic_target
+            return _deterministic_target(alt)
+        return None
+
     # ── Main loop ───────────────────────────────────────────────────
 
     async def run(
