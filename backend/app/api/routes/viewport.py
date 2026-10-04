@@ -16,8 +16,11 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
+
+from app.infrastructure.database.session import get_session
 
 from app.engine.execution.control import (
     set_control_state,
@@ -81,7 +84,7 @@ async def broadcast_control_changed(execution_id: str, control: str):
             pass
 
 
-async def _verify_execution_access(execution_id: str, user_id: str) -> bool:
+async def _verify_execution_access(execution_id: str, user_id: str, db: AsyncSession | None = None) -> bool:
     """Verify that the user owns the execution's project."""
     try:
         from app.infrastructure.database.session import async_session_factory
@@ -90,73 +93,87 @@ async def _verify_execution_access(execution_id: str, user_id: str) -> bool:
         from app.modules.projects.repository import ProjectRepository
 
         exec_uuid = uuid.UUID(execution_id)
-        async with async_session_factory() as db:
-            exec_repo = ExecutionRepository(db)
+
+        async def _check(session: AsyncSession) -> bool:
+            exec_repo = ExecutionRepository(session)
             execution = await exec_repo.get_by_id(exec_uuid)
             if not execution:
                 return False
 
-            flow_repo = FlowRepository(db)
+            flow_repo = FlowRepository(session)
             flow = await flow_repo.get_by_id(execution.flow_id)
             if not flow:
                 return False
 
-            project_repo = ProjectRepository(db)
+            project_repo = ProjectRepository(session)
             project = await project_repo.get_by_id(flow.project_id)
             if not project:
                 return False
 
-            return str(project.owner_id) == user_id
+            return str(project.user_id) == str(user_id)
+
+        if db is not None:
+            return await _check(db)
+        else:
+            async with async_session_factory() as session:
+                return await _check(session)
     except Exception as e:
         logger.warning("Access verification failed: %s", e)
         return False
 
 
-async def _authenticate_ws_token(token: str) -> str | None:
-    """Verify JWT token and return user_id. Returns None if invalid."""
-    import jwt as pyjwt
-    from jwt import PyJWKClient
+async def _authenticate_ws_token(token: str, db: AsyncSession | None = None) -> str | None:
+    """Verify JWT or kova_ API token and return user_id. Returns None if invalid."""
+    import jwt
     from app.config.settings import settings
+    from app.modules.auth.dependencies import _get_jwt_secret
 
     if not token:
-        jwk_client = None
+        if settings.is_production or settings.OIDC_ISSUER_URL:
+            return None
+        return str(uuid.UUID("00000000-0000-0000-0000-000000000001"))
+
+    if token.startswith("kova_"):
+        from app.infrastructure.database.session import async_session_factory
+        from app.modules.auth.token_service import verify_api_token
         try:
-            project_ref = settings.SUPABASE_PROJECT_REF
-            if project_ref and project_ref != "127.0.0.1":
-                jwks_url = f"https://{project_ref}.supabase.co/auth/v1/.well-known/jwks.json"
-                jwk_client = PyJWKClient(jwks_url, cache_keys=True)
-        except Exception:
-            pass
-
-        if jwk_client is None:
-            if settings.is_production:
-                # Never grant the shared dev identity over WebSocket in production
-                return None
-            return str(uuid.UUID("00000000-0000-0000-0000-000000000001"))
-
+            if db is not None:
+                api_tok = await verify_api_token(db, token)
+                if api_tok:
+                    return str(api_tok.user_id)
+            else:
+                async with async_session_factory() as session:
+                    api_tok = await verify_api_token(session, token)
+                    if api_tok:
+                        return str(api_tok.user_id)
+        except Exception as e:
+            logger.warning("WebSocket API token verification failed: %s", e)
         return None
 
+    secret = _get_jwt_secret()
     try:
-        signing_key = jwk_client.get_signing_key_from_jwt(token)
-        audience = settings.SUPABASE_JWT_AUDIENCE
-        decode_options: dict = {"require": ["exp", "sub"]}
+        decode_options: dict = {"require": ["exp"]}
+        audience = settings.OIDC_AUDIENCE
+        issuer = settings.effective_jwt_issuer
         if not audience:
             decode_options["verify_aud"] = False
+        if not issuer:
+            decode_options["verify_iss"] = False
 
-        payload = pyjwt.decode(
+        payload = jwt.decode(
             token,
-            signing_key.key,
-            algorithms=["ES256", "RS256"],
+            secret,
+            algorithms=["HS256"],
             audience=audience or None,
-            issuer=settings.effective_jwt_issuer,
+            issuer=issuer,
             options=decode_options,
         )
         sub = payload.get("sub")
         if sub:
-            uuid.UUID(sub)
-            return sub
+            uuid.UUID(str(sub))
+            return str(sub)
     except Exception as e:
-        logger.warning("WebSocket auth failed: %s", e)
+        logger.warning("WebSocket JWT auth failed: %s", e)
 
     return None
 
@@ -235,6 +252,7 @@ async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
     token: str = Query(default=""),
+    db: AsyncSession = Depends(get_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 
@@ -252,12 +270,12 @@ async def viewport_stream(
     - Client → Server: {"type": "input", "kind": "type", "text": "hello"}
     - Client → Server: {"type": "nav", "kind": "back"|"forward"|"reload"}
     """
-    user_id = await _authenticate_ws_token(token)
+    user_id = await _authenticate_ws_token(token, db=db)
     if not user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
-    if not await _verify_execution_access(execution_id, user_id):
+    if not await _verify_execution_access(execution_id, user_id, db=db):
         await websocket.close(code=4003, reason="Forbidden")
         return
 
