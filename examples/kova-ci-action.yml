@@ -1,0 +1,90 @@
+name: Kova CI Verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Base URL of the deployment to test against'
+        required: false
+        default: ''
+
+jobs:
+  run-kova-flows:
+    name: Run and Verify Kova Product Flows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Kova CI Run
+        id: kova_run
+        env:
+          KOVA_API_URL: ${{ secrets.KOVA_API_URL || 'https://api.kova.dev' }}
+          KOVA_API_TOKEN: ${{ secrets.KOVA_API_TOKEN }}
+          KOVA_PROJECT_ID: ${{ secrets.KOVA_PROJECT_ID }}
+          KOVA_FLOW_IDS: ${{ secrets.KOVA_FLOW_IDS }}
+        run: |
+          set -e
+          echo "Triggering Kova CI run for project $KOVA_PROJECT_ID..."
+
+          PAYLOAD=$(jq -n \
+            --arg project_id "$KOVA_PROJECT_ID" \
+            --argjson flow_ids "${KOVA_FLOW_IDS:-[]}" \
+            --arg base_url "${{ github.event.inputs.base_url || '' }}" \
+            '{project_id: $project_id, flow_ids: $flow_ids, base_url: (if $base_url != "" then $base_url else null end)}')
+
+          RESPONSE=$(curl -fsSL -X POST "$KOVA_API_URL/api/v1/ci/run" \
+            -H "Authorization: Bearer $KOVA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+
+          echo "CI run response: $RESPONSE"
+          EXECUTION_IDS=$(echo "$RESPONSE" | jq -r '.executions[].id')
+          echo "execution_ids=$EXECUTION_IDS" >> "$GITHUB_OUTPUT"
+
+      - name: Monitor Executions & Verify Reports
+        env:
+          KOVA_API_URL: ${{ secrets.KOVA_API_URL || 'https://api.kova.dev' }}
+          KOVA_API_TOKEN: ${{ secrets.KOVA_API_TOKEN }}
+        run: |
+          set -e
+          FAILURES=0
+
+          for EXEC_ID in ${{ steps.kova_run.outputs.execution_ids }}; do
+            echo "Waiting for execution $EXEC_ID..."
+            STATUS="RUNNING"
+            while [ "$STATUS" = "RUNNING" ] || [ "$STATUS" = "QUEUED" ] || [ "$STATUS" = "INITIALIZING" ] || [ "$STATUS" = "CREATED" ] || [ "$STATUS" = "BROWSER_READY" ]; do
+              sleep 5
+              EXEC_DATA=$(curl -fsSL -X GET "$KOVA_API_URL/api/v1/executions/$EXEC_ID" \
+                -H "Authorization: Bearer $KOVA_API_TOKEN")
+              STATUS=$(echo "$EXEC_DATA" | jq -r '.status')
+              echo "Execution $EXEC_ID current status: $STATUS"
+            done
+
+            REPORT=$(curl -fsSL -X GET "$KOVA_API_URL/api/v1/executions/$EXEC_ID/report" \
+              -H "Authorization: Bearer $KOVA_API_TOKEN" \
+              -H "Accept: application/json")
+
+            SHAREABLE_URL=$(echo "$REPORT" | jq -r '.shareable_url')
+            ERROR_CODE=$(echo "$REPORT" | jq -r '.error_code // empty')
+            VERIFICATION_PASSED=$(echo "$REPORT" | jq -r '.verification.passed')
+
+            echo "----------------------------------------------------"
+            echo "Execution: $EXEC_ID"
+            echo "Status: $STATUS"
+            echo "Verification Passed: $VERIFICATION_PASSED"
+            echo "Report link: $SHAREABLE_URL"
+            echo "----------------------------------------------------"
+
+            if [ "$STATUS" = "FAILED" ] || [ "$STATUS" = "UNVERIFIED" ] || [ "$ERROR_CODE" = "UNVERIFIED" ] || [ "$VERIFICATION_PASSED" != "true" ]; then
+              echo "::error::Execution $EXEC_ID failed or was unverified ($STATUS / $ERROR_CODE). View report: $SHAREABLE_URL"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+
+          if [ $FAILURES -gt 0 ]; then
+            echo "::error::$FAILURES flow execution(s) FAILED or UNVERIFIED"
+            exit 1
+          fi
+          echo "All Kova flow executions completed and verified successfully."
