@@ -525,10 +525,19 @@ def _render_report_html(
     verification: dict,
     error_message: str | None = None,
     shareable_url: str = "",
+    ai_healed_steps: int = 0,
 ) -> str:
     passed = verification.get("passed", False)
     checks = verification.get("checks", [])
     badge_color = "#10b981" if (status_str == "COMPLETED" and passed) else ("#ef4444" if status_str == "FAILED" else "#f59e0b")
+
+    healing_banner = ""
+    if ai_healed_steps > 0:
+        healing_banner = f"""
+        <div style="background: rgba(59, 130, 246, 0.15); border: 1px solid #3b82f6; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; color: #93c5fd; font-weight: 600;">
+            Passed with AI healing: {ai_healed_steps} steps
+        </div>
+        """
 
     checks_html = ""
     for c in checks:
@@ -654,6 +663,7 @@ def _render_report_html(
             <div class="badge">{status_str}</div>
         </div>
 
+        {healing_banner}
         {error_banner}
 
         <div class="meta-grid">
@@ -749,6 +759,10 @@ async def get_execution_report(
                 verification_dict = ev.payload
                 break
 
+    ai_assisted_events = [ev for ev in events if ev.event_type == "ai_assisted"]
+    healed_steps_count = len(ai_assisted_events)
+    healing_summary = f"Passed with AI healing: {healed_steps_count} steps" if healed_steps_count > 0 else None
+
     sig = _generate_report_signature(exec_uuid)
     base_url = str(request.base_url).rstrip("/")
     shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
@@ -767,6 +781,7 @@ async def get_execution_report(
         verification=verification_dict,
         error_message=execution.error_message,
         shareable_url=shareable_url,
+        ai_healed_steps=healed_steps_count,
     )
 
     accept_header = request.headers.get("accept", "")
@@ -786,6 +801,8 @@ async def get_execution_report(
         "error_code": execution.error_code,
         "error_message": execution.error_message,
         "verification": verification_dict,
+        "ai_healed_steps": healed_steps_count,
+        "healing_summary": healing_summary,
         "signature": sig,
         "shareable_url": shareable_url,
         "html": html_content,

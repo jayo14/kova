@@ -39,6 +39,7 @@ class CIRunRequest(BaseModel):
     project_id: uuid.UUID
     flow_ids: list[uuid.UUID]
     base_url: str | None = None
+    fail_on_healed: bool = False
 
 
 class CIRunExecutionSummary(BaseModel):
@@ -99,6 +100,11 @@ async def ci_run(
         execution_ids_to_dispatch.append(str(execution.id))
 
     await db.commit()
+
+    if data.fail_on_healed:
+        from app.engine.execution.control import set_execution_fail_on_healed
+        for eid in execution_ids_to_dispatch:
+            await set_execution_fail_on_healed(eid, True)
 
     # Schedule execution dispatches in background
     for eid in execution_ids_to_dispatch:

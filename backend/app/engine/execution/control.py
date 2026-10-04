@@ -160,6 +160,35 @@ async def wait_for_resume(execution_id: str, timeout: float = 300.0) -> bool:
     return False
 
 
+def _fail_on_healed_key(execution_id: str) -> str:
+    return f"{CONTROL_PREFIX}:fail_on_healed:{execution_id}"
+
+
+async def set_execution_fail_on_healed(execution_id: str, fail_on_healed: bool) -> None:
+    """Record whether this execution should fail if any AI healing occurred."""
+    try:
+        r = await _get_redis()
+        key = _fail_on_healed_key(execution_id)
+        if fail_on_healed:
+            await r.set(key, "1", ex=3600)
+        else:
+            await r.delete(key)
+    except Exception as e:
+        logger.warning("Failed to set fail_on_healed for %s: %s", execution_id, e)
+
+
+async def get_execution_fail_on_healed(execution_id: str) -> bool:
+    """Return whether this execution should fail if AI healing occurred."""
+    try:
+        r = await _get_redis()
+        key = _fail_on_healed_key(execution_id)
+        val = await r.get(key)
+        return val == "1"
+    except Exception as e:
+        logger.warning("Failed to get fail_on_healed for %s: %s", execution_id, e)
+        return False
+
+
 async def queue_user_input(execution_id: str, input_msg: dict) -> None:
     """Queue user input for the runner to process."""
     r = await _get_redis()
@@ -189,3 +218,4 @@ async def cleanup_control(execution_id: str) -> None:
     await r.delete(_state_key(execution_id))
     await r.delete(_input_key(execution_id))
     await r.delete(_cancelled_key(execution_id))
+    await r.delete(_fail_on_healed_key(execution_id))
