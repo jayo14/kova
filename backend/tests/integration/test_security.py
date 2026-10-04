@@ -487,3 +487,98 @@ async def test_execution_event_payloads_safe():
     for payload in events:
         payload_str = str(payload)
         assert "SecretPass!" not in payload_str
+
+
+# --- 16. Credentials encrypted at rest and never leaked in API, events, logs, or exceptions ---
+
+
+@pytest.mark.asyncio
+async def test_credential_encryption_and_no_leak_in_api_events_logs_exceptions(
+    client, db_session: AsyncSession, caplog
+):
+    """Assert password is encrypted in DB and never appears in API responses, events, logs, or exceptions."""
+    from app.modules.credentials.crypto import decrypt_credential
+    from app.modules.credentials.models import Credential as DBCredential
+    from sqlalchemy import select
+
+    secret_password = "SuperSecretPlainTextPassword999!"
+    
+    # 1. API creation
+    proj_resp = await client.post(
+        "/api/v1/projects/",
+        json={"name": "Encryption Test Proj", "base_url": "http://localhost"},
+    )
+    assert proj_resp.status_code == 201
+    project_id = proj_resp.json()["id"]
+
+    with caplog.at_level(logging.DEBUG):
+        create_resp = await client.post(
+            f"/api/v1/projects/{project_id}/credentials",
+            json={
+                "name": "login_cred",
+                "email": "user@secure.local",
+                "password": secret_password,
+            },
+        )
+    assert create_resp.status_code == 201
+    cred_id = create_resp.json()["id"]
+
+    # Assert password never in API creation response
+    assert secret_password not in create_resp.text
+    assert "password" not in create_resp.json()
+
+    # 2. Assert encrypted in DB at rest
+    result = await db_session.execute(
+        select(DBCredential).where(DBCredential.id == uuid.UUID(cred_id))
+    )
+    db_cred = result.scalar_one()
+    assert db_cred.password != secret_password
+    assert db_cred.password.startswith("gAAAAA")
+    assert decrypt_credential(db_cred.password) == secret_password
+
+    # 3. Assert password never in API read/list responses
+    get_resp = await client.get(f"/api/v1/projects/{project_id}/credentials/{cred_id}")
+    assert get_resp.status_code == 200
+    assert secret_password not in get_resp.text
+
+    list_resp = await client.get(f"/api/v1/projects/{project_id}/credentials")
+    assert list_resp.status_code == 200
+    assert secret_password not in list_resp.text
+
+    # 4. Assert password never in events or exceptions
+    events = []
+
+    async def recorder(exec_id, event_type, payload):
+        events.append(payload)
+
+    store = CredentialStore()
+    store.add(Credential(id="login_cred", email="user@secure.local", password=db_cred.password))
+
+    runner = FlowRunner()
+    with caplog.at_level(logging.DEBUG):
+        # Trigger execution with failing step to test exceptions and error handling
+        result = await runner.execute(
+            execution_id=uuid.uuid4(),
+            flow_steps=[
+                {
+                    "type": "type",
+                    "target": {"test_id": "nonexistent_target_input"},
+                    "credential_id": "login_cred",
+                    "credential_field": "password",
+                }
+            ],
+            credential_store=store,
+            event_recorder=recorder,
+        )
+
+    # Assert password never in events
+    for event in events:
+        assert secret_password not in str(event)
+
+    # Assert password never in runner result / exception dictionary
+    assert secret_password not in str(result)
+
+    # Assert password never in logs
+    for log_record in caplog.records:
+        assert secret_password not in log_record.getMessage()
+
