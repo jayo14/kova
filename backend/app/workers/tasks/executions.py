@@ -155,6 +155,7 @@ async def _run_execution_async(task, execution_id: str):
                 target_url=target_url,
                 event_recorder=event_recorder,
                 timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
+                objective=flow.objective,
             )
 
             # Persist any remaining events from the runner

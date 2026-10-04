@@ -100,6 +100,8 @@ class FlowRunner:
         target_url: str = "",
         event_recorder: Callable | None = None,
         timeout_seconds: int | None = None,
+        objective: str | None = None,
+        expected_outcome: str | None = None,
     ) -> dict[str, Any]:
         """Execute a flow.
 
@@ -111,6 +113,8 @@ class FlowRunner:
             target_url: Initial URL to navigate to.
             event_recorder: Optional callable for persisting events.
             timeout_seconds: Optional override for execution timeout.
+            objective: Optional natural language objective.
+            expected_outcome: Optional natural language expected outcome.
 
         Returns:
             Execution result with events, observations, verification.
@@ -122,6 +126,7 @@ class FlowRunner:
                 self._execute_inner(
                     execution_id, flow_steps, success_condition,
                     credential_store, target_url, event_recorder,
+                    objective, expected_outcome,
                 ),
                 timeout=effective_timeout,
             )
@@ -146,8 +151,14 @@ class FlowRunner:
         credential_store: CredentialStore | None,
         target_url: str,
         event_recorder: Callable | None,
+        objective: str | None = None,
+        expected_outcome: str | None = None,
     ) -> dict[str, Any]:
         """Inner execution logic (without timeout wrapper)."""
+        if not success_condition and (objective or expected_outcome):
+            from app.engine.verification.verifier import compile_expectation
+            success_condition = await compile_expectation(objective or "", expected_outcome or "")
+
         ctx = ExecutionContext(
             execution_id=str(execution_id),
             target_url=target_url,

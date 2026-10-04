@@ -121,3 +121,36 @@ class EmailSelection(BaseModel):
     message_index: int = Field(ge=0, description="Index into the listed messages")
     reason: str = ""
     link_index: int = Field(default=0, ge=0, description="Index into the message's links")
+
+
+class CompiledExpectation(BaseModel):
+    """Structured verification condition compiled from natural language."""
+
+    condition: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Deterministic verification condition dict (known Verifier keys only)",
+    )
+    explanation: str = Field(
+        default="",
+        description="Reasoning or description of how the condition proves the outcome",
+    )
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs) -> "CompiledExpectation":
+        if isinstance(obj, dict):
+            if "condition" in obj and isinstance(obj["condition"], dict):
+                return super().model_validate(obj, **kwargs)
+            known = {
+                "element_visible", "element_present", "text_visible", "text_present",
+                "element_absent", "text_absent", "heading_changed", "url_matches",
+                "url_changed_from", "url_changed_to", "element_enabled", "element_checked",
+                "element_value", "page_loaded", "auth_verified", "element_count",
+            }
+            known_in_data = {k: v for k, v in obj.items() if k in known}
+            if known_in_data:
+                return super().model_validate({
+                    "condition": known_in_data,
+                    "explanation": str(obj.get("explanation", obj.get("reasoning", ""))),
+                }, **kwargs)
+        return super().model_validate(obj, **kwargs)
+

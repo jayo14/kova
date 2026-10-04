@@ -98,8 +98,127 @@ def _is_vacuous_structural_target(target: Any) -> bool:
     return True
 
 
+def is_vacuous_condition(condition: Any) -> bool:
+    """True when a condition cannot prove a user outcome (empty, unknown, or vacuous)."""
+    if not isinstance(condition, dict) or not condition:
+        return True
+
+    # Unknown condition keys fail-closed
+    unknown_keys = [k for k in condition.keys() if k not in KNOWN_CONDITION_KEYS]
+    if unknown_keys:
+        return True
+
+    has_non_vacuous = False
+    for k, v in condition.items():
+        if k == "url_matches":
+            if isinstance(v, str) and not _is_vacuous_url_pattern(v):
+                has_non_vacuous = True
+        elif k in ("element_visible", "element_present"):
+            if not _is_vacuous_structural_target(v):
+                has_non_vacuous = True
+        elif k == "page_loaded":
+            pass
+        else:
+            has_non_vacuous = True
+
+    return not has_non_vacuous
+
+
+def _heuristic_compile_expectation(objective: str, expected_outcome: str) -> dict:
+    """Deterministic heuristic fallback when AI provider is unavailable."""
+    text = f"{objective} {expected_outcome}".strip()
+    if not text:
+        return {}
+    url_match = re.search(
+        r"/(?:dashboard|profile|settings|home|login|signup|account|welcome|orders|checkout)[\w\-]*",
+        text,
+        re.I,
+    )
+    if url_match:
+        return {"url_matches": url_match.group(0)}
+    quoted = re.findall(r"['\"]([^'\"]{3,50})['\"]", text)
+    if quoted:
+        return {"text_visible": quoted[0]}
+    shows_match = re.search(
+        r"(?:sees|shows|displays|contains|shows text)\s+([A-Za-z0-9_\- ]{3,30})",
+        text,
+        re.I,
+    )
+    if shows_match:
+        cand = shows_match.group(1).strip()
+        if cand.lower() not in _STRUCTURAL_CONTAINERS:
+            return {"text_visible": cand}
+    return {}
+
+
+async def compile_expectation(
+    objective: str,
+    expected_outcome: str,
+    provider: Any = None,
+) -> dict:
+    """Compile natural-language expectation/objective into a deterministic verification condition.
+
+    Uses the AI provider with schema-validated output (CompiledExpectation).
+    Runs the result through the verifier's vacuous-condition rejection.
+    If it cannot compile a non-vacuous condition, returns a vacuous condition
+    so the runner/verifier marks the execution UNVERIFIED, never PASSED.
+    """
+    if provider is None:
+        try:
+            from app.engine.ai.provider import get_ai_provider
+            provider = get_ai_provider()
+        except Exception:
+            provider = None
+
+    condition: dict = {}
+    if provider is not None:
+        from app.engine.ai.schemas import CompiledExpectation
+        system = (
+            "You compile software-testing objectives and expected outcomes into "
+            "deterministic verification conditions.\n"
+            "Return JSON matching: {\"condition\": {<check_key>: <spec>}, \"explanation\": \"...\"}\n"
+            "Known check keys:\n"
+            "- element_visible: {'css': '...'} or {'text': '...'}\n"
+            "- text_visible: '...'\n"
+            "- url_matches: '...'\n"
+            "- element_absent: {'css': '...'} or {'text': '...'}\n"
+            "- text_absent: '...'\n"
+            "- heading_changed: true\n"
+            "- url_changed_to: '...'\n"
+            "- url_changed_from: '...'\n"
+            "- auth_verified: true\n"
+            "CRITICAL: Do NOT return vacuous conditions like url_matches '.*' or "
+            "element_visible on bare structural containers (main, body, container, .content)."
+        )
+        prompt = (
+            f"Objective: {objective}\n"
+            f"Expected Outcome: {expected_outcome}\n\n"
+            "Compile into a deterministic verification condition."
+        )
+        try:
+            compiled = await provider.generate_structured(system, prompt, CompiledExpectation)
+            condition = (
+                compiled.condition
+                if isinstance(compiled, CompiledExpectation)
+                else (compiled.get("condition", {}) if isinstance(compiled, dict) else {})
+            )
+        except Exception as e:
+            logger.warning("compile_expectation AI generation failed: %s", e)
+            condition = {}
+
+    if not condition:
+        condition = _heuristic_compile_expectation(objective, expected_outcome)
+
+    if is_vacuous_condition(condition):
+        # Return a vacuous condition that the verifier rejects
+        return {"url_matches": ".*"}
+
+    return condition
+
+
 @dataclass
 class VerificationCheck:
+
     """Result of a single verification check."""
 
     type: str
@@ -309,35 +428,19 @@ class Verifier:
         # Vacuous-success guard: a condition that only proves structural state
         # ("a page container is visible") or matches every URL cannot prove a
         # user outcome. Reject it explicitly rather than silently passing.
-        check_types = {c.type for c in checks}
-        if check_types == {"url_matches"}:
-            pattern = condition.get("url_matches")
-            if isinstance(pattern, str) and _is_vacuous_url_pattern(pattern):
-                return VerificationResult(
+        if is_vacuous_condition(condition):
+            return VerificationResult(
+                passed=False,
+                checks=[VerificationCheck(
+                    type="vacuous_condition",
                     passed=False,
-                    checks=[VerificationCheck(
-                        type="vacuous_condition",
-                        passed=False,
-                        expected="a URL pattern that discriminates the intended outcome",
-                        actual=pattern,
-                        message=f"url_matches pattern '{pattern}' matches every URL and cannot prove success",
-                    )],
-                )
-        if check_types == {"element_visible"} or check_types == {"element_present"}:
-            if _is_vacuous_structural_target(condition.get("element_visible", condition.get("element_present"))):
-                return VerificationResult(
-                    passed=False,
-                    checks=[VerificationCheck(
-                        type="vacuous_condition",
-                        passed=False,
-                        expected="a target that identifies the intended outcome",
-                        actual=condition.get("element_visible", condition.get("element_present")),
-                        message=(
-                            "Element check against a bare structural container "
-                            "(main/.content/.container) cannot prove a user outcome"
-                        ),
-                    )],
-                )
+                    expected="a non-vacuous condition that discriminates the intended outcome",
+                    actual=repr(condition)[:200],
+                    message=(
+                        f"Condition {condition} is vacuous or purely structural and cannot prove a user outcome"
+                    ),
+                )],
+            )
 
         all_passed = all(c.passed for c in checks)
         return VerificationResult(passed=all_passed, checks=checks)
