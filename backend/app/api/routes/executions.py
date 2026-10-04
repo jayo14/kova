@@ -4,23 +4,27 @@ Handles execution lifecycle: create, get, cancel, events.
 """
 
 import asyncio
+import hashlib
+import hmac
 import json
 import logging
 from typing import AsyncGenerator
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import get_current_user, get_session
+from app.modules.auth.dependencies import get_optional_current_user
 from app.modules.executions.event_service import EventService
-from app.modules.executions.models import ExecutionStatus
+from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.schemas import ExecutionCreate, ExecutionEventRead, ExecutionRead
 from app.modules.executions.service import ExecutionService
 from app.modules.flows.models import Flow
+from app.modules.projects.models import Project
 from app.modules.projects.repository import ProjectRepository
 from app.modules.users.models import User
 
@@ -498,4 +502,293 @@ async def refresh_evidence_url(
         raise HTTPException(status_code=500, detail="Could not generate signed URL")
 
     return {"url": signed_url}
+
+
+def _generate_report_signature(execution_id: uuid.UUID) -> str:
+    from app.modules.auth.dependencies import _get_jwt_secret
+    secret = _get_jwt_secret()
+    msg = f"report:{execution_id}"
+    return hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _verify_report_signature(execution_id: uuid.UUID, signature: str) -> bool:
+    expected = _generate_report_signature(execution_id)
+    return hmac.compare_digest(expected, signature)
+
+
+def _render_report_html(
+    execution_id: uuid.UUID,
+    status_str: str,
+    flow_name: str,
+    project_name: str,
+    duration_str: str,
+    verification: dict,
+    error_message: str | None = None,
+    shareable_url: str = "",
+) -> str:
+    passed = verification.get("passed", False)
+    checks = verification.get("checks", [])
+    badge_color = "#10b981" if (status_str == "COMPLETED" and passed) else ("#ef4444" if status_str == "FAILED" else "#f59e0b")
+
+    checks_html = ""
+    for c in checks:
+        c_type = c.get("type", "unknown")
+        c_passed = c.get("passed", False)
+        c_badge = '<span style="color:#10b981;font-weight:600;">PASS</span>' if c_passed else '<span style="color:#ef4444;font-weight:600;">FAIL</span>'
+        c_msg = c.get("message") or ""
+        checks_html += f"""
+        <tr style="border-bottom: 1px solid #334155;">
+            <td style="padding: 10px; font-family: monospace;">{c_type}</td>
+            <td style="padding: 10px;">{c_badge}</td>
+            <td style="padding: 10px; color: #94a3b8;">{c_msg}</td>
+        </tr>
+        """
+    if not checks_html:
+        checks_html = '<tr><td colspan="3" style="padding: 12px; color: #94a3b8; text-align: center;">No individual verification checks recorded.</td></tr>'
+
+    error_banner = ""
+    if error_message:
+        error_banner = f"""
+        <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; color: #fca5a5;">
+            <strong>Error:</strong> {error_message}
+        </div>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kova Execution Report - {flow_name}</title>
+    <style>
+        body {{
+            background-color: #0f172a;
+            color: #f8fafc;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+        }}
+        .container {{
+            max-width: 860px;
+            margin: 0 auto;
+            background: #1e293b;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            padding: 32px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 20px;
+            margin-bottom: 24px;
+        }}
+        .badge {{
+            background: {badge_color};
+            color: #ffffff;
+            font-weight: 700;
+            font-size: 14px;
+            padding: 6px 14px;
+            border-radius: 9999px;
+            letter-spacing: 0.05em;
+        }}
+        .meta-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+            background: #0f172a;
+            padding: 16px;
+            border-radius: 8px;
+        }}
+        .meta-item label {{
+            display: block;
+            font-size: 12px;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 4px;
+        }}
+        .meta-item span {{
+            font-size: 15px;
+            font-weight: 600;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            margin-top: 12px;
+        }}
+        th {{
+            background: #0f172a;
+            padding: 10px;
+            font-size: 13px;
+            color: #94a3b8;
+            border-bottom: 2px solid #334155;
+        }}
+        .footer {{
+            margin-top: 32px;
+            padding-top: 16px;
+            border-top: 1px solid #334155;
+            font-size: 12px;
+            color: #64748b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }}
+        .footer a {{
+            color: #38bdf8;
+            text-decoration: none;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1 style="margin: 0; font-size: 24px; color: #f8fafc;">Kova Execution Report</h1>
+                <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 14px;">Flow: <strong>{flow_name}</strong> &bull; Project: <strong>{project_name}</strong></p>
+            </div>
+            <div class="badge">{status_str}</div>
+        </div>
+
+        {error_banner}
+
+        <div class="meta-grid">
+            <div class="meta-item">
+                <label>Execution ID</label>
+                <span style="font-family: monospace; font-size: 13px;">{str(execution_id)[:8]}...</span>
+            </div>
+            <div class="meta-item">
+                <label>Duration</label>
+                <span>{duration_str}</span>
+            </div>
+            <div class="meta-item">
+                <label>Verification</label>
+                <span style="color: {'#10b981' if passed else '#ef4444'};">{'PASSED' if passed else ('UNVERIFIED' if status_str == 'UNVERIFIED' else 'FAILED')}</span>
+            </div>
+        </div>
+
+        <h3 style="margin-top: 24px; margin-bottom: 8px; font-size: 16px;">Verification Checks</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Type</th>
+                    <th>Result</th>
+                    <th>Message</th>
+                </tr>
+            </thead>
+            <tbody>
+                {checks_html}
+            </tbody>
+        </table>
+
+        <div class="footer">
+            <span>Generated by Kova Deterministic Platform</span>
+            <span><a href="{shareable_url}">Signed Shareable Link</a></span>
+        </div>
+    </div>
+</body>
+</html>"""
+
+
+@router.get("/{execution_id}/report")
+async def get_execution_report(
+    execution_id: str,
+    request: Request,
+    signature: str | None = None,
+    format: str | None = None,
+    user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Return JSON execution report plus a signed, shareable HTML page."""
+    try:
+        exec_uuid = uuid.UUID(execution_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid execution ID")
+
+    if signature:
+        if not _verify_report_signature(exec_uuid, signature):
+            raise HTTPException(status_code=401, detail="Invalid report signature")
+        stmt = select(Execution).where(Execution.id == exec_uuid)
+        res = await db.execute(stmt)
+        execution = res.scalar_one_or_none()
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+    else:
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        execution = await _verify_execution_ownership(db, exec_uuid, user.id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+    flow_stmt = select(Flow).where(Flow.id == execution.flow_id)
+    flow_res = await db.execute(flow_stmt)
+    flow = flow_res.scalar_one_or_none()
+    flow_name = flow.name if flow else "Flow"
+
+    project_name = "Project"
+    if flow:
+        proj_stmt = select(Project).where(Project.id == flow.project_id)
+        proj_res = await db.execute(proj_stmt)
+        project = proj_res.scalar_one_or_none()
+        if project:
+            project_name = project.name
+
+    from app.modules.executions.event_service import EventService
+    from app.modules.executions.event_types import EventTypes
+
+    event_svc = EventService(db)
+    events = await event_svc.get_events(exec_uuid)
+    verification_dict = {"passed": execution.status == ExecutionStatus.COMPLETED.value, "checks": []}
+    for ev in events:
+        if ev.event_type in (EventTypes.VERIFICATION_PASSED, "verification_passed", "verification_failed"):
+            if isinstance(ev.payload, dict) and "checks" in ev.payload:
+                verification_dict = ev.payload
+                break
+
+    sig = _generate_report_signature(exec_uuid)
+    base_url = str(request.base_url).rstrip("/")
+    shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
+
+    duration_ms = None
+    if execution.started_at and execution.completed_at:
+        duration_ms = int((execution.completed_at - execution.started_at).total_seconds() * 1000)
+    duration_str = f"{duration_ms} ms" if duration_ms is not None else "N/A"
+
+    html_content = _render_report_html(
+        execution_id=exec_uuid,
+        status_str=execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+        flow_name=flow_name,
+        project_name=project_name,
+        duration_str=duration_str,
+        verification=verification_dict,
+        error_message=execution.error_message,
+        shareable_url=shareable_url,
+    )
+
+    accept_header = request.headers.get("accept", "")
+    if format == "html" or (signature and "application/json" not in accept_header and "text/html" in accept_header):
+        return HTMLResponse(content=html_content)
+
+    return {
+        "execution_id": str(exec_uuid),
+        "status": execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+        "flow_id": str(execution.flow_id),
+        "flow_name": flow_name,
+        "project_name": project_name,
+        "created_at": execution.created_at.isoformat() if execution.created_at else None,
+        "started_at": execution.started_at.isoformat() if execution.started_at else None,
+        "completed_at": execution.completed_at.isoformat() if execution.completed_at else None,
+        "duration_ms": duration_ms,
+        "error_code": execution.error_code,
+        "error_message": execution.error_message,
+        "verification": verification_dict,
+        "signature": sig,
+        "shareable_url": shareable_url,
+        "html": html_content,
+    }
+
 

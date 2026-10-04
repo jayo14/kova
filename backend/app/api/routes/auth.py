@@ -240,3 +240,35 @@ async def delete_me(
     await db.delete(user)
     await db.commit()
     return {"message": "Account deleted successfully"}
+
+
+class CreateApiTokenRequest(BaseModel):
+    name: str = "Default Token"
+
+
+class ApiTokenResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    token: str | None = None
+    created_at: datetime
+    last_used_at: datetime | None = None
+
+
+@router.post("/auth/tokens", response_model=ApiTokenResponse, status_code=201)
+async def create_token(
+    data: CreateApiTokenRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate a new API token for CI or programmatic access."""
+    from app.modules.auth.token_service import create_api_token
+    token_obj, raw_token = await create_api_token(db, user.id, data.name)
+    await db.commit()
+    return ApiTokenResponse(
+        id=token_obj.id,
+        name=token_obj.name,
+        token=raw_token,
+        created_at=token_obj.created_at,
+        last_used_at=token_obj.last_used_at,
+    )
+
