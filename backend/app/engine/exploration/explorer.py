@@ -1252,6 +1252,8 @@ class ExplorationEngine:
             "profile": 2,
             "admin": 3,
             "create": 3,
+            "contact": 3,
+            "form": 3,
             "search": 4,
             "explore": 4,
         }
@@ -1313,6 +1315,11 @@ class ExplorationEngine:
         auth_keywords = ["login", "signin", "signup", "register", "auth", "account"]
         if any(kw in path_lower or kw in title_lower for kw in auth_keywords):
             return "auth"
+
+        # Standalone form routes (contact, feedback, support, inquiry, etc.)
+        form_keywords = ["contact", "feedback", "support", "inquiry", "message"]
+        if any(kw in path_lower or kw in title_lower for kw in form_keywords):
+            return "form"
 
         # Feature routes (dashboard, settings, profile, etc.)
         feature_keywords = ["dashboard", "settings", "profile", "account", "admin", "manage", "create", "new", "edit"]
@@ -1393,9 +1400,35 @@ class ExplorationEngine:
         route_map = await self._analyze_routes(page, current_url)
         accessible_routes = [r for r in route_map if r["accessible"]]
         auth_routes = [r for r in accessible_routes if r["category"] == "auth"]
+        form_routes = [
+            r for r in accessible_routes
+            if r["category"] == "form"
+            or (
+                r.get("has_form")
+                and any(
+                    kw in r["path"].lower() or kw in (r.get("title") or "").lower()
+                    for kw in ["contact", "feedback", "support", "inquiry", "message"]
+                )
+            )
+        ]
         feature_routes = [r for r in accessible_routes if r["category"] == "feature"]
         content_routes = [r for r in accessible_routes if r["category"] == "content"]
         blocked_routes = [r for r in route_map if not r["accessible"]]
+
+        signup_routes = [
+            r for r in accessible_routes
+            if any(
+                kw in r["path"].lower() or kw in (r.get("title") or "").lower()
+                for kw in ["signup", "sign-up", "register", "create-account", "join"]
+            )
+        ]
+        login_routes = [
+            r for r in accessible_routes
+            if any(
+                kw in r["path"].lower() or kw in (r.get("title") or "").lower()
+                for kw in ["login", "log-in", "signin", "sign-in"]
+            )
+        ]
 
         # Add route analysis to discoveries
         if route_map:
@@ -1461,8 +1494,22 @@ class ExplorationEngine:
                 missions.append(goal_mission)
                 mission_count += 1
 
-        # Auth journey (if auth routes exist) — uses configured project credential
-        if auth_routes and mission_count < max_missions:
+        # Chained auth journey (if both signup and login exist)
+        if signup_routes and login_routes and mission_count < max_missions:
+            chained_auth_mission = await self._build_chained_auth_mission(
+                signup_routes[0],
+                login_routes[0],
+                current_url,
+                title,
+                persona_name,
+                credential_id=self.credential_id,
+            )
+            if chained_auth_mission:
+                missions.append(chained_auth_mission)
+                mission_count += 1
+
+        # Auth journey (if auth routes exist and not already covered by chained auth)
+        if auth_routes and not (signup_routes and login_routes) and mission_count < max_missions:
             auth_route = auth_routes[0]
             auth_mission = self._build_auth_mission(
                 auth_route, current_url, title, persona_name,
@@ -1470,6 +1517,17 @@ class ExplorationEngine:
             )
             if auth_mission:
                 missions.append(auth_mission)
+                mission_count += 1
+
+        # Standalone form journeys (contact, feedback, etc.)
+        for route in form_routes[:2]:
+            if mission_count >= max_missions:
+                break
+            form_mission = self._build_standalone_form_mission(
+                route, current_url, title, persona_name
+            )
+            if form_mission:
+                missions.append(form_mission)
                 mission_count += 1
 
         # Feature journeys (dashboard, settings, etc.)
@@ -1496,6 +1554,29 @@ class ExplorationEngine:
 
         # Fallback: element-based missions if route analysis yielded nothing
         if not missions and interactive_elements:
+            # Check for contact form controls on current page
+            has_contact = any(
+                "contact" in el.get("name", "").lower()
+                or "message" in el.get("name", "").lower()
+                or el.get("type") == "textarea"
+                for el in interactive_elements
+            )
+            if has_contact and mission_count < max_missions:
+                fake_route = {
+                    "path": urlparse(current_url).path or "/contact",
+                    "url": current_url,
+                    "title": title or "Contact",
+                    "text": "Contact",
+                    "category": "form",
+                    "has_form": True,
+                }
+                form_mission = self._build_standalone_form_mission(
+                    fake_route, current_url, title, persona_name
+                )
+                if form_mission:
+                    missions.append(form_mission)
+                    mission_count += 1
+
             for el in interactive_elements[:4]:
                 if mission_count >= max_missions:
                     break
@@ -1508,7 +1589,7 @@ class ExplorationEngine:
                     mission_count += 1
 
         # Sort: recommended first, then by category
-        category_order = {"auth": 0, "feature": 1, "content": 2, "navigation": 3}
+        category_order = {"auth": 0, "form": 1, "feature": 2, "content": 3, "navigation": 4}
         missions.sort(key=lambda m: (
             0 if m.recommended else 1,
             category_order.get(m.category or "navigation", 9)
@@ -1664,6 +1745,202 @@ class ExplorationEngine:
             recommended=True,
             route_analysis=auth_route,
             estimated_time_seconds=20,
+        )
+
+    async def _build_chained_auth_mission(
+        self,
+        signup_route: dict,
+        login_route: dict,
+        base_url: str,
+        title: str,
+        persona: str,
+        credential_id: str | None = None,
+    ) -> DiscoveredMission | None:
+        """Build a chained signup -> login -> account mission.
+
+        Uses the configured temp-mail service if available, or the project's
+        credential_id if provided. If neither is available, emits a mission shell
+        asking for one credential.
+        """
+        from app.engine.email import get_temp_email_provider
+
+        temp_mail_provider = get_temp_email_provider()
+        mailbox = None
+        if temp_mail_provider:
+            try:
+                mailbox = await temp_mail_provider.create_mailbox()
+            except Exception as e:
+                logger.warning("Could not create temp mailbox for chained mission: %s", e)
+
+        signup_path = signup_route.get("path", "/signup")
+        login_path = login_route.get("path", "/login")
+        signup_url = signup_route.get("url") or f"{base_url.rstrip('/')}{signup_path}"
+        login_url = login_route.get("url") or f"{base_url.rstrip('/')}{login_path}"
+
+        if not mailbox and not credential_id:
+            # Need credential
+            return DiscoveredMission(
+                id=f"mission-{uuid.uuid4().hex[:8]}",
+                name="Chained Auth Flow (needs credentials)",
+                title=f"Sign up, log in, and verify account on {title or 'application'}",
+                description=(
+                    f"A signup route ({signup_path}) and login route ({login_path}) were detected. "
+                    "Add a project credential or configure the temp-mail service to run this chained mission."
+                ),
+                objective=f"Verify that {persona} can sign up, log in, and view account page",
+                persona=persona,
+                category="auth",
+                journey=[
+                    f"Navigate to {signup_path}",
+                    "Sign up with credentials",
+                    f"Navigate to {login_path}",
+                    "Log in with user credentials",
+                    "Verify account page is displayed",
+                ],
+                steps=[],
+                successCondition=None,
+                confidence=0.5,
+                recommended=True,
+                route_analysis={"signup": signup_route, "login": login_route},
+                estimated_time_seconds=30,
+            )
+
+        email_selector = "input[type='email'], input[name='email'], input[name='username']"
+        password_selector = "input[type='password'], input[name='password']"
+        submit_signup_selector = "button[type='submit'], input[type='submit'], button:has-text('Sign up'), button:has-text('Register'), button:has-text('Create')"
+        submit_login_selector = "button[type='submit'], input[type='submit'], button:has-text('Log in'), button:has-text('Sign in')"
+
+        steps = [
+            {"type": "navigate", "url": signup_url},
+            {"type": "wait", "value": "1000"},
+            {"type": "click", "target": email_selector},
+        ]
+
+        if mailbox:
+            email_val = mailbox.address
+            pwd_val = f"KovaTest#{uuid.uuid4().hex[:6]}"
+            steps.extend([
+                {"type": "type", "target": email_selector, "value": email_val},
+                {"type": "click", "target": password_selector},
+                {"type": "type", "target": password_selector, "value": pwd_val},
+            ])
+        else:
+            steps.extend([
+                {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
+                {"type": "click", "target": password_selector},
+                {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
+            ])
+
+        steps.extend([
+            {"type": "click", "target": submit_signup_selector},
+            {"type": "wait", "value": "2000"},
+            {"type": "navigate", "url": login_url},
+            {"type": "wait", "value": "1000"},
+            {"type": "click", "target": email_selector},
+        ])
+
+        if mailbox:
+            steps.extend([
+                {"type": "type", "target": email_selector, "value": email_val},
+                {"type": "click", "target": password_selector},
+                {"type": "type", "target": password_selector, "value": pwd_val},
+            ])
+        else:
+            steps.extend([
+                {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
+                {"type": "click", "target": password_selector},
+                {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
+            ])
+
+        steps.extend([
+            {"type": "click", "target": submit_login_selector},
+            {"type": "wait", "value": "2000"},
+        ])
+
+        success_condition = {
+            "auth_verified": {
+                "auth_path": login_path,
+            }
+        }
+
+        return DiscoveredMission(
+            id=f"mission-{uuid.uuid4().hex[:8]}",
+            name="Complete Registration and Login Journey",
+            title=f"Sign up, log in, and view account on {title or 'application'}",
+            description="Sign up as a new user, log in with credentials, and verify access to the account page.",
+            objective=f"Verify that {persona} can sign up, log in, and view account page",
+            persona=persona,
+            category="auth",
+            journey=[
+                f"Navigate to {signup_path}",
+                "Sign up with credentials",
+                f"Navigate to {login_path}",
+                "Log in with user credentials",
+                "Verify account page is displayed",
+            ],
+            steps=steps,
+            successCondition=success_condition,
+            confidence=0.85,
+            recommended=True,
+            route_analysis={"signup": signup_route, "login": login_route},
+            estimated_time_seconds=30,
+        )
+
+    def _build_standalone_form_mission(
+        self,
+        form_route: dict,
+        base_url: str,
+        title: str,
+        persona: str,
+    ) -> DiscoveredMission | None:
+        """Build a standalone form mission (e.g. contact form).
+
+        Executes: submit, then expect confirmation and no failed request.
+        """
+        path = form_route.get("path", "/contact")
+        url = form_route.get("url") or f"{base_url.rstrip('/')}{path}"
+        form_name = form_route.get("text") or form_route.get("title") or "Contact"
+        if not form_name or form_name.strip() in {"/", ""}:
+            form_name = "Contact"
+
+        steps = [
+            {"type": "navigate", "url": url},
+            {"type": "wait", "value": "1000"},
+            {"type": "click", "target": "input[name*='name'], input[id*='name'], input[placeholder*='name'], input[type='text']"},
+            {"type": "type", "target": "input[name*='name'], input[id*='name'], input[placeholder*='name'], input[type='text']", "value": "Kova Tester"},
+            {"type": "click", "target": "input[type='email'], input[name*='email'], input[id*='email'], input[placeholder*='email']"},
+            {"type": "type", "target": "input[type='email'], input[name*='email'], input[id*='email'], input[placeholder*='email']", "value": "tester@example.com"},
+            {"type": "click", "target": "textarea, input[name*='message'], input[id*='message'], input[placeholder*='message']"},
+            {"type": "type", "target": "textarea, input[name*='message'], input[id*='message'], input[placeholder*='message']", "value": "This is an automated test message from Kova."},
+            {"type": "click", "target": "button[type='submit'], input[type='submit'], button:has-text('Submit'), button:has-text('Send'), form button"},
+            {"type": "wait", "value": "2000"},
+        ]
+
+        # Expect confirmation and no failed request
+        success_condition = {
+            "text_visible": "Thank",
+        }
+
+        return DiscoveredMission(
+            id=f"mission-{uuid.uuid4().hex[:8]}",
+            name=f"Submit {form_name} Form",
+            title=f"Submit {form_name.lower()} form on {title or 'application'}",
+            description=f"Submit {form_name.lower()} form, then expect confirmation and no failed request.",
+            objective=f"Submit {form_name.lower()} form, then expect confirmation and no failed request",
+            persona=persona,
+            category="form",
+            journey=[
+                f"Navigate to {path}",
+                f"Fill in {form_name.lower()} details (name, email, message)",
+                f"Submit the {form_name.lower()} form",
+                "Expect confirmation and no failed request",
+            ],
+            steps=steps,
+            successCondition=success_condition,
+            confidence=0.8,
+            recommended=False,
+            route_analysis=form_route,
+            estimated_time_seconds=15,
         )
 
     def _build_feature_mission(
