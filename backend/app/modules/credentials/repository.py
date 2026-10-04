@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.credentials.models import Credential
+from app.modules.credentials.crypto import encrypt_credential
 
 
 class CredentialRepository:
@@ -19,11 +20,12 @@ class CredentialRepository:
         email: str,
         password: str,
     ) -> Credential:
+        encrypted_password = encrypt_credential(password)
         credential = Credential(
             project_id=project_id,
             name=name,
             email=email,
-            password=password,
+            password=encrypted_password,
         )
         self.db.add(credential)
         await self.db.flush()
