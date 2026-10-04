@@ -69,3 +69,48 @@ async def test_executor_navigate_blocks_unsafe():
     with pytest.raises(ActionValidationError) as exc:
         await executor._execute_action(action)
     assert "unsafe" in str(exc.value).lower() or "blocked" in str(exc.value).lower()
+
+
+def test_mock_getaddrinfo_loopback(monkeypatch):
+    """Host resolving to 127.0.0.1 via getaddrinfo is rejected."""
+    import socket
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))],
+    )
+    assert _is_safe_url("http://attacker-controlled.com/ssrf") is False
+
+
+def test_mock_getaddrinfo_metadata_ip(monkeypatch):
+    """Host resolving to 169.254.169.254 via getaddrinfo is rejected."""
+    import socket
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, port: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("169.254.169.254", 80))],
+    )
+    assert _is_safe_url("http://rebind-to-metadata.com/latest") is False
+
+
+def test_decimal_hex_and_cgnat_blocked():
+    """Decimal, hex, IPv6-mapped, and 100.64.0.0/10 forms are rejected."""
+    # 100.64.0.0/10 Carrier Grade NAT
+    assert _is_safe_url("http://100.64.0.1/") is False
+    assert _is_safe_url("http://100.127.255.254/") is False
+
+    # Decimal integer representations of loopback and private IPs
+    assert _is_safe_url("http://2130706433/", allow_loopback=False) is False  # 127.0.0.1
+    assert _is_safe_url("http://2852039166/") is False  # 169.254.169.254
+    assert _is_safe_url("http://167772161/") is False   # 10.0.0.1
+
+    # Hex representations
+    assert _is_safe_url("http://0x7f000001/", allow_loopback=False) is False # 127.0.0.1
+    assert _is_safe_url("http://0xa9fea9fe/") is False # 169.254.169.254
+    assert _is_safe_url("http://0x7f.0.0.1/", allow_loopback=False) is False
+
+    # IPv6-mapped forms
+    assert _is_safe_url("http://[::ffff:127.0.0.1]/", allow_loopback=False) is False
+    assert _is_safe_url("http://[::ffff:169.254.169.254]/") is False
+    assert _is_safe_url("http://[::ffff:10.0.0.1]/") is False
+
