@@ -222,8 +222,10 @@ class ActionExecutor:
             if field == "email":
                 return credential.email
             raw_password = credential.get_password()
-            from app.modules.credentials.crypto import decrypt_credential
-            return decrypt_credential(raw_password)
+            if raw_password and raw_password.startswith("gAAAAA"):
+                from app.modules.credentials.crypto import decrypt_credential
+                return decrypt_credential(raw_password)
+            return raw_password
         except Exception:
             # Never expose credential details in error
             logger.warning("Credential resolution failed for %s", credential_id)
