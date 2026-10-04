@@ -24,7 +24,7 @@ export function ResetPasswordContent() {
 
   // Exchange the recovery code for a session on mount
   useEffect(() => {
-    const code = searchParams.get("code");
+    const code = searchParams.get("code") || searchParams.get("token");
     if (!code) {
       setPhase("error");
       setError("Invalid reset link. Please request a new one.");
