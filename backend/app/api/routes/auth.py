@@ -118,7 +118,8 @@ async def reset_password(req: ResetPasswordRequest, background_tasks: Background
     if user:
         # Generate a temporary reset JWT
         expires = datetime.now(timezone.utc) + timedelta(hours=1)
-        to_encode = {"exp": expires, "sub": str(user.id), "type": "reset"}
+        jti = str(uuid.uuid4())
+        to_encode = {"exp": expires, "sub": str(user.id), "type": "reset", "jti": jti}
         secret = _get_jwt_secret()
         reset_token = jwt.encode(to_encode, secret, algorithm="HS256")
         
@@ -130,3 +131,112 @@ async def reset_password(req: ResetPasswordRequest, background_tasks: Background
         
     # Always return success to prevent email enumeration
     return {"message": "If that email exists, we sent a password reset link."}
+
+
+_USED_RESET_TOKENS: set[str] = set()
+
+
+class ResetPasswordConfirmRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class ChangePasswordRequest(BaseModel):
+    new_password: str | None = None
+    password: str | None = None
+
+
+@router.post("/reset-password/confirm")
+async def confirm_reset_password(
+    req: ResetPasswordConfirmRequest,
+    db: AsyncSession = Depends(get_session),
+):
+    if len(req.new_password) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long",
+        )
+
+    try:
+        secret = _get_jwt_secret()
+        payload = jwt.decode(req.token, secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has expired",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid reset token",
+        )
+
+    if payload.get("type") != "reset":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid token type",
+        )
+
+    token_id = payload.get("jti") or req.token
+    if token_id in _USED_RESET_TOKENS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset token has already been used",
+        )
+
+    sub = payload.get("sub")
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token missing subject",
+        )
+
+    try:
+        user_id = uuid.UUID(sub)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid user ID in token",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    user.password_hash = hash_password(req.new_password)
+    _USED_RESET_TOKENS.add(token_id)
+    await db.commit()
+
+    return {"message": "Password reset successfully"}
+
+
+@router.post("/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    pwd = req.new_password or req.password
+    if not pwd or len(pwd) < 8:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 8 characters long",
+        )
+
+    user.password_hash = hash_password(pwd)
+    await db.commit()
+    return {"message": "Password updated successfully"}
+
+
+@router.delete("/me")
+async def delete_me(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    await db.delete(user)
+    await db.commit()
+    return {"message": "Account deleted successfully"}
