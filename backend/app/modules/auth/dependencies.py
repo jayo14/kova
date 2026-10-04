@@ -4,7 +4,6 @@ import uuid
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
-from jwt import PyJWKClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.database.session import get_session
@@ -24,7 +23,7 @@ async def get_current_user(
     db: AsyncSession = Depends(get_session),
 ) -> User:
     if not credentials:
-        if not settings.OIDC_ISSUER_URL:
+        if not settings.is_production and not settings.OIDC_ISSUER_URL:
             default_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
             user_repo = UserRepository(db)
             return await user_repo.get_or_create(default_id, "dev@kova.local", "Dev User")
@@ -37,7 +36,7 @@ async def get_current_user(
     secret = _get_jwt_secret()
 
     try:
-        decode_options: dict = {"require": ["exp", "sub"]}
+        decode_options: dict = {"require": ["exp"]}
         audience = settings.OIDC_AUDIENCE
         issuer = settings.effective_jwt_issuer
         if not audience:

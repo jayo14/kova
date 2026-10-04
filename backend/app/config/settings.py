@@ -1,10 +1,12 @@
 from typing import Any
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
     RESEND_API_KEY: str = ""
+    CREDENTIAL_ENCRYPTION_KEY: str = ""
+    FRONTEND_URL: str = "http://localhost:3000"
     model_config = {
         "env_file": (".env", "backend/.env", "../backend/.env"),
         "env_file_encoding": "utf-8",
@@ -51,6 +53,19 @@ class Settings(BaseSettings):
     OIDC_ISSUER_URL: str | None = None
     OIDC_AUDIENCE: str = "authenticated"
     JWT_SECRET_KEY: str = ""
+
+    @model_validator(mode="after")
+    def validate_jwt_secret_in_production(self) -> "Settings":
+        if self.is_production:
+            if (
+                not self.JWT_SECRET_KEY
+                or self.JWT_SECRET_KEY == "dev-secret-key-change-me"
+                or len(self.JWT_SECRET_KEY) < 32
+            ):
+                raise ValueError(
+                    "In production, JWT_SECRET_KEY must be set, cannot be 'dev-secret-key-change-me', and must be at least 32 characters long."
+                )
+        return self
 
     @property
     def effective_jwt_issuer(self) -> str | None:

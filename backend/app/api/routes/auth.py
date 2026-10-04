@@ -12,7 +12,7 @@ import uuid
 from app.infrastructure.database.session import get_session
 from app.modules.users.models import User
 from app.config.settings import settings
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, _get_jwt_secret
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,8 +45,7 @@ def create_access_token(user: User) -> str:
         "aud": settings.OIDC_AUDIENCE or "authenticated",
     }
     # Since we are replacing the external Identity Provider, we must sign the JWT ourselves.
-    # We will use JWT_SECRET_KEY or a dedicated JWT_SECRET environment variable (defaulting to a dev key).
-    secret = settings.JWT_SECRET_KEY if settings.JWT_SECRET_KEY else "dev-secret-key-change-me"
+    secret = _get_jwt_secret()
     encoded_jwt = jwt.encode(to_encode, secret, algorithm="HS256")
     return encoded_jwt
 
@@ -120,11 +119,11 @@ async def reset_password(req: ResetPasswordRequest, background_tasks: Background
         # Generate a temporary reset JWT
         expires = datetime.now(timezone.utc) + timedelta(hours=1)
         to_encode = {"exp": expires, "sub": str(user.id), "type": "reset"}
-        secret = settings.JWT_SECRET_KEY if settings.JWT_SECRET_KEY else "dev-secret-key-change-me"
+        secret = _get_jwt_secret()
         reset_token = jwt.encode(to_encode, secret, algorithm="HS256")
         
-        # In a real setup you'd have the frontend URL in env vars, using localhost:3000 for local test
-        reset_link = f"http://localhost:3000/auth/reset-password?token={reset_token}"
+        frontend_url = settings.FRONTEND_URL.rstrip("/")
+        reset_link = f"{frontend_url}/auth/reset-password?token={reset_token}"
         
         html_content = f"<h2>Password Reset</h2><p>Click <a href='{reset_link}'>here</a> to reset your password. This link expires in 1 hour.</p>"
         background_tasks.add_task(email_service.send_email, user.email, "Reset your Kova password", html_content)
