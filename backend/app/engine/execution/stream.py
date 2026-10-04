@@ -69,7 +69,10 @@ async def _text_client() -> aioredis.Redis:
         _text_redis = None
         _text_loop = None
     if _text_redis is None:
-        _text_redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        kwargs: dict[str, Any] = {"decode_responses": True}
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+        _text_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _text_loop = loop
     return _text_redis
 
@@ -85,7 +88,10 @@ async def _bin_client() -> aioredis.Redis:
         _bin_redis = None
         _bin_loop = None
     if _bin_redis is None:
-        _bin_redis = aioredis.from_url(settings.REDIS_URL, decode_responses=False)
+        kwargs: dict[str, Any] = {"decode_responses": False}
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+        _bin_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _bin_loop = loop
     return _bin_redis
 
