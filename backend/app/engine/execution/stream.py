@@ -91,15 +91,22 @@ async def _bin_client() -> aioredis.Redis:
 
 
 async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "observing") -> None:
-    """Publish a live viewport frame. Ephemeral — not persisted."""
+    """Publish a live viewport frame. Ephemeral — not persisted.
+
+    Degrades gracefully without raising or blocking when Redis is unavailable.
+    """
     if not frame_bytes or len(frame_bytes) > MAX_FRAME_BYTES:
         return
     try:
         r = await _bin_client()
         tag = (state or "observing").encode("ascii", errors="replace")[:32]
-        await r.publish(frame_channel(execution_id), tag + b"\x00" + frame_bytes)
+        await asyncio.wait_for(
+            r.publish(frame_channel(execution_id), tag + b"\x00" + frame_bytes),
+            timeout=0.5,
+        )
     except Exception as e:
-        logger.debug("Frame publish failed for %s: %s", execution_id, e)
+        logger.debug("Frame publish failed for %s (graceful degradation): %s", execution_id, e)
+
 
 
 async def publish_state(
