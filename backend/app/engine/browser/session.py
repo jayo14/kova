@@ -7,8 +7,10 @@ Each execution gets its own isolated browser context.
 Cleanup happens automatically on success, failure, cancellation, exception, or timeout.
 """
 
+import ipaddress
 import logging
 import re
+import socket
 from typing import Any
 from urllib.parse import urlparse
 
@@ -34,23 +36,76 @@ DEFAULT_USER_AGENT = (
 )
 
 # SSRF protection: block private/internal IP ranges.
-# Loopback is allowed outside production so local targets and integration
-# test servers work; production still blocks it.
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+_CARRIER_GRADE_NAT = ipaddress.ip_network("100.64.0.0/10")
 _METADATA_HOSTS = {"metadata.google.internal", "169.254.169.254"}
-_PRIVATE_IP_RE = re.compile(
-    r"^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|127\.|0\.)"
-    r"|^\[?::(1|ffff:127|ffff:10|ffff:172\.[1-3]|ffff:192\.168)"  # IPv6
-)
+
+
+def _parse_raw_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Parse raw IP in standard, decimal integer, hex, or dotted-hex/octal forms."""
+    h = host.strip("[]")
+    try:
+        return ipaddress.ip_address(h)
+    except ValueError:
+        pass
+
+    # Decimal integer IP (e.g. 2130706433)
+    if h.isdigit():
+        try:
+            val = int(h)
+            if 0 <= val <= 0xFFFFFFFF:
+                return ipaddress.IPv4Address(val)
+        except ValueError:
+            pass
+
+    # Hex IP (e.g. 0x7f000001)
+    if h.lower().startswith("0x"):
+        try:
+            val = int(h, 16)
+            if 0 <= val <= 0xFFFFFFFF:
+                return ipaddress.IPv4Address(val)
+        except ValueError:
+            pass
+
+    # Dotted hex/octal (e.g. 0x7f.0.0.1)
+    parts = h.split(".")
+    if len(parts) == 4:
+        try:
+            nums = [int(p, 0) for p in parts]
+            if all(0 <= n <= 255 for n in nums):
+                return ipaddress.IPv4Address(bytes(nums))
+        except (ValueError, OverflowError):
+            pass
+
+    return None
+
+
+def _is_ip_safe(ip: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_loopback: bool) -> bool:
+    """Check if resolved IP is safe from SSRF."""
+    # Unmap IPv6-mapped IPv4 addresses (e.g. ::ffff:127.0.0.1)
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+
+    if ip.is_loopback:
+        return allow_loopback
+    if (
+        ip.is_private
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+        or ip in _CARRIER_GRADE_NAT
+    ):
+        return False
+
+    return True
 
 
 def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
     """Check if a URL is safe to navigate to (SSRF protection).
 
-    Args:
-        url: Absolute http(s) URL.
-        allow_loopback: Override loopback policy. Defaults to True outside
-            production (local app targets, integration tests).
+    Resolves hostname with socket.getaddrinfo and rejects any address that is
+    private, loopback, link-local, reserved, multicast, or in 100.64.0.0/10.
+    Handles decimal, hex, and IPv6-mapped forms.
     """
     if allow_loopback is None:
         allow_loopback = not settings.is_production
@@ -68,16 +123,43 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
         return False
 
     host = hostname.lower()
-    # Cloud metadata is always blocked, even in development
     if host in _METADATA_HOSTS:
         return False
-    if host in _LOOPBACK_HOSTS:
-        return allow_loopback
-    if host.startswith("127."):
+
+    # Check for direct raw IP representations first (decimal, hex, etc.)
+    raw_ip = _parse_raw_ip(host)
+    if raw_ip is not None:
+        return _is_ip_safe(raw_ip, allow_loopback)
+
+    # For literal localhost:
+    if host == "localhost":
         return allow_loopback
 
-    if _PRIVATE_IP_RE.match(hostname):
+    # Resolve hostname with socket.getaddrinfo
+    try:
+        addr_info = socket.getaddrinfo(host, None)
+    except socket.gaierror:
         return False
+    except Exception:
+        return False
+
+    if not addr_info:
+        return False
+
+    # Reject if any resolved IP address is unsafe
+    for info in addr_info:
+        sockaddr = info[4]
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return False
+
+        is_loopback_host = host in ("localhost", "127.0.0.1", "::1")
+        effective_allow_loopback = allow_loopback and is_loopback_host
+
+        if not _is_ip_safe(ip, effective_allow_loopback):
+            return False
 
     return True
 
@@ -120,6 +202,18 @@ class BrowserSession:
             user_agent=DEFAULT_USER_AGENT,
         )
         self._page = await self._context.new_page()
+
+        # Re-check every document navigation and redirect through page.route
+        async def _intercept_navigation(route):
+            req = route.request
+            if req.is_navigation_request() or req.resource_type == "document":
+                if not _is_safe_url(req.url):
+                    logger.warning("SSRF: Aborting route navigation/redirect to unsafe URL: %s", req.url)
+                    await route.abort("blockedbyclient")
+                    return
+            await route.continue_()
+
+        await self._page.route("**/*", _intercept_navigation)
         logger.info("Browser session started")
 
     async def close(self):
