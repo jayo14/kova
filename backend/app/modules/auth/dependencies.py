@@ -19,8 +19,8 @@ def _get_jwt_secret() -> str:
 
 
 async def get_current_user(
-    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
     token = None
@@ -116,12 +116,12 @@ async def get_current_user(
 
 
 async def get_optional_current_user(
-    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    request: Request = None,
     db: AsyncSession = Depends(get_session),
 ) -> User | None:
     try:
-        return await get_current_user(request=request, credentials=credentials, db=db)
+        return await get_current_user(credentials=credentials, request=request, db=db)
     except HTTPException:
         return None
 

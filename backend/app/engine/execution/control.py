@@ -44,7 +44,10 @@ async def _get_redis() -> aioredis.Redis:
         _redis = None
         _redis_loop = None
     if _redis is None:
-        _redis = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+        kwargs: dict[str, Any] = {"decode_responses": True}
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+        _redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _redis_loop = loop
     return _redis
 
