@@ -159,3 +159,55 @@ def test_credential_store_isolation():
 
     assert store1.get("c1").get_password() == "pass1"
     assert store2.get("c1").get_password() == "pass2"
+
+
+# --- Fernet Encryption & Production Validation ---
+
+
+def test_decrypt_credential_raises_invalid_token():
+    """decrypt_credential must raise InvalidToken on corrupted ciphertext."""
+    from cryptography.fernet import InvalidToken
+    from app.modules.credentials.crypto import decrypt_credential
+
+    with pytest.raises(InvalidToken):
+        decrypt_credential("gAAAAABcorruptedTokenHere1234567890=")
+
+
+def test_production_rejects_empty_or_dev_credential_key():
+    """In production, CREDENTIAL_ENCRYPTION_KEY must be a valid non-dev Fernet key."""
+    from app.config.settings import Settings
+
+    valid_jwt = "a" * 32
+    # Missing credential key
+    with pytest.raises(ValueError, match="CREDENTIAL_ENCRYPTION_KEY must be set"):
+        Settings(
+            ENVIRONMENT="production",
+            JWT_SECRET_KEY=valid_jwt,
+            CREDENTIAL_ENCRYPTION_KEY="",
+        )
+
+    # Dev credential key
+    with pytest.raises(ValueError, match="cannot be the default dev key"):
+        Settings(
+            ENVIRONMENT="production",
+            JWT_SECRET_KEY=valid_jwt,
+            CREDENTIAL_ENCRYPTION_KEY="k9_8TqZfUvYx3W1eR7tL5mN2pQ4sA6dF8gH0jK2lM4o=",
+        )
+
+    # Invalid length key
+    with pytest.raises(ValueError, match="valid 32-byte"):
+        Settings(
+            ENVIRONMENT="production",
+            JWT_SECRET_KEY=valid_jwt,
+            CREDENTIAL_ENCRYPTION_KEY="not-a-valid-fernet-key",
+        )
+
+    # Valid key accepted
+    from cryptography.fernet import Fernet
+    valid_fernet = Fernet.generate_key().decode()
+    s = Settings(
+        ENVIRONMENT="production",
+        JWT_SECRET_KEY=valid_jwt,
+        CREDENTIAL_ENCRYPTION_KEY=valid_fernet,
+    )
+    assert s.CREDENTIAL_ENCRYPTION_KEY == valid_fernet
