@@ -1,0 +1,55 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ENVIRONMENT: test
+      DEBUG: "true"
+      DATABASE_URL: sqlite+aiosqlite:///:memory:
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET_KEY: test-secret-key-that-is-at-least-32-chars-long
+      CREDENTIAL_ENCRYPTION_KEY: dGVzdC1rZXktdGhhdC1pcy0zMi1ieXRlcy1sb25nISE=
+      AI_PROVIDER: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./backend[dev]"
+
+      - name: Install Playwright Chromium
+        run: |
+          playwright install chromium --with-deps
+
+      - name: Run Pytest
+        run: |
+          cd backend && pytest

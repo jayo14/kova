@@ -76,12 +76,24 @@ class TestScreenshotStorage:
             # Expected when Supabase is not configured
             pass
 
-    def test_get_public_url(self):
-        """get_public_url returns None when not configured."""
+    def test_get_public_url(self, monkeypatch):
+        """get_public_url returns None when not configured, and RumptyCloud URL when configured."""
+        from app.config.settings import settings
+
         storage = ScreenshotStorage()
+
+        # When RumptyCloud S3 endpoint is not configured, returns None
+        monkeypatch.setattr(settings, "RUMPTYCLOUD_S3_ENDPOINT", "")
         url = storage.get_public_url("test.png", "exp-123")
-        # Returns None if Supabase URL not set
-        assert url is None or "supabase.co" in url
+        assert url is None
+
+        # When RumptyCloud is configured, returns RumptyCloud URL
+        monkeypatch.setattr(settings, "RUMPTYCLOUD_S3_ENDPOINT", "https://s3.rumptycloud.com")
+        monkeypatch.setattr(settings, "RUMPTYCLOUD_BUCKET_NAME", "kova-screenshots")
+        url = storage.get_public_url("test.png", "exp-123")
+        assert url is not None
+        assert "rumptycloud" in url
+
 
 
 class TestEventPersistenceOptimization:
