@@ -4,7 +4,13 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    RESEND_API_KEY: str = ""
+    # AWS SES / Sessy Email Settings
+    AWS_REGION: str = "eu-central-1"
+    AWS_ACCESS_KEY_ID: str = ""
+    AWS_SECRET_ACCESS_KEY: str = ""
+    SES_CONFIGURATION_SET: str = "production-ses"
+    SES_FROM_EMAIL: str = "noreply@kova.app"
+
     CREDENTIAL_ENCRYPTION_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:3000"
     model_config = {
