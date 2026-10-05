@@ -48,7 +48,10 @@ class EmailService:
         Passes configuration_set (e.g. 'production-ses') so Sessy / SNS receives
         delivery, open, click, bounce, and complaint events.
         """
-        sender = from_email or settings.SES_FROM_EMAIL or "noreply@kova.app"
+        sender = from_email or settings.SES_FROM_EMAIL
+        if not sender:
+            logger.error("No sender email specified or configured in SES_FROM_EMAIL")
+            return False
         config_set = configuration_set or settings.SES_CONFIGURATION_SET or "production-ses"
 
         if not self.is_configured:
