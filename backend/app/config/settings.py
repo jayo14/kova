@@ -13,6 +13,9 @@ class Settings(BaseSettings):
 
     CREDENTIAL_ENCRYPTION_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:3000"
+    SENTRY_DSN: str = ""
+    SENTRY_TRACES_SAMPLE_RATE: float = 1.0
+    SENTRY_PROFILES_SAMPLE_RATE: float = 1.0
     model_config = {
         "env_file": (".env", "backend/.env", "../backend/.env"),
         "env_file_encoding": "utf-8",

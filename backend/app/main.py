@@ -3,9 +3,24 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+import sentry_sdk
+
 from app.api.routes import auth, ci, credentials, executions, exploration, flows, projects, viewport
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
+
+
+# Initialize Sentry SDK before FastAPI app initialization
+if settings.SENTRY_DSN:
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        send_default_pii=True,
+        enable_logs=True,
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+        profile_session_sample_rate=settings.SENTRY_PROFILES_SAMPLE_RATE,
+        profile_lifecycle="trace",
+        environment=settings.ENVIRONMENT,
+    )
 
 
 @asynccontextmanager
@@ -57,3 +72,10 @@ app.include_router(viewport.router)
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
+
+
+@app.get("/sentry-debug")
+@app.get("/sentry-debug/")
+async def trigger_error():
+    division_by_zero = 1 / 0
+    return {"result": division_by_zero}
