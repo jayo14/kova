@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""
     SES_CONFIGURATION_SET: str = "production-ses"
-    SES_FROM_EMAIL: str = "noreply@kova.app"
+    SES_FROM_EMAIL: str = ""
 
     CREDENTIAL_ENCRYPTION_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:3000"

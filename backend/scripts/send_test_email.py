@@ -62,19 +62,23 @@ def main():
     print(f"Region: {settings.AWS_REGION}")
     print(f"Configured: {email_service.is_configured}")
 
-    success = email_service.send_email(
-        to_email=args.to_email,
-        subject=args.subject,
-        html_body=html_content,
-        from_email=sender,
-        configuration_set=config_set,
-    )
-
-    if success:
-        print("\nTest email successfully sent/dispatched!")
+    try:
+        response = email_service.client.send_email(
+            FromEmailAddress=sender,
+            Destination={"ToAddresses": [args.to_email]},
+            Content={
+                "Simple": {
+                    "Subject": {"Data": args.subject, "Charset": "UTF-8"},
+                    "Body": {"Html": {"Data": html_content, "Charset": "UTF-8"}},
+                }
+            },
+            ConfigurationSetName=config_set,
+        )
+        message_id = response.get("MessageId")
+        print(f"\nTest email successfully sent via SES! MessageId: {message_id}")
         sys.exit(0)
-    else:
-        print("\nFailed to send test email. Check your AWS credentials and SES identity permissions.")
+    except Exception as e:
+        print(f"\nFailed to send test email via AWS SES: {e}")
         sys.exit(1)
 
 
