@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=https://kortix.com/schema/kortix.v2.schema.json
+kortix_version: 2
+default_agent: scout
+
+agents:
+  scout:
+    file: agents/scout.md
+    enabled: true
+    repository_access: true
+    connectors: none
+    secrets: none
+    skills: all
+    kortix_permissions:
+      - project.read
+      - project.gitops.push
