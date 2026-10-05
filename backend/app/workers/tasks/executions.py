@@ -27,8 +27,18 @@ def run_execution(self, execution_id: str):
 
     Idempotent: Skips if execution is already terminal (COMPLETED/FAILED/CANCELLED).
     """
+    async def _run() -> None:
+        try:
+            await _run_execution_async(self, execution_id)
+        finally:
+            # Each task runs on a fresh asyncio loop — drain the
+            # connection pool so the next task doesn't inherit
+            # connections bound to this task's (now closed) loop.
+            from app.infrastructure.database.session import dispose_engine
+            await dispose_engine()
+
     try:
-        asyncio.run(_run_execution_async(self, execution_id))
+        asyncio.run(_run())
     except SoftTimeLimitExceeded:
         logger.warning("Execution %s hit soft time limit, graceful shutdown", execution_id)
 

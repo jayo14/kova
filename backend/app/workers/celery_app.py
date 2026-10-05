@@ -22,3 +22,11 @@ celery_app.conf.update(
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])
+
+# autodiscover only imports app.workers.tasks.tasks (the package's
+# `tasks` submodule). The execution task lives in
+# app.workers.tasks.executions — import it explicitly so `run_execution`
+# registers on every worker. Without this, the primary
+# POST /flows/{id}/executions endpoint dispatches an unregistered task
+# and executions stay CREATED forever.
+import app.workers.tasks.executions  # noqa: E402,F401

@@ -411,10 +411,14 @@ class FlowRunner:
             # Step 8: Capture evidence
             await self._capture_evidence(ctx, browser, verification, event_recorder)
 
-            # Enforce gate on 5xx or failed requests after submit/click steps
+            # Enforce gate on 5xx or failed requests after submit/click steps.
+            # Steps may use either the new ("type") or legacy API ("action")
+            # key — the gate must recognize both or the 500-detection never
+            # fires for API-created flows.
             click_or_submit_indices = {
                 idx for idx, st in enumerate(flow_steps)
-                if str(st.get("type", "")).lower() in ("click", "submit")
+                if str(st.get("type", "") or st.get("action", "")).lower()
+                in ("click", "submit")
             }
             if click_or_submit_indices:
                 first_submit_idx = min(click_or_submit_indices)

@@ -7,9 +7,8 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.background import BackgroundTask
 
 from app.api import get_current_user, get_session
 from app.modules.executions.schemas import ExecutionRead
@@ -211,7 +210,7 @@ async def delete_flow(
 @router.post("/{flow_id}/executions", response_model=ExecutionRead, status_code=201)
 async def create_flow_execution(
     flow_id: str,
-    response: Response,
+    background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
@@ -252,6 +251,9 @@ async def create_flow_execution(
     await db.commit()
 
     if dispatch:
-        # Dispatch after the response body is sent — keep enqueue off the hot path
-        response.background = BackgroundTask(_schedule_dispatch, str(execution.id))
+        # Dispatch after the response body is sent — keep enqueue off the hot path.
+        # Must go through the BackgroundTasks dependency: FastAPI discards
+        # response.background when the endpoint returns a model, so setting
+        # response.background here would silently drop the dispatch.
+        background_tasks.add_task(_schedule_dispatch, str(execution.id))
     return execution

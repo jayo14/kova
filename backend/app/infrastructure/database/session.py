@@ -74,3 +74,18 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 async def get_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:
     return db
 
+
+async def dispose_engine() -> None:
+    """Close all pooled connections.
+
+    Celery prefork workers run each task via asyncio.run(), i.e. on a
+    fresh event loop per task. Pooled connections are bound to the loop
+    that created them, so without draining the pool between tasks the
+    next task fails with 'got Future ... attached to a different loop'.
+    The API process runs a single persistent loop and is unaffected.
+    """
+    try:
+        await engine.dispose()
+    except Exception as e:
+        logger.warning("Engine dispose failed: %s", e)
+

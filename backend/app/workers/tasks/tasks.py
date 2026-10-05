@@ -39,10 +39,20 @@ def run_multiple_executions(self, execution_ids: list[str], parallel: bool = Tru
 
     Idempotent: Skips executions already in terminal states.
     """
+    async def _run() -> None:
+        try:
+            await _run_multiple_executions_async(self, execution_ids, parallel)
+        finally:
+            # Each task runs on a fresh asyncio loop — drain the
+            # connection pool so the next task doesn't inherit
+            # connections bound to this task's (now closed) loop.
+            from app.infrastructure.database.session import dispose_engine
+            await dispose_engine()
+
     try:
-        asyncio.run(_run_multiple_executions_async(self, execution_ids, parallel))
+        asyncio.run(_run())
     except SoftTimeLimitExceeded:
-        logger.warning("Multiple executions hit soft time limit, graceful shutdown")
+        logger.warning("Multiple executions hit soft time limit, graceful shutdown", execution_ids)
 
 
 async def _run_multiple_executions_async(task, execution_ids: list[str], parallel: bool):
@@ -131,6 +141,7 @@ async def _run_multiple_executions_async(task, execution_ids: list[str], paralle
                     target_url=target_url,
                     event_recorder=event_recorder,
                     timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
+                    objective=flow.objective,
                 )
 
                 for evt in result.get("events", []):

@@ -1,10 +1,20 @@
 from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import auth, ci, credentials, executions, exploration, flows, projects, viewport
 from app.config.settings import settings
+
+# Uvicorn's default logging config leaves the root logger without
+# handlers, so application INFO logs (e.g. execution dispatch) are
+# silently dropped. Give the root logger a handler so dispatch and
+# engine lifecycle events are actually observable.
+logging.basicConfig(
+    level=logging.INFO if (settings.DEBUG and not settings.is_production) else logging.WARNING,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 from app.infrastructure.database.session import engine
 
 
