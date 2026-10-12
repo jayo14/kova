@@ -54,6 +54,15 @@ describe("ApiError and error normalization", () => {
     );
   });
 
+  it("surfaces structured conflict details such as non-repeatable flow policy", () => {
+    const err = new ApiError({
+      status: 409,
+      message: "Request failed (409)",
+      details: { code: "FLOW_NOT_REPEATABLE", message: "This flow needs a reset before it can run again." },
+    });
+    assert.equal(getErrorMessage(err), "This flow needs a reset before it can run again.");
+  });
+
   it("returns human-safe messages for common HTTP statuses", () => {
     assert.equal(
       getErrorMessage(new ApiError({ status: 0, message: "" })),
