@@ -24,6 +24,10 @@ class FlowService:
             provides_capabilities=data.provides_capabilities,
             repeatability=data.repeatability,
             reset_strategy=data.reset_strategy,
+            status=data.status,
+            capability=data.capability,
+            routes=data.routes,
+            criticality=data.criticality,
         )
 
     async def get_flow(self, flow_id: uuid.UUID):
@@ -47,6 +51,10 @@ class FlowService:
             provides_capabilities=data.provides_capabilities,
             repeatability=data.repeatability,
             reset_strategy=data.reset_strategy,
+            status=data.status,
+            capability=data.capability,
+            routes=data.routes,
+            criticality=data.criticality,
         )
 
     async def delete_flow(self, flow_id: uuid.UUID):

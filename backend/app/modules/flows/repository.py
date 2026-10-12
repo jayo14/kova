@@ -24,6 +24,10 @@ class FlowRepository:
         provides_capabilities: list[str] | None = None,
         repeatability: str = "repeatable",
         reset_strategy: str | None = None,
+        status: str = "active",
+        capability: str | None = None,
+        routes: list[str] | None = None,
+        criticality: str = "medium",
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -38,6 +42,10 @@ class FlowRepository:
             provides_capabilities=provides_capabilities or [],
             repeatability=repeatability,
             reset_strategy=reset_strategy,
+            status=status,
+            capability=capability,
+            routes=routes or [],
+            criticality=criticality,
         )
         self.db.add(flow)
         await self.db.flush()
@@ -72,11 +80,15 @@ class FlowRepository:
         provides_capabilities: list[str] | None = None,
         repeatability: str | None = None,
         reset_strategy: str | None = None,
+        status: str | None = None,
+        capability: str | None = None,
+        routes: list[str] | None = None,
+        criticality: str | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
-        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy))
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -99,6 +111,14 @@ class FlowRepository:
             flow.repeatability = repeatability
         if reset_strategy is not None:
             flow.reset_strategy = reset_strategy
+        if status is not None:
+            flow.status = status
+        if capability is not None:
+            flow.capability = capability
+        if routes is not None:
+            flow.routes = routes
+        if criticality is not None:
+            flow.criticality = criticality
         if changed:
             flow.version += 1
         await self.db.flush()

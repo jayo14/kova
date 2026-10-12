@@ -55,6 +55,10 @@ class FlowCreate(BaseModel):
     provides_capabilities: list[str] = Field(default_factory=list)
     repeatability: Literal["repeatable", "non_repeatable"] = "repeatable"
     reset_strategy: str | None = None
+    status: Literal["active", "stale", "disabled", "requires_review"] = "active"
+    capability: str | None = None
+    routes: list[str] = Field(default_factory=list)
+    criticality: Literal["critical", "high", "medium", "low"] = "medium"
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -76,6 +80,10 @@ class FlowUpdate(BaseModel):
     provides_capabilities: list[str] | None = None
     repeatability: Literal["repeatable", "non_repeatable"] | None = None
     reset_strategy: str | None = None
+    status: Literal["active", "stale", "disabled", "requires_review"] | None = None
+    capability: str | None = None
+    routes: list[str] | None = None
+    criticality: Literal["critical", "high", "medium", "low"] | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -100,5 +108,9 @@ class FlowRead(BaseModel):
     provides_capabilities: list[str]
     repeatability: str
     reset_strategy: str | None
+    status: str = "active"
+    capability: str | None = None
+    routes: list[str] = Field(default_factory=list)
+    criticality: str = "medium"
     created_at: datetime
     updated_at: datetime
