@@ -165,6 +165,7 @@ export type ExecutionStatus =
   | "resuming"
   | "completed"
   | "failed"
+  | "error"
   | "cancelled"
   | "timeout"
   | "blocked"
@@ -182,6 +183,7 @@ export const executionStatusLabels: Record<ExecutionStatus, string> = {
   resuming: "Resuming Kova",
   completed: "Completed",
   failed: "Execution failed",
+  error: "Execution infrastructure error",
   cancelled: "Execution cancelled",
   timeout: "Execution timed out",
   blocked: "Mission blocked (auth wall)",
@@ -200,6 +202,7 @@ export const executionStatusShortLabels: Record<ExecutionStatus, string> = {
   resuming: "Resuming",
   completed: "Completed",
   failed: "Failed",
+  error: "Error",
   cancelled: "Cancelled",
   timeout: "Timed out",
   blocked: "Blocked",
@@ -209,6 +212,7 @@ export const executionStatusShortLabels: Record<ExecutionStatus, string> = {
 export const terminalStatuses: ExecutionStatus[] = [
   "completed",
   "failed",
+  "error",
   "cancelled",
   "timeout",
   "blocked",
@@ -226,6 +230,7 @@ export interface ExecutionDetail {
   startedAt: string | null;
   completedAt: string | null;
   error: string | null;
+  flowVersion?: number;
 }
 
 export interface ExecutionEvent {

@@ -89,8 +89,11 @@ describe("Execution status normalization and predicates", () => {
     assert.equal(normalizeExecutionStatus("BROWSER_READY"), "browser_ready");
     assert.equal(normalizeExecutionStatus("COMPLETED"), "completed");
     assert.equal(normalizeExecutionStatus("FAILED"), "failed");
+    assert.equal(normalizeExecutionStatus("ERROR"), "error");
     assert.equal(normalizeExecutionStatus("CANCELLED"), "cancelled");
     assert.equal(normalizeExecutionStatus("TIMEOUT"), "timeout");
+    assert.equal(normalizeExecutionStatus("BLOCKED"), "blocked");
+    assert.equal(normalizeExecutionStatus("UNVERIFIED"), "unverified");
   });
 
   it("handles empty or unknown statuses gracefully", () => {
@@ -102,8 +105,11 @@ describe("Execution status normalization and predicates", () => {
   it("identifies terminal and active statuses correctly", () => {
     assert.equal(isTerminalStatus("completed"), true);
     assert.equal(isTerminalStatus("failed"), true);
+    assert.equal(isTerminalStatus("error"), true);
     assert.equal(isTerminalStatus("cancelled"), true);
     assert.equal(isTerminalStatus("timeout"), true);
+    assert.equal(isTerminalStatus("blocked"), true);
+    assert.equal(isTerminalStatus("unverified"), true);
     assert.equal(isTerminalStatus("running"), false);
 
     assert.equal(isActiveStatus("running"), true);
@@ -114,6 +120,9 @@ describe("Execution status normalization and predicates", () => {
   it("provides editorial labels for status displays", () => {
     assert.equal(getExecutionStatusLabel("running"), "Kova is working");
     assert.equal(getExecutionStatusLabel("completed"), "Completed");
+    assert.equal(getExecutionStatusLabel("error"), "Execution infrastructure error");
+    assert.equal(getExecutionStatusLabel("blocked"), "Mission blocked");
+    assert.equal(getExecutionStatusLabel("unverified"), "Could not verify");
     assert.equal(getExecutionStatusShortLabel("running"), "Working");
   });
 });
