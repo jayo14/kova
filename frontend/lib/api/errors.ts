@@ -110,6 +110,8 @@ export function getErrorMessage(err: unknown, fallback = "An unexpected error oc
     }
 
     if (err.status === 409) {
+      const parsedDetail = formatFastApiDetail(err.details);
+      if (parsedDetail) return parsedDetail;
       return err.message && err.message !== "Request failed (409)"
         ? err.message
         : "A conflict occurred. The resource may already exist.";

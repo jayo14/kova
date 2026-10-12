@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Mission } from "@/lib/types";
 import { runMission, deleteMission, updateMission } from "@/lib/api/missions";
+import { getErrorMessage } from "@/lib/api/errors";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button } from "@/components/ui/button";
 import { AdjustMissionDialog } from "./adjust-mission-dialog";
@@ -34,11 +35,15 @@ export function MissionDetailHeader({
   const handleRun = () => {
     setError(null);
     startRunTransition(async () => {
-      const exec = await runMission(mission.id);
-      if (exec) {
-        router.push(`/executions/${exec.id}`);
-      } else {
-        setError("Failed to start mission execution. Please try again.");
+      try {
+        const exec = await runMission(mission.id);
+        if (exec) {
+          router.push(`/executions/${exec.id}`);
+        } else {
+          setError("Failed to start mission execution. Please try again.");
+        }
+      } catch (error) {
+        setError(getErrorMessage(error, "Failed to start mission execution."));
       }
     });
   };

@@ -1,4 +1,4 @@
-import { ApiError, isApiError } from "./errors";
+import { ApiError, formatFastApiDetail, isApiError } from "./errors";
 
 export { ApiError, isApiError };
 
@@ -113,6 +113,8 @@ export async function request<T>(
         details = errorData?.detail ?? errorData;
         if (typeof errorData?.detail === "string") {
           message = errorData.detail;
+        } else if (formatFastApiDetail(details)) {
+          message = formatFastApiDetail(details) as string;
         } else if (typeof errorData?.message === "string") {
           message = errorData.message;
         }
