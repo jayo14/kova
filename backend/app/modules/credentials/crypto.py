@@ -1,7 +1,6 @@
 """Fernet symmetric encryption for stored credentials."""
 
 import base64
-import hashlib
 from cryptography.fernet import Fernet, InvalidToken
 from app.config.settings import settings
 
@@ -17,13 +16,14 @@ def get_fernet() -> Fernet:
     if key_str and key_str.strip():
         key_bytes = key_str.strip().encode("utf-8")
         try:
-            decoded = base64.urlsafe_b64decode(key_bytes)
-            if len(decoded) == 32:
-                return Fernet(key_bytes)
-        except Exception:
-            pass
-        derived = base64.urlsafe_b64encode(hashlib.sha256(key_bytes).digest())
-        return Fernet(derived)
+            decoded = base64.b64decode(key_bytes, altchars=b"-_", validate=True)
+            if len(decoded) != 32:
+                raise ValueError
+            return Fernet(key_bytes)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(
+                "CREDENTIAL_ENCRYPTION_KEY must be a valid 32-byte url-safe base64 Fernet key."
+            ) from exc
 
     # Hardcoded dev key allowed only in test environments
     if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") or settings.ENVIRONMENT == "test":

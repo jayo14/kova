@@ -173,6 +173,15 @@ def test_decrypt_credential_raises_invalid_token():
         decrypt_credential("gAAAAABcorruptedTokenHere1234567890=")
 
 
+def test_invalid_configured_key_fails_closed(monkeypatch):
+    from app.config.settings import settings
+    from app.modules.credentials.crypto import get_fernet
+
+    monkeypatch.setattr(settings, "CREDENTIAL_ENCRYPTION_KEY", "operator-typo")
+    with pytest.raises(ValueError, match="valid 32-byte url-safe base64 Fernet key"):
+        get_fernet()
+
+
 def test_production_rejects_empty_or_dev_credential_key():
     """In production, CREDENTIAL_ENCRYPTION_KEY must be a valid non-dev Fernet key."""
     from app.config.settings import Settings
