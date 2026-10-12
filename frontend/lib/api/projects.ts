@@ -101,3 +101,26 @@ export async function deleteProject(id: string, token?: string): Promise<boolean
     return false;
   }
 }
+
+import type { ProductModel, ValidationRun } from "@/lib/types";
+import { mapKeysToCamel } from "./mappers";
+
+export async function getProjectKnowledge(id: string, token?: string): Promise<ProductModel | null> {
+  if (!id) return null;
+  try {
+    const raw = await api.get<Record<string, unknown>>(`/api/v1/projects/${encodeURIComponent(id)}/knowledge`, token);
+    return mapKeysToCamel(raw) as unknown as ProductModel;
+  } catch {
+    return null;
+  }
+}
+
+export async function getProjectValidations(id: string, token?: string): Promise<ValidationRun[]> {
+  if (!id) return [];
+  try {
+    const raw = await api.get<Array<Record<string, unknown>>>(`/api/v1/projects/${encodeURIComponent(id)}/validations`, token);
+    return raw.map((item) => mapKeysToCamel(item) as unknown as ValidationRun);
+  } catch {
+    return [];
+  }
+}
