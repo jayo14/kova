@@ -23,6 +23,7 @@ from app.modules.executions.event_service import EventService
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.schemas import ExecutionCreate, ExecutionEventRead, ExecutionRead
 from app.modules.executions.service import ExecutionService
+from app.modules.executions.state_machine import InvalidTransitionError
 from app.modules.flows.models import Flow
 from app.modules.projects.models import Project
 from app.modules.projects.repository import ProjectRepository
@@ -226,11 +227,8 @@ async def cancel_execution(
         raise HTTPException(status_code=404, detail="Execution not found")
 
     # Check if already terminal
-    terminal_states = {
-        ExecutionStatus.COMPLETED.value,
-        ExecutionStatus.FAILED.value,
-        ExecutionStatus.CANCELLED.value,
-    }
+    from app.modules.executions.state_machine import TERMINAL_STATES
+    terminal_states = TERMINAL_STATES
     if execution.status in terminal_states:
         raise HTTPException(
             status_code=409,
@@ -239,7 +237,14 @@ async def cancel_execution(
 
     # Cancel the execution
     service = ExecutionService(db)
-    await service.cancel_execution(uuid.UUID(execution_id))
+    try:
+        await service.cancel_execution(uuid.UUID(execution_id))
+    except InvalidTransitionError:
+        # Completion may have won the race after the initial read.
+        raise HTTPException(
+            status_code=409,
+            detail="Execution state changed before cancellation could be applied",
+        )
 
     # Notify the running worker through the Redis control channel so the runner
     # stops at the next step boundary and cleans the browser up. DB-only status
@@ -336,12 +341,8 @@ async def stream_execution_events(
                     # Check current execution status
                     current_exec = await exec_repo.get_by_id(parsed_id)
                     if current_exec:
-                        terminal_statuses = {
-                            ExecutionStatus.COMPLETED.value,
-                            ExecutionStatus.FAILED.value,
-                            ExecutionStatus.CANCELLED.value,
-                            ExecutionStatus.TIMEOUT.value,
-                        }
+                        from app.modules.executions.state_machine import TERMINAL_STATES
+                        terminal_statuses = TERMINAL_STATES
                         if current_exec.status in terminal_statuses:
                             yield "event: done\ndata: {}\n\n"
                             break
