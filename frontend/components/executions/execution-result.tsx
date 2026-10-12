@@ -120,6 +120,122 @@ export function ExecutionResult({
     );
   }
 
+  if (execution.status === "error") {
+    return (
+      <section aria-label="Execution result" className={cn("rounded-2xl border border-orange-500/20 bg-orange-500/5 p-5 shadow-xs", className)}>
+        <div className="flex items-start gap-3">
+          <MaterialIcon name="warning" size={20} className="text-orange-600" />
+          <div>
+            <h3 className="text-body font-semibold text-orange-700 dark:text-orange-400">Execution could not be completed reliably</h3>
+            <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">{execution.error || "A browser, worker, or internal error stopped reliable verification."}</p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (execution.status === "blocked") {
+    return (
+      <section
+        aria-label="Execution result"
+        className={cn(
+          "rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 shadow-xs space-y-4",
+          className
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
+              <MaterialIcon name="lock" size={20} />
+            </div>
+            <div>
+              <h3 className="text-body font-semibold text-amber-700 dark:text-amber-400">
+                Execution blocked
+              </h3>
+              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
+                {execution.error || "Execution was blocked because a required prerequisite, role, or environment condition could not be satisfied."}
+              </p>
+            </div>
+          </div>
+          {duration && (
+            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
+              {duration}
+            </span>
+          )}
+        </div>
+        {onRetry && (
+          <div className="pt-1 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRetry}
+              disabled={isRetrying}
+              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
+            >
+              {isRetrying ? (
+                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
+              ) : (
+                <MaterialIcon name="replay" size={14} />
+              )}
+              <span>Run again</span>
+            </Button>
+          </div>
+        )}
+      </section>
+    );
+  }
+
+  if (execution.status === "unverified") {
+    return (
+      <section
+        aria-label="Execution result"
+        className={cn(
+          "rounded-2xl border border-orange-500/20 bg-orange-500/5 p-5 shadow-xs space-y-4",
+          className
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400">
+              <MaterialIcon name="help" size={20} />
+            </div>
+            <div>
+              <h3 className="text-body font-semibold text-orange-700 dark:text-orange-400">
+                Execution completed without verification
+              </h3>
+              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
+                {execution.error || "The actions were performed, but available evidence was insufficient to verify the intended business outcomes."}
+              </p>
+            </div>
+          </div>
+          {duration && (
+            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
+              {duration}
+            </span>
+          )}
+        </div>
+        {onRetry && (
+          <div className="pt-1 flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRetry}
+              disabled={isRetrying}
+              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
+            >
+              {isRetrying ? (
+                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
+              ) : (
+                <MaterialIcon name="replay" size={14} />
+              )}
+              <span>Run again</span>
+            </Button>
+          </div>
+        )}
+      </section>
+    );
+  }
+
   if (execution.status === "timeout") {
     return (
       <section
