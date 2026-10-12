@@ -2,14 +2,22 @@
 
 import pytest
 
-from app.engine.browser.session import _is_safe_url
+from app.engine.browser.session import _is_safe_url, _redact_url
 
 
 class TestIsSafeUrl:
-    def test_public_http_ok(self):
+    def test_public_http_ok(self, monkeypatch):
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))
+        ])
         assert _is_safe_url("http://example.com/path") is True
 
-    def test_public_https_ok(self):
+    def test_public_https_ok(self, monkeypatch):
+        import socket
+        monkeypatch.setattr(socket, "getaddrinfo", lambda host, port: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ])
         assert _is_safe_url("https://example.com") is True
 
     def test_loopback_allowed_outside_production(self):
@@ -113,4 +121,18 @@ def test_decimal_hex_and_cgnat_blocked():
     assert _is_safe_url("http://[::ffff:127.0.0.1]/", allow_loopback=False) is False
     assert _is_safe_url("http://[::ffff:169.254.169.254]/") is False
     assert _is_safe_url("http://[::ffff:10.0.0.1]/") is False
+
+
+def test_ipv6_unique_local_and_mapped_addresses_blocked():
+    assert _is_safe_url("http://[fc00::1]/", allow_loopback=False) is False
+    assert _is_safe_url("http://[fe80::1]/", allow_loopback=False) is False
+    assert _is_safe_url("http://[::ffff:192.168.1.1]/", allow_loopback=False) is False
+
+
+def test_credentials_in_submitted_url_are_rejected():
+    assert _is_safe_url("https://user:password@example.com/path") is False
+
+
+def test_diagnostics_strip_credentials_and_query_values():
+    assert _redact_url("https://user:secret@example.com/path?token=private#fragment") == "https://example.com/path"
 

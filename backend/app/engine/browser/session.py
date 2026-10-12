@@ -13,7 +13,7 @@ import logging
 import re
 import socket
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 from playwright.async_api import (
     Browser,
@@ -39,6 +39,18 @@ DEFAULT_USER_AGENT = (
 # SSRF protection: block private/internal IP ranges.
 _CARRIER_GRADE_NAT = ipaddress.ip_network("100.64.0.0/10")
 _METADATA_HOSTS = {"metadata.google.internal", "169.254.169.254"}
+
+
+def _redact_url(url: str) -> str:
+    """Remove URL credentials and query values before storing diagnostic URLs."""
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return urlunparse((parsed.scheme, host, parsed.path, parsed.params, "", ""))
+    except Exception:
+        return "[redacted URL]"
 
 
 def _parse_raw_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -117,6 +129,8 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
         return False
 
     if parsed.scheme not in ("http", "https"):
+        return False
+    if parsed.username is not None or parsed.password is not None:
         return False
 
     hostname = parsed.hostname or ""
@@ -207,17 +221,32 @@ class BrowserSession:
         )
         self._page = await self._context.new_page()
 
-        # Re-check every document navigation and redirect through page.route
-        async def _intercept_navigation(route):
+        # Check every browser request, including subresources and redirects.
+        # Context routing also applies to popups and newly-created pages.
+        async def _intercept_request(route):
             req = route.request
-            if req.is_navigation_request() or req.resource_type == "document":
-                if not _is_safe_url(req.url):
-                    logger.warning("SSRF: Aborting route navigation/redirect to unsafe URL: %s", req.url)
-                    await route.abort("blockedbyclient")
-                    return
+            if req.url.startswith(("about:", "data:", "blob:")):
+                await route.continue_()
+                return
+            if not _is_safe_url(req.url):
+                logger.warning("SSRF: Aborting browser request to unsafe destination")
+                await route.abort("blockedbyclient")
+                return
             await route.continue_()
 
-        await self._page.route("**/*", _intercept_navigation)
+        await self._context.route("**/*", _intercept_request)
+
+        # WebSockets do not pass through ordinary request routing. Reject
+        # private destinations there as well (Playwright >= 1.48).
+        if hasattr(self._context, "route_web_socket"):
+            async def _intercept_websocket(ws_route):
+                if not _is_safe_url(ws_route.url.replace("ws://", "http://", 1).replace("wss://", "https://", 1)):
+                    logger.warning("SSRF: Aborting WebSocket to unsafe URL")
+                    await ws_route.close(code=1008, reason="Destination blocked")
+                    return
+                await ws_route.connect()
+
+            await self._context.route_web_socket("**/*", _intercept_websocket)
 
         # Record same-origin responses >= 400, request failures, and page errors
         async def _on_response(response):
@@ -236,7 +265,7 @@ class BrowserSession:
                             "type": "http_error",
                             "status": response.status,
                             "method": req.method if req else "GET",
-                            "url": response.url,
+                            "url": _redact_url(response.url),
                             "path": resp_parsed.path or "/",
                             "step_index": self.current_step_index,
                         }
@@ -262,7 +291,7 @@ class BrowserSession:
                         "type": "request_failed",
                         "status": 0,
                         "method": request.method,
-                        "url": request.url,
+                        "url": _redact_url(request.url),
                         "path": req_parsed.path or "/",
                         "failure": request.failure or "Request failed",
                         "step_index": self.current_step_index,
@@ -349,7 +378,7 @@ class BrowserSession:
         SSRF: checks both the target URL and the final post-redirect URL.
         """
         if not _is_safe_url(url):
-            raise ValueError(f"Blocked navigation to unsafe URL: {url}")
+            raise ValueError("Blocked navigation to unsafe URL")
         await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
         # Redirect chain may land on blocked host — re-check final URL
         final_url = self.page.url or ""
@@ -359,7 +388,7 @@ class BrowserSession:
                 await self.page.goto("about:blank", wait_until="commit", timeout=5000)
             except Exception:
                 pass
-            raise ValueError(f"Blocked post-redirect navigation to unsafe URL: {final_url}")
+            raise ValueError("Blocked post-redirect navigation to unsafe URL")
         logger.debug("Navigated to %s", final_url or url)
 
     async def go_back(self):
