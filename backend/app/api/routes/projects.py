@@ -89,3 +89,60 @@ async def delete_project(
         raise HTTPException(status_code=422, detail="Invalid project ID")
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
+
+
+from app.modules.validation.service import ValidationService
+from app.modules.validation.schemas import ProductModelRead, ProductModelUpdate, ValidationRunRead
+
+
+@router.get("/{project_id}/knowledge", response_model=ProductModelRead)
+async def get_project_knowledge(
+    project_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve the latest persistent product model and discovered capabilities."""
+    service = ProjectService(db)
+    project = await service.get_project(project_id, user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    val_service = ValidationService(db)
+    return await val_service.get_latest_product_model(project_id)
+
+
+@router.put("/{project_id}/knowledge", response_model=ProductModelRead)
+async def update_project_knowledge(
+    project_id: uuid.UUID,
+    data: ProductModelUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update and version the persistent product model with newly discovered capabilities."""
+    service = ProjectService(db)
+    project = await service.get_project(project_id, user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    val_service = ValidationService(db)
+    model = await val_service.update_product_model(project_id, data)
+    await db.commit()
+    await db.refresh(model)
+    return model
+
+
+@router.get("/{project_id}/validations", response_model=list[ValidationRunRead])
+async def list_project_validations(
+    project_id: uuid.UUID,
+    limit: int = 50,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """List historical continuous validation runs and baseline comparisons."""
+    service = ProjectService(db)
+    project = await service.get_project(project_id, user.id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    val_service = ValidationService(db)
+    return await val_service.list_validation_runs(project_id, limit=limit)
