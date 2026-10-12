@@ -27,9 +27,8 @@ logger = logging.getLogger(__name__)
 # Strong refs so fire-and-forget dispatch tasks are not GC'd mid-run
 _dispatch_tasks: set[asyncio.Task] = set()
 
-# Concurrency safety (§28): a user may not pile up unbounded concurrent
-# Chromium sessions. Above this many non-terminal executions per user, new
-# executions stay CREATED (queued by omission) until running ones finish.
+# Per-user concurrency guard. Requests over capacity are rejected explicitly;
+# they must not create executions that can remain CREATED indefinitely.
 MAX_ACTIVE_EXECUTIONS_PER_USER = 5
 
 
@@ -232,14 +231,12 @@ async def create_flow_execution(
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
 
-    # Concurrency guard: leave the execution CREATED (queued) instead of
-    # launching another Chromium when the user already has too many active runs.
+    # Enforce an explicit capacity response before creating a durable record.
     active = await _count_active_executions(db, user.id)
-    dispatch = active < MAX_ACTIVE_EXECUTIONS_PER_USER
-    if not dispatch:
-        logger.info(
-            "Execution for user %s stays queued: %d active runs (limit %d)",
-            user.id, active, MAX_ACTIVE_EXECUTIONS_PER_USER,
+    if active >= MAX_ACTIVE_EXECUTIONS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Execution capacity reached ({MAX_ACTIVE_EXECUTIONS_PER_USER} active runs). Retry later.",
         )
 
     # Create execution
@@ -251,7 +248,6 @@ async def create_flow_execution(
     )
     await db.commit()
 
-    if dispatch:
-        # Dispatch after the response body is sent — keep enqueue off the hot path
-        response.background = BackgroundTask(_schedule_dispatch, str(execution.id))
+    # Dispatch after the response body is sent — keep browser work off the hot path.
+    response.background = BackgroundTask(_schedule_dispatch, str(execution.id))
     return execution
