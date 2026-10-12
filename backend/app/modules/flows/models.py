@@ -23,6 +23,8 @@ class Flow(Base):
     objective: Mapped[str | None] = mapped_column(Text, nullable=True)
     steps: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     success_condition: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True)
+    preconditions: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True)
+    version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

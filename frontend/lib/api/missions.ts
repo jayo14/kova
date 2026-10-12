@@ -12,6 +12,7 @@ import { normalizeExecutionStatus } from "@/lib/executions/status";
 // ── Backend response shapes ───────────────────────────────
 
 export interface BackendFlowStep {
+  step_id?: string;
   action: string;
   selector?: string | null;
   value?: string | null;
@@ -28,8 +29,10 @@ export interface BackendFlow {
   objective: string | null;
   steps: BackendFlowStep[];
   success_condition: Record<string, unknown> | null;
+  preconditions?: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  version?: number;
 }
 
 import type { BackendExecution } from "./executions";
@@ -48,6 +51,7 @@ function personaToString(
 function stepsToStrings(steps: BackendFlow["steps"]): BackendFlowStep[] {
   if (!Array.isArray(steps)) return [];
   return steps.map((s) => ({
+    step_id: s.step_id,
     action: s.action,
     selector: s.selector ?? null,
     value: s.value ?? null,
@@ -76,8 +80,10 @@ export function backendToMission(
     // into {description: ...} — the Verifier would see unknown keys and the
     // outcome would be unverifiable.
     successCondition: flow.success_condition ?? null,
+    preconditions: flow.preconditions ?? null,
     createdAt: flow.created_at,
     updatedAt: flow.updated_at,
+    version: flow.version,
   };
 }
 
@@ -87,6 +93,7 @@ export function backendToExecution(ex: BackendExecution): MissionExecution {
     missionId: ex.flow_id,
     status: normalizeExecutionStatus(ex.status),
     createdAt: ex.created_at,
+    flowVersion: ex.flow_version,
   };
 }
 
@@ -188,6 +195,7 @@ function formatStepForBackend(s: string | Record<string, unknown>): BackendFlowS
     const descStr = typeof descVal === "string" && descVal !== "[object Object]" ? descVal : null;
 
     return {
+      step_id: typeof obj.step_id === "string" ? obj.step_id : undefined,
       action: actionStr,
       selector: selectorStr,
       value: valStr,
@@ -217,6 +225,7 @@ export async function createMission(
     // Pass the structured condition through verbatim. Adding any wrapper here
     // (e.g. {description: ...}) breaks verification downstream.
     successCondition: input.successCondition ?? null,
+    preconditions: input.preconditions ?? null,
   });
 
   const flow = await api.post<BackendFlow>("/api/v1/flows/", body, token);
@@ -253,6 +262,7 @@ export async function updateMission(
     // Structured pass-through — never wrap or stringify.
     patch.success_condition = input.successCondition ?? null;
   }
+  if (input.preconditions !== undefined) patch.preconditions = input.preconditions;
 
   const body = stripNulls(mapKeysToSnake(patch));
   try {

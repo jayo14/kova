@@ -241,10 +241,23 @@ async def create_flow_execution(
 
     # Create execution
     exec_service = ExecutionService(db)
+    from app.modules.projects.repository import ProjectRepository
+    project = await ProjectRepository(db).get_by_id(flow.project_id)
+    snapshot = {
+        "version": flow.version,
+        "name": flow.name,
+        "objective": flow.objective,
+        "steps": flow.steps,
+        "success_condition": flow.success_condition,
+        "preconditions": flow.preconditions,
+        "target_url": project.base_url if project else "",
+    }
     execution = await exec_service.create_execution(
         __import__("app.modules.executions.schemas", fromlist=["ExecutionCreate"]).ExecutionCreate(
             flow_id=uuid.UUID(flow_id)
-        )
+        ),
+        flow_version=flow.version,
+        flow_snapshot=snapshot,
     )
     await db.commit()
 

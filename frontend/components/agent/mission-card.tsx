@@ -80,6 +80,11 @@ export function MissionCard({
                   Recommended
                 </span>
               )}
+              {mission.reviewRequired && (
+                <span className="rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                  Review inferred outcome
+                </span>
+              )}
               {mission.category && (
                 <span className={cn(
                   "rounded-full px-2 py-0.5 text-[10px] font-medium border",

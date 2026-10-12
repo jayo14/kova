@@ -16,9 +16,9 @@ class ExecutionService:
         self.event_repo = ExecutionEventRepository(db)
         self.event_service = EventService(db)
 
-    async def create_execution(self, data: ExecutionCreate):
+    async def create_execution(self, data: ExecutionCreate, *, flow_version: int = 1, flow_snapshot: dict | None = None):
         """Create a new execution record."""
-        execution = await self.repo.create(flow_id=data.flow_id)
+        execution = await self.repo.create(flow_id=data.flow_id, flow_version=flow_version, flow_snapshot=flow_snapshot)
         await self.event_service.record_execution_created(execution.id)
         return execution
 

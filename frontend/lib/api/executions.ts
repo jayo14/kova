@@ -12,6 +12,7 @@ import { normalizeExecutionStatus } from "@/lib/executions/status";
 export interface BackendExecution {
   id: string;
   flow_id: string;
+  flow_version?: number;
   status: string;
   started_at: string | null;
   completed_at: string | null;

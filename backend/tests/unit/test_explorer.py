@@ -49,6 +49,29 @@ async def test_explorer_goal_directed_workflow_discovery():
     assert missions[0].name == "test quiz generation"
     assert missions[0].recommended is True
     assert len(discoveries) >= 2
+    assert missions[0].expectation_source == "inferred"
+    assert missions[0].review_required is True
+    assert missions[0].discovery_evidence
+
+
+@pytest.mark.asyncio
+async def test_explorer_candidate_ids_are_stable_for_same_observations():
+    explorer = ExplorationEngine(exploration_id=uuid.uuid4(), url="https://shop.example")
+
+    class DummyPage:
+        url = "https://shop.example"
+
+    observation = {
+        "title": "Shop",
+        "elements": [
+            {"type": "link", "name": "Products"},
+            {"type": "button", "name": "Search products"},
+        ],
+    }
+    first = await explorer._discover_workflows(DummyPage(), observation, None)
+    second = await explorer._discover_workflows(DummyPage(), observation, None)
+    assert [mission.id for mission in first[1]] == [mission.id for mission in second[1]]
+    assert [step["step_id"] for step in first[1][0].steps] == [step["step_id"] for step in second[1][0].steps]
 
 
 @pytest.mark.asyncio

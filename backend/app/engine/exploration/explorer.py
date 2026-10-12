@@ -1595,7 +1595,36 @@ class ExplorationEngine:
             category_order.get(m.category or "navigation", 9)
         ))
 
-        return discovered_areas, missions
+        # Stable IDs and visible uncertainty make discovery records reproducible
+        # across equivalent exploration passes. Route/control evidence is kept
+        # separate from expected behavior because those expectations are inferred.
+        unique: list[DiscoveredMission] = []
+        seen_candidates: set[tuple[str, str, str]] = set()
+        for mission in missions:
+            evidence_key = (mission.category or "", mission.name.strip().casefold(), (mission.route_analysis or {}).get("path", ""))
+            if evidence_key in seen_candidates:
+                continue
+            seen_candidates.add(evidence_key)
+            stable_key = f"{current_url}|{evidence_key[0]}|{evidence_key[1]}|{evidence_key[2]}"
+            mission.id = f"mission-{uuid.uuid5(uuid.NAMESPACE_URL, stable_key).hex[:16]}"
+            for step_index, step in enumerate(mission.steps, start=1):
+                if isinstance(step, dict):
+                    step.setdefault("step_id", f"{mission.id}-step-{step_index}")
+            mission.expectation_source = "inferred" if mission.successCondition else "unspecified"
+            mission.review_required = mission.expectation_source != "observed"
+            mission.discovery_evidence = [{"kind": "page", "url": current_url, "title": title}]
+            if mission.route_analysis:
+                mission.discovery_evidence.append({
+                    "kind": "route", "path": mission.route_analysis.get("path"),
+                    "accessible": mission.route_analysis.get("accessible"),
+                })
+            else:
+                mission.discovery_evidence.extend({
+                    "kind": "interactive_control", "label": el.get("name"), "type": el.get("type")
+                } for el in interactive_elements[:3])
+            unique.append(mission)
+
+        return discovered_areas, unique
 
     def _build_goal_mission(
         self, goal: str, base_url: str, title: str, persona: str, elements: list[dict]

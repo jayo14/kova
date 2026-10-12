@@ -166,6 +166,19 @@ export function MissionDetail({
               {mission.objective || mission.description || "No specific objective detailed."}
             </p>
           </section>
+          {mission.version !== undefined && (
+            <p className="text-caption text-muted-foreground">Flow version {mission.version}</p>
+          )}
+          {mission.preconditions && Object.keys(mission.preconditions).length > 0 && (
+            <section aria-label="Prerequisites" className="space-y-2">
+              <h2 className="text-body-sm font-semibold uppercase tracking-wider text-caption text-muted-foreground">Prerequisites</h2>
+              <div className="rounded-xl border border-border/80 bg-secondary/20 p-3 text-body-sm text-foreground/80">
+                {Object.entries(mission.preconditions).map(([condition, expected]) => (
+                  <p key={condition}><span className="font-medium">{condition}</span>: {String(expected)}</p>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* Persona */}
           {mission.persona && (
