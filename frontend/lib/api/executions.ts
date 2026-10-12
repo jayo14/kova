@@ -22,6 +22,28 @@ export interface BackendExecution {
   updated_at: string;
 }
 
+export interface ExecutionReport {
+  executionId: string;
+  status: string;
+  persistedStatus: string;
+  failureCategory: string | null;
+  diagnosis: { summary: string; expected: string | null; observed: string; reason: string; nextStep: string; hypothesis: string | null } | null;
+  steps: Array<Record<string, unknown>>;
+  stepCounts: Record<string, number>;
+  verification: { passed: boolean; checks: Array<Record<string, unknown>> };
+}
+
+export async function getExecutionReport(executionId: string, token?: string): Promise<ExecutionReport | null> {
+  try {
+    const raw = await api.get<Record<string, unknown>>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/report?format=json`, token
+    );
+    return mapKeysToCamel(raw) as unknown as ExecutionReport;
+  } catch {
+    return null;
+  }
+}
+
 export interface BackendEvent {
   id: string;
   execution_id: string;
@@ -106,6 +128,7 @@ export function backendToExecutionDetail(
     startedAt: ex.started_at,
     completedAt: ex.completed_at,
     error: ex.error_message ?? null,
+    flowVersion: ex.flow_version ?? 1,
   };
 }
 
