@@ -53,6 +53,11 @@ async def test_health_routes_separate_liveness_from_readiness(monkeypatch):
     monkeypatch.setattr(celery_app.control, "inspect", lambda timeout: Inspector())
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
+        root = await client.get("/")
+        assert root.status_code == 200
+        assert root.json()["status"] == "ok"
+        assert root.json()["service"] == "kova-backend"
+
         live = await client.get("/health/live")
         assert live.status_code == 200
         assert live.json()["status"] == "ok"

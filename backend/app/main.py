@@ -81,11 +81,17 @@ app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(viewport.router)
 
 
+@app.get("/")
 @app.get("/health/live")
 @app.get("/health")
 @app.get("/api/v1/health")
 async def liveness():
-    return {"status": "ok", "environment": settings.ENVIRONMENT}
+    return {
+        "status": "ok",
+        "service": "kova-backend",
+        "version": "0.1.0",
+        "environment": settings.ENVIRONMENT,
+    }
 
 
 @app.get("/health/ready")
