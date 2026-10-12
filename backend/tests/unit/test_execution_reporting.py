@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.modules.executions.reporting import build_timeline, classify_failure, diagnose_failure, sanitize_text
+from app.modules.executions.reporting import build_timeline, classify_failure, diagnose_failure, diagnose_verification, sanitize_payload, sanitize_text
 
 
 def test_classifies_failure_without_collapsing_status_and_category():
@@ -20,6 +20,9 @@ def test_classifies_failure_without_collapsing_status_and_category():
 
 def test_redacts_common_secrets_from_diagnostic_text():
     assert sanitize_text("password=hunter2 Bearer eyJtoken") == "password=[REDACTED] Bearer [REDACTED]"
+    assert sanitize_payload({"nested": [{"access_key": "abc", "message": "token=xyz"}]}) == {
+        "nested": [{"access_key": "[REDACTED]", "message": "token=[REDACTED]"}]
+    }
 
 
 def test_timeline_pairs_action_and_verification_in_sequence():
@@ -33,3 +36,11 @@ def test_timeline_pairs_action_and_verification_in_sequence():
     assert result[0]["status"] == "failed"
     assert result[0]["duration_ms"] == 22
     assert result[0]["url"] == "https://app.test/items?[REDACTED]"
+
+
+def test_verification_diagnosis_uses_recorded_expected_and_observed_values():
+    report = diagnose_verification({"type": "text", "passed": False, "expected": "Saved", "actual": "Error"}, "Save item")
+    assert report["expected"] == "Saved"
+    assert report["observed"] == "Error"
+    assert report["category"] == "application_behavior"
+    assert report["hypothesis"] is None

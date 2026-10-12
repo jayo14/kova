@@ -14,6 +14,24 @@ def sanitize_text(value: object, *, limit: int = 1000) -> str:
     return text[:limit]
 
 
+_SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "authorization", "cookie", "api_key", "access_key", "credential"}
+
+
+def sanitize_payload(payload: object) -> object:
+    """Redact secret fields recursively before execution events are persisted."""
+    if isinstance(payload, dict):
+        return {
+            str(key): "[REDACTED]" if str(key).lower().replace("-", "_") in _SENSITIVE_KEYS
+            else sanitize_payload(value)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [sanitize_payload(value) for value in payload]
+    if isinstance(payload, str):
+        return sanitize_text(payload, limit=5000)
+    return payload
+
+
 def _safe_url(value: str) -> str:
     try:
         parsed = urlsplit(value)
@@ -75,6 +93,22 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
     }
 
 
+def diagnose_verification(check: dict, step_name: str | None = None) -> dict:
+    expected = sanitize_payload(check.get("expected"))
+    observed = sanitize_payload(check.get("actual", check.get("observed")))
+    check_type = sanitize_text(check.get("type") or "required outcome")
+    where = f" during {sanitize_text(step_name)}" if step_name else ""
+    return {
+        "category": "application_behavior",
+        "summary": f"The required {check_type} outcome was not verified{where}.",
+        "expected": expected,
+        "observed": observed,
+        "reason": "A persisted required verification check reported that the observed result did not match the expected condition.",
+        "next_step": "Compare the expected and observed values, then inspect the associated step evidence and application state.",
+        "hypothesis": None,
+    }
+
+
 def build_timeline(events: list[object]) -> list[dict]:
     """Group durable events into ordered steps without manufacturing missing results."""
     steps: dict[str, dict] = {}
@@ -98,10 +132,10 @@ def build_timeline(events: list[object]) -> list[dict]:
         elif event_type == "action.completed":
             item.update({"action": payload.get("type") or payload.get("action") or item.get("action"), "completed_at": payload.get("completed_at"), "duration_ms": payload.get("duration_ms"), "url": _safe_url(payload.get("url", "")), "action_result": "completed", "status": "unverified"})
         elif event_type in {"verification.passed", "verification.failed", "step_postcondition"}:
-            checks = payload.get("checks") or payload.get("verification", {}).get("checks", [])
+            checks = sanitize_payload(payload.get("checks") or payload.get("verification", {}).get("checks", []))
             passed = event_type == "verification.passed" or (event_type == "step_postcondition" and payload.get("passed") is True)
             failed = event_type == "verification.failed" or (event_type == "step_postcondition" and payload.get("passed") is False)
-            item.update({"verification": {"verdict": "passed" if passed else "failed" if failed else "inconclusive", "checks": checks, "expected": payload.get("expected"), "observed": payload.get("observed")}, "status": "passed" if passed else "failed" if failed else "unverified"})
+            item.update({"verification": {"verdict": "passed" if passed else "failed" if failed else "inconclusive", "checks": checks, "expected": sanitize_payload(payload.get("expected")), "observed": sanitize_payload(payload.get("observed"))}, "status": "passed" if passed else "failed" if failed else "unverified"})
         elif event_type == "evidence.captured":
             item["evidence"].append({"evidence_id": payload.get("evidence_id"), "type": payload.get("type"), "title": payload.get("title")})
         elif event_type in {"action.failed", "execution.failed"}:
