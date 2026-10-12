@@ -26,6 +26,7 @@ class EvidenceService:
         title: str,
         description: str | None = None,
         mime_type: str = "image/png",
+        extra_data: dict | None = None,
     ) -> dict | None:
         """Capture a screenshot as evidence.
 
@@ -52,7 +53,7 @@ class EvidenceService:
                 status=EvidenceStatus.CAPTURED.value,
                 storage_key=upload_result.get("storage_key"),
                 mime_type=mime_type,
-                metadata={"size_bytes": len(screenshot_bytes)},
+                metadata={"size_bytes": len(screenshot_bytes), **(extra_data or {})},
             )
 
             # Emit event
@@ -83,11 +84,11 @@ class EvidenceService:
             }
 
         except Exception as e:
-            logger.warning("Evidence capture failed (execution=%s): %s", execution_id, e)
+            logger.warning("Evidence capture failed (execution=%s, error_type=%s)", execution_id, type(e).__name__)
             await self.event_service.record_event(
                 execution_id,
                 "evidence.failed",
-                {"type": EvidenceType.SCREENSHOT.value, "error": str(e)},
+                {"type": EvidenceType.SCREENSHOT.value, "error": "Private evidence storage failed"},
             )
             return None
 

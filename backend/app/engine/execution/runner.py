@@ -35,7 +35,6 @@ ALLOWED_NAMED_KEYS = {
 from app.engine.browser.actions import ActionType
 from app.engine.browser.executor import ActionExecutor
 from app.engine.browser.session import BrowserSession
-from app.engine.browser.screenshot_storage import screenshot_storage
 from app.engine.credentials.store import CredentialStore
 from app.engine.execution.context import ExecutionContext
 from app.engine.execution.state import ExecutionState
@@ -1087,11 +1086,16 @@ class FlowRunner:
         raw_action = self._normalize_step(step, target_url=ctx.target_url)
         action_type = raw_action.get("type", "")
 
+        ctx.current_step_id = step.get("step_id") if isinstance(step, dict) else None
+        action_started_at = datetime.now(timezone.utc)
+        action_started_clock = time.monotonic()
         ctx.record_event(EventTypes.ACTION_STARTED, {
             "step": step_index,
-            "step_id": step.get("step_id") if isinstance(step, dict) else None,
+            "step_id": ctx.current_step_id,
             "type": action_type,
             "target": raw_action.get("target"),
+            "expected_outcome": (step.get("expected_outcome") or step.get("postcondition")) if isinstance(step, dict) else None,
+            "started_at": action_started_at.isoformat(),
         })
         await self._emit_events(ctx, event_recorder)
 
@@ -1179,9 +1183,13 @@ class FlowRunner:
         # includes the current URL for lightweight state tracking.
         action_completed_payload: dict[str, Any] = {
             "step": step_index,
+            "step_id": ctx.current_step_id,
             "type": action_type,
             "result": result.get("result"),
             "url": browser.page.url,
+            "started_at": action_started_at.isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "duration_ms": max(0, int((time.monotonic() - action_started_clock) * 1000)),
         }
 
         ctx.record_event(EventTypes.ACTION_COMPLETED, action_completed_payload)
@@ -1467,22 +1475,18 @@ class FlowRunner:
                             screenshot_bytes=screenshot_bytes,
                             title="Verified browser state",
                             description="Browser state after successful verification",
+                            extra_data={
+                                "step_index": ctx.current_step_index,
+                                "step_id": getattr(ctx, "current_step_id", None),
+                                "checkpoint": "verification",
+                            },
                         )
-                        # Also upload to public screenshot_storage for instant live UI rendering
-                        storage_res = screenshot_storage.upload_execution_screenshot(
-                            execution_id=str(execution_id),
-                            screenshot_bytes=screenshot_bytes,
-                            url=browser.page.url,
-                            content_type="image/png",
-                        )
-                        ss_event_data: dict[str, Any] = {
+                        ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {
                             "title": "Verified browser state",
-                            "url": browser.page.url,
-                        }
-                        if storage_res.get("screenshot_url"):
-                            ss_event_data["screenshot_url"] = storage_res["screenshot_url"]
-                            ss_event_data["screenshot_key"] = storage_res.get("screenshot_key")
-                        ctx.record_event(EventTypes.BROWSER_SCREENSHOT, ss_event_data)
+                            "step_index": ctx.current_step_index,
+                            "step_id": getattr(ctx, "current_step_id", None),
+                            "checkpoint": "verification",
+                        })
                         await self._emit_events(ctx, event_recorder)
                 except Exception as e:
                     logger.warning("Evidence screenshot capture failed: %s", e)
@@ -1559,6 +1563,11 @@ class FlowRunner:
                             screenshot_bytes=screenshot_bytes,
                             title="Execution failed",
                             description=f"Browser state at failure: {error_message}",
+                            extra_data={
+                                "step_index": ctx.current_step_index,
+                                "step_id": getattr(ctx, "current_step_id", None),
+                                "checkpoint": "failure",
+                            },
                         )
                 except Exception as e:
                     logger.warning("Failure screenshot capture failed: %s", e)
