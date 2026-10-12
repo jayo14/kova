@@ -36,6 +36,9 @@ class TestValidTransitions:
     def test_running_to_failed(self):
         validate_transition("RUNNING", "FAILED")
 
+    def test_running_to_error(self):
+        validate_transition("RUNNING", "ERROR")
+
     def test_running_to_cancelled(self):
         validate_transition("RUNNING", "CANCELLED")
 
@@ -94,6 +97,9 @@ class TestTerminalStates:
 
     def test_failed_is_terminal(self):
         assert is_terminal("FAILED") is True
+
+    def test_error_is_terminal(self):
+        assert is_terminal("ERROR") is True
 
     def test_cancelled_is_terminal(self):
         assert is_terminal("CANCELLED") is True
