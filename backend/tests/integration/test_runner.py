@@ -7,6 +7,7 @@ import asyncio
 import socket
 import uuid
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 import uvicorn
@@ -15,6 +16,9 @@ from app.engine.credentials.models import Credential
 from app.engine.credentials.store import CredentialStore
 from app.engine.execution.runner import FlowRunner
 from app.engine.execution.state import ExecutionState
+from app.engine.browser.session import BrowserSession
+from app.engine.exploration.explorer import ExplorationEngine
+from app.modules.flows.dependency_resolver import resolve_dependency_plan
 from tests.test_app import app as test_app
 
 
@@ -181,6 +185,113 @@ async def test_runner_blocks_when_preconditions_are_not_satisfied(test_server):
     assert result["state"] == "BLOCKED"
     assert result["error_code"] == "PREREQUISITE_UNSATISFIED"
     assert result["verification"]["passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_runner_resolves_dependency_before_target_and_verifies_result(test_server, credential_store):
+    result = await FlowRunner().execute(
+        execution_id=uuid.uuid4(),
+        flow_steps=[{
+            "step_id": "open-dashboard",
+            "action": "navigate",
+            "value": f"{test_server}/dashboard",
+            "postcondition": {"text_visible": "Welcome, Kova"},
+        }],
+        preconditions={"text_visible": "Welcome, Kova"},
+        success_condition={"text_visible": "Welcome, Kova"},
+        dependency_plan=[{
+            "id": "login-flow", "version": 2, "name": "Sign in",
+            "steps": [
+                {"step_id": "login-page", "action": "navigate", "value": f"{test_server}/login"},
+                {"step_id": "email", "action": "type", "selector": "#email", "value": "test@kova.local"},
+                {"step_id": "password", "action": "type", "selector": "#password", "credential_id": "login"},
+                {"step_id": "submit-login", "action": "click", "selector": "#login-btn"},
+            ],
+            "success_condition": {"text_visible": "Welcome, Kova"},
+        }],
+        credential_store=credential_store,
+        target_url=test_server,
+    )
+
+    assert result["success"] is True
+    assert any(e.get("data", {}).get("kind") == "dependency_postcondition" for e in result["events"])
+    assert any(e.get("data", {}).get("kind") == "step_postcondition" for e in result["events"])
+    assert "KovaTest123!" not in str(result["events"])
+
+
+@pytest.mark.asyncio
+async def test_runner_does_not_pass_action_with_failed_step_postcondition(test_server):
+    result = await FlowRunner().execute(
+        execution_id=uuid.uuid4(),
+        flow_steps=[{
+            "step_id": "incorrect-outcome",
+            "action": "navigate",
+            "value": f"{test_server}/login",
+            "postcondition": {"text_visible": "Record saved"},
+        }],
+        success_condition={"text_visible": "Login"},
+        target_url=test_server,
+    )
+
+    assert result["success"] is False
+    assert result["state"] == "FAILED"
+    assert result["error_code"] == "VERIFICATION_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_discovery_to_dependency_execution_and_independent_verification(test_server, credential_store):
+    """Discover sign-in from the fixture DOM, resolve it as a capability, then verify dashboard state."""
+    browser = BrowserSession()
+    try:
+        await browser.start()
+        await browser.navigate(test_server)
+        observation = await browser.observe()
+        discovered, candidates = await ExplorationEngine(
+            exploration_id=uuid.uuid4(),
+            url=test_server,
+            credential_id="login",
+        )._discover_workflows(browser.page, observation, None)
+
+        setup_candidate = next(candidate for candidate in candidates if candidate.category == "auth")
+        assert discovered
+        assert setup_candidate.expectation_source in {"observed", "inferred", "unspecified"}
+        assert all(step.get("type") != "wait" for step in setup_candidate.steps)
+
+        setup_flow = SimpleNamespace(
+            id=uuid.uuid4(), version=1, name=setup_candidate.name,
+            steps=setup_candidate.steps, preconditions=None,
+            success_condition=setup_candidate.successCondition,
+            dependencies=[], provides_capabilities=["authenticated(student)"],
+        )
+        target_flow = SimpleNamespace(
+            id=uuid.uuid4(), version=1, name="Open account dashboard", steps=[],
+            preconditions=setup_candidate.successCondition, success_condition={"text_visible": "Welcome, Kova"},
+            dependencies=[{"kind": "capability", "value": "authenticated(student)"}],
+            provides_capabilities=[],
+        )
+        dependency_plan = resolve_dependency_plan(target_flow, [setup_flow, target_flow])
+        assert [item["id"] for item in dependency_plan] == [str(setup_flow.id)]
+
+        result = await FlowRunner().execute(
+            execution_id=uuid.uuid4(),
+            flow_steps=[{
+                "step_id": "open-dashboard", "action": "navigate",
+                "value": f"{test_server}/dashboard",
+                "postcondition": {"text_visible": "Welcome, Kova"},
+            }],
+            preconditions=setup_candidate.successCondition,
+            success_condition={"text_visible": "Welcome, Kova"},
+            dependency_plan=dependency_plan,
+            credential_store=credential_store,
+            target_url=test_server,
+        )
+
+        assert result["success"] is True
+        assert any(event.get("data", {}).get("kind") == "dependency_postcondition" for event in result["events"])
+        assert any(event.get("data", {}).get("kind") == "step_postcondition" for event in result["events"])
+        assert "KovaTest123!" not in str(result["events"])
+    finally:
+        await browser.close()
 
 
 # --- Failure handling ---

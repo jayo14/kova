@@ -97,6 +97,7 @@ class EvidenceService:
         title: str,
         description: str,
         checks: list[dict] | None = None,
+        extra_data: dict | None = None,
     ) -> dict | None:
         """Create verification evidence (structured proof that a check passed).
 
@@ -108,8 +109,12 @@ class EvidenceService:
                 type=EvidenceType.VERIFICATION.value,
                 title=title,
                 description=description,
-                status=EvidenceStatus.VERIFIED.value,
-                metadata={"checks": checks or []},
+                status=(
+                    EvidenceStatus.VERIFIED.value
+                    if checks and all(check.get("passed") is True for check in checks)
+                    else EvidenceStatus.FAILED.value
+                ),
+                metadata={"checks": checks or [], **(extra_data or {})},
             )
 
             await self.event_service.record_event(
