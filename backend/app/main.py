@@ -1,7 +1,11 @@
 from contextlib import asynccontextmanager
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import HTTPException
+from sqlalchemy import text
+from redis.asyncio import Redis
 
 import sentry_sdk
 
@@ -14,7 +18,7 @@ from app.infrastructure.database.session import engine
 if settings.SENTRY_DSN:
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
-        send_default_pii=True,
+        send_default_pii=False,
         enable_logs=True,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         profile_session_sample_rate=settings.SENTRY_PROFILES_SAMPLE_RATE,
@@ -67,15 +71,31 @@ app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(viewport.router)
 
 
-@app.get("/")
+@app.get("/health/live")
 @app.get("/health")
 @app.get("/api/v1/health")
-async def health():
+async def liveness():
     return {"status": "ok", "environment": settings.ENVIRONMENT}
 
 
-@app.get("/sentry-debug")
-@app.get("/sentry-debug/")
-async def trigger_error():
-    division_by_zero = 1 / 0
-    return {"result": division_by_zero}
+@app.get("/health/ready")
+@app.get("/api/v1/health/ready")
+async def readiness():
+    """Report readiness only when the database and Redis are reachable."""
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+        redis = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        try:
+            await redis.ping()
+        finally:
+            await redis.aclose()
+        from app.workers.celery_app import celery_app
+
+        inspector = celery_app.control.inspect(timeout=1)
+        workers = await asyncio.to_thread(inspector.ping) if inspector else None
+        if not workers:
+            raise RuntimeError("No execution workers are available")
+    except Exception:
+        raise HTTPException(status_code=503, detail="Service dependencies unavailable")
+    return {"status": "ready"}
