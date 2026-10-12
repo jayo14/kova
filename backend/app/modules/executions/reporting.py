@@ -1,0 +1,109 @@
+"""Deterministic, evidence-based report helpers for persisted executions."""
+from __future__ import annotations
+
+import re
+from urllib.parse import urlsplit, urlunsplit
+
+
+def sanitize_text(value: object, *, limit: int = 1000) -> str:
+    """Remove common secret-bearing values before persisting/rendering diagnostics."""
+    text = str(value or "")
+    text = re.sub(r"(?i)(password|passwd|token|secret|authorization|cookie|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)", r"\1\2[REDACTED]", text)
+    text = re.sub(r"(?i)bearer\s+[a-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
+    text = re.sub(r"https?://[^\s\"']+", lambda match: _safe_url(match.group(0)), text)
+    return text[:limit]
+
+
+def _safe_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value)
+        host = parsed.hostname or ""
+        if parsed.port:
+            host = f"{host}:{parsed.port}"
+        return urlunsplit((parsed.scheme, host, parsed.path, "[REDACTED]" if parsed.query else "", ""))
+    except ValueError:
+        return "[URL REDACTED]"
+
+
+def classify_failure(error_code: str | None, status: str | None = None) -> str | None:
+    code = (error_code or "").upper()
+    if not code:
+        return None
+    if code in {"AUTH_BLOCKED", "AUTHENTICATION_FAILED", "CREDENTIALS_MISSING", "FORBIDDEN"}:
+        return "authentication_or_authorization"
+    if code in {"PREREQUISITE_UNSATISFIED", "PRECONDITION_FAILED"}:
+        return "missing_prerequisite"
+    if code in {"TARGET_NOT_FOUND", "SELECTOR_AMBIGUOUS", "ELEMENT_NOT_FOUND"}:
+        return "element_resolution"
+    if code in {"VERIFICATION_FAILED", "ASSERTION_FAILED"}:
+        return "application_behavior"
+    if code in {"EXECUTION_TIMEOUT", "TIMEOUT", "WORKER_LEASE_EXPIRED"}:
+        return "execution_timeout"
+    if code in {"NETWORK_ERROR", "PAGE_LOAD_FAILED"}:
+        return "network_or_application_server"
+    if code in {"EVIDENCE_STORAGE_FAILED", "EVIDENCE_CAPTURE_FAILED"}:
+        return "evidence_storage"
+    if code in {"BROWSER_START_FAILED", "BROWSER_CRASH", "ACTION_FAILED", "RESOURCE_LIMIT"}:
+        return "browser_infrastructure"
+    return "internal_kova"
+
+
+def diagnose_failure(error_code: str | None, error_message: str | None) -> dict | None:
+    category = classify_failure(error_code)
+    if not category:
+        return None
+    observed = sanitize_text(error_message) or "Kova recorded a failure without additional detail."
+    advice = {
+        "authentication_or_authorization": "Confirm that the configured test account is valid and has the required role.",
+        "missing_prerequisite": "Review the flow prerequisites and confirm required application state is available.",
+        "element_resolution": "Check whether the expected component rendered and whether its selector still matches uniquely.",
+        "application_behavior": "Compare the observed application state with the required outcome and inspect the attached verification evidence.",
+        "execution_timeout": "Inspect application responsiveness, network conditions, and the execution time limit.",
+        "network_or_application_server": "Inspect the recorded request or navigation outcome; this alone does not establish an application defect.",
+        "evidence_storage": "Check private evidence storage availability; missing evidence is not itself proof that the application behavior failed.",
+        "browser_infrastructure": "Check worker health and browser startup, action, or shutdown logs.",
+        "internal_kova": "Inspect authorized worker diagnostics around this execution.",
+    }[category]
+    return {
+        "category": category,
+        "summary": observed,
+        "expected": None,
+        "observed": observed,
+        "reason": f"Kova classified error code {sanitize_text(error_code, limit=100)} as {category.replace('_', ' ')}.",
+        "next_step": advice,
+        "hypothesis": None,
+    }
+
+
+def build_timeline(events: list[object]) -> list[dict]:
+    """Group durable events into ordered steps without manufacturing missing results."""
+    steps: dict[str, dict] = {}
+    order: list[str] = []
+    for event in events:
+        event_type = getattr(event, "event_type", "")
+        payload = getattr(event, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            continue
+        index = payload.get("step", payload.get("step_index"))
+        step_id = payload.get("step_id")
+        if index is None and step_id is None:
+            continue
+        key = str(step_id or index)
+        if key not in steps:
+            steps[key] = {"step_id": step_id, "sequence": index, "status": "incomplete", "evidence": []}
+            order.append(key)
+        item = steps[key]
+        if event_type == "action.started":
+            item.update({"action": payload.get("type") or payload.get("action"), "target": sanitize_text(payload.get("target")), "expected": payload.get("expected_outcome"), "started_at": payload.get("started_at"), "status": "running"})
+        elif event_type == "action.completed":
+            item.update({"action": payload.get("type") or payload.get("action") or item.get("action"), "completed_at": payload.get("completed_at"), "duration_ms": payload.get("duration_ms"), "url": _safe_url(payload.get("url", "")), "action_result": "completed", "status": "unverified"})
+        elif event_type in {"verification.passed", "verification.failed", "step_postcondition"}:
+            checks = payload.get("checks") or payload.get("verification", {}).get("checks", [])
+            passed = event_type == "verification.passed" or (event_type == "step_postcondition" and payload.get("passed") is True)
+            failed = event_type == "verification.failed" or (event_type == "step_postcondition" and payload.get("passed") is False)
+            item.update({"verification": {"verdict": "passed" if passed else "failed" if failed else "inconclusive", "checks": checks, "expected": payload.get("expected"), "observed": payload.get("observed")}, "status": "passed" if passed else "failed" if failed else "unverified"})
+        elif event_type == "evidence.captured":
+            item["evidence"].append({"evidence_id": payload.get("evidence_id"), "type": payload.get("type"), "title": payload.get("title")})
+        elif event_type in {"action.failed", "execution.failed"}:
+            item.update({"status": "error", "error": sanitize_text(payload.get("error_message") or payload.get("error"))})
+    return [steps[key] for key in sorted(order, key=lambda item: (steps[item].get("sequence") is None, steps[item].get("sequence") or 0))]

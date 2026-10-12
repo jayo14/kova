@@ -6,8 +6,10 @@ Handles execution lifecycle: create, get, cancel, events.
 import asyncio
 import hashlib
 import hmac
+import html
 import json
 import logging
+import time
 from typing import AsyncGenerator
 import uuid
 
@@ -505,16 +507,28 @@ async def refresh_evidence_url(
     return {"url": signed_url}
 
 
-def _generate_report_signature(execution_id: uuid.UUID) -> str:
+REPORT_SIGNATURE_TTL_SECONDS = 900
+
+
+def _generate_report_signature(execution_id: uuid.UUID, expires_at: int | None = None) -> str:
     from app.modules.auth.dependencies import _get_jwt_secret
     secret = _get_jwt_secret()
-    msg = f"report:{execution_id}"
-    return hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()
+    expires_at = expires_at or int(time.time()) + REPORT_SIGNATURE_TTL_SECONDS
+    msg = f"report:{execution_id}:{expires_at}"
+    digest = hmac.new(secret.encode("utf-8"), msg.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{expires_at}.{digest}"
 
 
 def _verify_report_signature(execution_id: uuid.UUID, signature: str) -> bool:
-    expected = _generate_report_signature(execution_id)
-    return hmac.compare_digest(expected, signature)
+    try:
+        expiry_text, supplied = signature.split(".", 1)
+        expires_at = int(expiry_text)
+    except (ValueError, TypeError):
+        return False
+    if expires_at < int(time.time()) or expires_at > int(time.time()) + REPORT_SIGNATURE_TTL_SECONDS + 30:
+        return False
+    expected = _generate_report_signature(execution_id, expires_at).split(".", 1)[1]
+    return hmac.compare_digest(expected, supplied)
 
 
 def _render_report_html(
@@ -538,7 +552,7 @@ def _render_report_html(
         why_failed_banner = f"""
         <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; color: #fca5a5;">
             <div style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; color: #f87171; margin-bottom: 4px;">Why it failed</div>
-            <div style="font-size: 15px; color: #ffffff; font-weight: 500;">{why_it_failed}</div>
+            <div style="font-size: 15px; color: #ffffff; font-weight: 500;">{html.escape(why_it_failed)}</div>
         </div>
         """
 
@@ -552,10 +566,10 @@ def _render_report_html(
 
     checks_html = ""
     for c in checks:
-        c_type = c.get("type", "unknown")
+        c_type = html.escape(str(c.get("type", "unknown")))
         c_passed = c.get("passed", False)
         c_badge = '<span style="color:#10b981;font-weight:600;">PASS</span>' if c_passed else '<span style="color:#ef4444;font-weight:600;">FAIL</span>'
-        c_msg = c.get("message") or ""
+        c_msg = html.escape(str(c.get("message") or ""))
         checks_html += f"""
         <tr style="border-bottom: 1px solid #334155;">
             <td style="padding: 10px; font-family: monospace;">{c_type}</td>
@@ -570,7 +584,7 @@ def _render_report_html(
     if error_message:
         error_banner = f"""
         <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; color: #fca5a5;">
-            <strong>Error:</strong> {error_message}
+            <strong>Error:</strong> {html.escape(error_message)}
         </div>
         """
 
@@ -579,7 +593,7 @@ def _render_report_html(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kova Execution Report - {flow_name}</title>
+    <title>Kova Execution Report - {html.escape(flow_name)}</title>
     <style>
         body {{
             background-color: #0f172a;
@@ -669,9 +683,9 @@ def _render_report_html(
         <div class="header">
             <div>
                 <h1 style="margin: 0; font-size: 24px; color: #f8fafc;">Kova Execution Report</h1>
-                <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 14px;">Flow: <strong>{flow_name}</strong> &bull; Project: <strong>{project_name}</strong></p>
+                <p style="margin: 4px 0 0 0; color: #94a3b8; font-size: 14px;">Flow: <strong>{html.escape(flow_name)}</strong> &bull; Project: <strong>{html.escape(project_name)}</strong></p>
             </div>
-            <div class="badge">{status_str}</div>
+            <div class="badge">{html.escape(status_str)}</div>
         </div>
 
         {why_failed_banner}
@@ -681,11 +695,11 @@ def _render_report_html(
         <div class="meta-grid">
             <div class="meta-item">
                 <label>Execution ID</label>
-                <span style="font-family: monospace; font-size: 13px;">{str(execution_id)[:8]}...</span>
+                <span style="font-family: monospace; font-size: 13px;">{html.escape(str(execution_id)[:8])}...</span>
             </div>
             <div class="meta-item">
                 <label>Duration</label>
-                <span>{duration_str}</span>
+                <span>{html.escape(duration_str)}</span>
             </div>
             <div class="meta-item">
                 <label>Verification</label>
@@ -764,12 +778,26 @@ async def get_execution_report(
 
     event_svc = EventService(db)
     events = await event_svc.get_events(exec_uuid)
-    verification_dict = {"passed": execution.status == ExecutionStatus.COMPLETED.value, "checks": []}
-    for ev in events:
-        if ev.event_type in (EventTypes.VERIFICATION_PASSED, "verification_passed", "verification_failed"):
-            if isinstance(ev.payload, dict) and "checks" in ev.payload:
-                verification_dict = ev.payload
-                break
+    verification_dict = {"passed": False, "checks": []}
+    for ev in reversed(events):
+        if ev.event_type in (EventTypes.VERIFICATION_PASSED, "verification_passed", EventTypes.VERIFICATION_FAILED, "verification_failed") and isinstance(ev.payload, dict):
+            checks = ev.payload.get("checks", [])
+            verification_dict = {
+                **ev.payload,
+                "checks": checks,
+                "passed": ev.event_type in (EventTypes.VERIFICATION_PASSED, "verification_passed")
+                and bool(checks)
+                and all(check.get("passed") is True for check in checks),
+            }
+            break
+
+    from app.modules.executions.reporting import build_timeline, diagnose_failure, sanitize_text
+    timeline = build_timeline(events)
+    persisted_status = execution.status.value if hasattr(execution.status, "value") else str(execution.status)
+    report_status = persisted_status
+    if persisted_status == ExecutionStatus.COMPLETED.value and not verification_dict["passed"]:
+        report_status = ExecutionStatus.UNVERIFIED.value
+    diagnostics = diagnose_failure(execution.error_code, execution.error_message)
 
     ai_assisted_events = [ev for ev in events if ev.event_type == "ai_assisted"]
     healed_steps_count = len(ai_assisted_events)
@@ -777,18 +805,18 @@ async def get_execution_report(
 
     sig = _generate_report_signature(exec_uuid)
     base_url = str(request.base_url).rstrip("/")
-    shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
+    shareable_url = None if signature else f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
 
     duration_ms = None
     if execution.started_at and execution.completed_at:
         duration_ms = int((execution.completed_at - execution.started_at).total_seconds() * 1000)
     duration_str = f"{duration_ms} ms" if duration_ms is not None else "N/A"
 
-    is_success = (execution.status == ExecutionStatus.COMPLETED.value) and verification_dict.get("passed", False)
+    is_success = report_status == ExecutionStatus.COMPLETED.value and verification_dict.get("passed", False)
     why_it_failed = None
     if not is_success:
         if execution.error_message:
-            why_it_failed = execution.error_message
+            why_it_failed = sanitize_text(execution.error_message)
         else:
             failed_checks = [c for c in verification_dict.get("checks", []) if not c.get("passed")]
             if failed_checks:
@@ -804,24 +832,25 @@ async def get_execution_report(
 
     html_content = _render_report_html(
         execution_id=exec_uuid,
-        status_str=execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+        status_str=report_status,
         flow_name=flow_name,
         project_name=project_name,
         duration_str=duration_str,
         verification=verification_dict,
         error_message=execution.error_message,
-        shareable_url=shareable_url,
+        shareable_url=shareable_url or "",
         ai_healed_steps=healed_steps_count,
         why_it_failed=why_it_failed,
     )
 
     accept_header = request.headers.get("accept", "")
-    if format == "html" or (signature and "application/json" not in accept_header and "text/html" in accept_header):
+    if signature or format == "html" or ("application/json" not in accept_header and "text/html" in accept_header):
         return HTMLResponse(content=html_content)
 
     return {
         "execution_id": str(exec_uuid),
-        "status": execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+        "status": report_status,
+        "persisted_status": persisted_status,
         "flow_id": str(execution.flow_id),
         "flow_name": flow_name,
         "project_name": project_name,
@@ -833,10 +862,14 @@ async def get_execution_report(
         "error_message": execution.error_message,
         "why_it_failed": why_it_failed,
         "verification": verification_dict,
+        "failure_category": execution.failure_category or (diagnostics.get("category") if diagnostics else None),
+        "diagnosis": diagnostics,
+        "steps": timeline,
+        "step_counts": {name: sum(1 for step in timeline if step.get("status") == name) for name in ("passed", "failed", "blocked", "unverified", "error")},
         "ai_healed_steps": healed_steps_count,
         "healing_summary": healing_summary,
-        "signature": sig,
-        "shareable_url": shareable_url,
+        "signature": None if signature else sig,
+        "shareable_url": None if signature else shareable_url,
         "html": html_content,
     }
 

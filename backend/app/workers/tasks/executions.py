@@ -41,6 +41,7 @@ async def _run_execution_async(task, execution_id: str):
     from app.modules.executions.event_service import EventService
     from app.modules.executions.event_types import EventTypes
     from app.modules.executions.state_machine import TERMINAL_STATES
+    from app.modules.executions.reporting import classify_failure, sanitize_text
     from app.modules.flows.repository import FlowRepository
     from app.engine.execution.runner import FlowRunner
 
@@ -198,28 +199,41 @@ async def _run_execution_async(task, execution_id: str):
                             execution.id,
                             ExecutionStatus.TIMEOUT,
                             error_code=error_code,
-                            error_message=result.get("error", "Execution timed out"),
+                            error_message=sanitize_text(result.get("error", "Execution timed out")),
+                            failure_category="execution_timeout",
                         )
                     elif error_code == "UNVERIFIED":
                         await exec_repo.update_status(
                             execution.id,
                             ExecutionStatus.UNVERIFIED,
                             error_code=error_code,
-                            error_message=result.get("error", "Actions completed but mission could not be verified"),
+                            error_message=sanitize_text(result.get("error", "Actions completed but mission could not be verified")),
+                            failure_category="verification_inconclusive",
                         )
                     elif error_code in ("AUTH_BLOCKED", "PREREQUISITE_UNSATISFIED"):
                         await exec_repo.update_status(
                             execution.id,
                             ExecutionStatus.BLOCKED,
                             error_code=error_code,
-                            error_message=result.get("error", "Blocked on authentication page"),
+                            error_message=sanitize_text(result.get("error", "Blocked on authentication page")),
+                            failure_category=classify_failure(error_code),
                         )
                     else:
+                        failure_category = classify_failure(error_code)
+                        terminal_status = (
+                            ExecutionStatus.ERROR
+                            if error_code in {
+                                "BROWSER_START_FAILED", "PAGE_LOAD_FAILED", "ACTION_FAILED",
+                                "NETWORK_ERROR", "RESOURCE_LIMIT", "UNKNOWN", "EXECUTION_ERROR",
+                            }
+                            else ExecutionStatus.FAILED
+                        )
                         await exec_repo.update_status(
                             execution.id,
-                            ExecutionStatus.FAILED,
+                            terminal_status,
                             error_code=error_code,
-                            error_message=result.get("error", "Unknown error"),
+                            error_message=sanitize_text(result.get("error", "Unknown error")),
+                            failure_category=failure_category,
                         )
                     persisted_result = True
                 if persisted_result and error_code == "UNVERIFIED":
@@ -254,7 +268,7 @@ async def _run_execution_async(task, execution_id: str):
             except Exception:
                 logger.debug("Rollback failed (session may already be clean)")
 
-            # Update status to FAILED
+            # Persist unexpected worker failures distinctly from application assertions.
             try:
                 current = await exec_repo.get_by_id(execution.id)
                 current_status = current.status if current else execution.status
@@ -262,9 +276,10 @@ async def _run_execution_async(task, execution_id: str):
                 if persisted_failure:
                     await exec_repo.update_status(
                         execution.id,
-                        ExecutionStatus.FAILED,
+                        ExecutionStatus.ERROR,
                         error_code="EXECUTION_ERROR",
                         error_message="Execution failed unexpectedly",
+                        failure_category="internal_kova",
                     )
                     await event_svc.record_execution_failed(
                         execution.id,
