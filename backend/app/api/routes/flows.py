@@ -167,6 +167,7 @@ async def get_flow(
         raise HTTPException(status_code=422, detail="Invalid flow ID")
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
+
     return flow
 
 
@@ -231,6 +232,43 @@ async def create_flow_execution(
     if flow is None:
         raise HTTPException(status_code=404, detail="Flow not found")
 
+    from sqlalchemy import select
+    from app.modules.executions.models import Execution, ExecutionStatus
+    from app.modules.flows.repository import FlowRepository
+
+    if flow.repeatability == "non_repeatable":
+        # Serialize concurrent run requests on the flow row so a single-use
+        # operation cannot be accepted twice before either execution commits.
+        locked = await db.execute(
+            select(Flow).where(Flow.id == flow.id).with_for_update()
+        )
+        flow = locked.scalar_one()
+        previous = await db.execute(
+            select(Execution.id).where(
+                Execution.flow_id == flow.id,
+                Execution.status.in_([
+                    ExecutionStatus.COMPLETED, ExecutionStatus.FAILED,
+                    ExecutionStatus.CANCELLED, ExecutionStatus.TIMEOUT,
+                    ExecutionStatus.BLOCKED, ExecutionStatus.UNVERIFIED,
+                ]),
+            ).limit(1)
+        )
+        if previous.scalar_one_or_none() is not None:
+            raise HTTPException(status_code=409, detail={
+                "code": "FLOW_NOT_REPEATABLE",
+                "message": "This flow has already run and requires an explicit reset before it can run again.",
+                "reset_strategy": flow.reset_strategy,
+            })
+
+    project_flows = await FlowRepository(db).list_by_project(flow.project_id)
+    from app.modules.flows.dependency_resolver import DependencyResolutionError, resolve_dependency_plan
+    try:
+        dependency_plan = resolve_dependency_plan(flow, project_flows)
+    except DependencyResolutionError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": exc.code, "message": str(exc), "path": exc.path,
+        }) from exc
+
     # Enforce an explicit capacity response before creating a durable record.
     active = await _count_active_executions(db, user.id)
     if active >= MAX_ACTIVE_EXECUTIONS_PER_USER:
@@ -250,6 +288,10 @@ async def create_flow_execution(
         "steps": flow.steps,
         "success_condition": flow.success_condition,
         "preconditions": flow.preconditions,
+        "dependencies": flow.dependencies or [],
+        "dependency_plan": dependency_plan,
+        "repeatability": flow.repeatability,
+        "reset_strategy": flow.reset_strategy,
         "target_url": project.base_url if project else "",
     }
     execution = await exec_service.create_execution(

@@ -158,6 +158,7 @@ async def _run_execution_async(task, execution_id: str):
                 flow_steps=(execution.flow_snapshot or {}).get("steps", flow.steps),
                 success_condition=(execution.flow_snapshot or {}).get("success_condition", flow.success_condition),
                 preconditions=(execution.flow_snapshot or {}).get("preconditions", flow.preconditions),
+                dependency_plan=(execution.flow_snapshot or {}).get("dependency_plan", []),
                 credential_store=credential_store,
                 target_url=(execution.flow_snapshot or {}).get("target_url", target_url),
                 event_recorder=event_recorder,
