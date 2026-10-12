@@ -34,3 +34,22 @@ def test_flow_rejects_duplicate_step_ids():
                 {"step_id": "same", "action": "navigate", "url": "https://example.test/other"},
             ],
         })
+
+
+def test_flow_schema_preserves_postconditions_dependencies_and_repeatability():
+    flow = FlowCreate.model_validate({
+        "project_id": "00000000-0000-0000-0000-000000000001",
+        "name": "Submit assignment",
+        "steps": [{
+            "step_id": "submit", "action": "click", "selector": "#submit",
+            "postcondition": {"text_visible": "Submission received"},
+        }],
+        "preconditions": {"text_visible": "Assignment open"},
+        "dependencies": [{"kind": "capability", "value": "authenticated(student)"}],
+        "repeatability": "non_repeatable",
+        "reset_strategy": "Create a fresh assignment for each run",
+    })
+
+    assert flow.steps[0].postcondition == {"text_visible": "Submission received"}
+    assert flow.dependencies[0].model_dump() == {"kind": "capability", "value": "authenticated(student)"}
+    assert flow.repeatability == "non_repeatable"

@@ -20,6 +20,10 @@ class FlowService:
             steps=[s.model_dump() for s in data.steps],
             success_condition=data.success_condition,
             preconditions=data.preconditions,
+            dependencies=[d.model_dump() for d in data.dependencies],
+            provides_capabilities=data.provides_capabilities,
+            repeatability=data.repeatability,
+            reset_strategy=data.reset_strategy,
         )
 
     async def get_flow(self, flow_id: uuid.UUID):
@@ -39,6 +43,10 @@ class FlowService:
             steps=steps,
             success_condition=data.success_condition,
             preconditions=data.preconditions,
+            dependencies=[d.model_dump() for d in data.dependencies] if data.dependencies is not None else None,
+            provides_capabilities=data.provides_capabilities,
+            repeatability=data.repeatability,
+            reset_strategy=data.reset_strategy,
         )
 
     async def delete_flow(self, flow_id: uuid.UUID):

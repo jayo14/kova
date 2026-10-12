@@ -20,6 +20,10 @@ class FlowRepository:
         steps: list[dict] | None = None,
         success_condition: dict | None = None,
         preconditions: dict | None = None,
+        dependencies: list[dict] | None = None,
+        provides_capabilities: list[str] | None = None,
+        repeatability: str = "repeatable",
+        reset_strategy: str | None = None,
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -30,6 +34,10 @@ class FlowRepository:
             steps=steps or [],
             success_condition=success_condition,
             preconditions=preconditions,
+            dependencies=dependencies or [],
+            provides_capabilities=provides_capabilities or [],
+            repeatability=repeatability,
+            reset_strategy=reset_strategy,
         )
         self.db.add(flow)
         await self.db.flush()
@@ -60,11 +68,15 @@ class FlowRepository:
         steps: list[dict] | None = None,
         success_condition: dict | None = None,
         preconditions: dict | None = None,
+        dependencies: list[dict] | None = None,
+        provides_capabilities: list[str] | None = None,
+        repeatability: str | None = None,
+        reset_strategy: str | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
-        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions))
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -79,6 +91,14 @@ class FlowRepository:
             flow.success_condition = success_condition
         if preconditions is not None:
             flow.preconditions = preconditions
+        if dependencies is not None:
+            flow.dependencies = dependencies
+        if provides_capabilities is not None:
+            flow.provides_capabilities = provides_capabilities
+        if repeatability is not None:
+            flow.repeatability = repeatability
+        if reset_strategy is not None:
+            flow.reset_strategy = reset_strategy
         if changed:
             flow.version += 1
         await self.db.flush()
