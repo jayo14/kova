@@ -18,6 +18,7 @@ export interface BackendFlowStep {
   value?: string | null;
   credential_id?: string | null;
   description?: string | null;
+  postcondition?: Record<string, unknown> | null;
 }
 
 export interface BackendFlow {
@@ -30,6 +31,10 @@ export interface BackendFlow {
   steps: BackendFlowStep[];
   success_condition: Record<string, unknown> | null;
   preconditions?: Record<string, unknown> | null;
+  dependencies?: Array<{ kind: "flow" | "capability"; value: string }>;
+  provides_capabilities?: string[];
+  repeatability?: "repeatable" | "non_repeatable";
+  reset_strategy?: string | null;
   created_at: string;
   updated_at: string;
   version?: number;
@@ -57,6 +62,7 @@ function stepsToStrings(steps: BackendFlow["steps"]): BackendFlowStep[] {
     value: s.value ?? null,
     credential_id: s.credential_id ?? null,
     description: s.description ?? null,
+    postcondition: s.postcondition ?? null,
   }));
 }
 
@@ -81,6 +87,10 @@ export function backendToMission(
     // outcome would be unverifiable.
     successCondition: flow.success_condition ?? null,
     preconditions: flow.preconditions ?? null,
+    dependencies: flow.dependencies ?? [],
+    providesCapabilities: flow.provides_capabilities ?? [],
+    repeatability: flow.repeatability ?? "repeatable",
+    resetStrategy: flow.reset_strategy ?? null,
     createdAt: flow.created_at,
     updatedAt: flow.updated_at,
     version: flow.version,
@@ -201,6 +211,9 @@ function formatStepForBackend(s: string | Record<string, unknown>): BackendFlowS
       value: valStr,
       credential_id: typeof obj.credential_id === "string" ? obj.credential_id : null,
       description: descStr,
+      postcondition: obj.postcondition && typeof obj.postcondition === "object"
+        ? obj.postcondition as Record<string, unknown>
+        : null,
     };
   }
   const strVal = String(s).trim();
@@ -226,6 +239,10 @@ export async function createMission(
     // (e.g. {description: ...}) breaks verification downstream.
     successCondition: input.successCondition ?? null,
     preconditions: input.preconditions ?? null,
+    dependencies: input.dependencies ?? [],
+    providesCapabilities: input.providesCapabilities ?? [],
+    repeatability: input.repeatability ?? "repeatable",
+    resetStrategy: input.resetStrategy ?? null,
   });
 
   const flow = await api.post<BackendFlow>("/api/v1/flows/", body, token);
@@ -263,6 +280,10 @@ export async function updateMission(
     patch.success_condition = input.successCondition ?? null;
   }
   if (input.preconditions !== undefined) patch.preconditions = input.preconditions;
+  if (input.dependencies !== undefined) patch.dependencies = input.dependencies;
+  if (input.providesCapabilities !== undefined) patch.providesCapabilities = input.providesCapabilities;
+  if (input.repeatability !== undefined) patch.repeatability = input.repeatability;
+  if (input.resetStrategy !== undefined) patch.resetStrategy = input.resetStrategy;
 
   const body = stripNulls(mapKeysToSnake(patch));
   try {
@@ -320,14 +341,10 @@ export async function runMission(
   token?: string
 ): Promise<MissionExecution | null> {
   if (!missionId) return null;
-  try {
-    const ex = await api.post<BackendExecution>(
-      `/api/v1/flows/${encodeURIComponent(missionId)}/executions`,
-      undefined,
-      { token, timeoutMs: 30000 }
-    );
-    return backendToExecution(ex);
-  } catch {
-    return null;
-  }
+  const ex = await api.post<BackendExecution>(
+    `/api/v1/flows/${encodeURIComponent(missionId)}/executions`,
+    undefined,
+    { token, timeoutMs: 30000 }
+  );
+  return backendToExecution(ex);
 }

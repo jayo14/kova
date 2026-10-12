@@ -6,6 +6,7 @@ interface MissionStep {
   value?: string | null;
   credential_id?: string | null;
   description?: string | null;
+  postcondition?: Record<string, unknown> | null;
 }
 
 interface MissionJourneyProps {
@@ -47,6 +48,11 @@ export function MissionJourney({ steps }: MissionJourneyProps) {
                 <p className="text-body-sm text-foreground/90 leading-snug">
                   {label}
                 </p>
+                {step.postcondition && Object.keys(step.postcondition).length > 0 && (
+                  <p className="mt-1 text-body-xs text-muted-foreground">
+                    Verify: {Object.entries(step.postcondition).map(([key, value]) => `${key} ${String(value)}`).join(", ")}
+                  </p>
+                )}
               </div>
             </li>
           );

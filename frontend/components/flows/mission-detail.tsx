@@ -169,6 +169,23 @@ export function MissionDetail({
           {mission.version !== undefined && (
             <p className="text-caption text-muted-foreground">Flow version {mission.version}</p>
           )}
+          <section aria-label="Execution policy" className="space-y-2">
+            <h2 className="text-body-sm font-semibold uppercase tracking-wider text-caption text-muted-foreground">Execution policy</h2>
+            <p className="text-body-sm text-foreground/80">
+              {mission.repeatability === "non_repeatable" ? "Single run" : "Repeatable"}
+              {mission.resetStrategy ? ` · Reset: ${mission.resetStrategy}` : ""}
+            </p>
+            {(mission.dependencies?.length ?? 0) > 0 && (
+              <ul className="list-disc space-y-1 pl-5 text-body-sm text-foreground/80">
+                {mission.dependencies?.map((dependency) => (
+                  <li key={`${dependency.kind}:${dependency.value}`}>{dependency.kind}: {dependency.value}</li>
+                ))}
+              </ul>
+            )}
+            {(mission.providesCapabilities?.length ?? 0) > 0 && (
+              <p className="text-body-xs text-muted-foreground">Provides: {mission.providesCapabilities?.join(", ")}</p>
+            )}
+          </section>
           {mission.preconditions && Object.keys(mission.preconditions).length > 0 && (
             <section aria-label="Prerequisites" className="space-y-2">
               <h2 className="text-body-sm font-semibold uppercase tracking-wider text-caption text-muted-foreground">Prerequisites</h2>
