@@ -224,6 +224,6 @@ async def test_report_includes_plain_english_why_it_failed(db_session):
             data = resp.json()
             assert data["why_it_failed"] == execution.error_message
             assert "Why it failed" in data["html"]
-            assert "expected: '/dashboard', got: '/login'" in data["html"]
+            assert "expected: &#x27;/dashboard&#x27;, got: &#x27;/login&#x27;" in data["html"]
     finally:
         app.dependency_overrides.clear()

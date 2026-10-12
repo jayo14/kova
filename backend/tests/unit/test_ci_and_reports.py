@@ -163,6 +163,17 @@ async def test_execution_report_json_and_html(db_session):
             assert "Kova Execution Report" in public_resp.text
             assert "Report Flow" in public_resp.text
 
+            incomplete = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+            db_session.add(incomplete)
+            await db_session.commit()
+            incomplete_resp = await client.get(
+                f"/api/v1/executions/{incomplete.id}/report?format=json",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert incomplete_resp.json()["status"] == "UNVERIFIED"
+            assert incomplete_resp.json()["persisted_status"] == "COMPLETED"
+            assert incomplete_resp.json()["verification"]["passed"] is False
+
             # 3. Invalid signature rejected
             bad_resp = await client.get(
                 f"/api/v1/executions/{execution.id}/report?signature=invalid_sig"
