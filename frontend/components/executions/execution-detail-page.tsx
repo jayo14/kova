@@ -8,7 +8,7 @@ import type {
 } from "@/lib/types";
 import type { Evidence } from "@/lib/api/evidence";
 import { useExecutionRealtime } from "@/hooks/use-execution-realtime";
-import { cancelExecution, createExecution } from "@/lib/api/executions";
+import { cancelExecution, createExecution, getExecutionReport, type ExecutionReport } from "@/lib/api/executions";
 import { getExecutionEvidence, refreshEvidenceUrl } from "@/lib/api/evidence";
 import { ExecutionHeader } from "./execution-header";
 import { ExecutionBrowser } from "./execution-browser";
@@ -19,6 +19,7 @@ import { EvidenceList } from "./evidence-list";
 import { EvidenceViewer } from "./evidence-viewer";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { terminalStatuses } from "@/lib/types";
+import { normalizeExecutionStatus } from "@/lib/executions/status";
 
 interface ExecutionDetailPageProps {
   initialExecution: ExecutionDetailType;
@@ -37,9 +38,11 @@ export function ExecutionDetailPage({
   const [isRetrying, startRetryTransition] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
-  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const [evidenceLoaded, setEvidenceLoaded] = useState(false);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
+  const [report, setReport] = useState<ExecutionReport | null>(null);
+  const [reportLoaded, setReportLoaded] = useState(false);
 
   // Realtime execution stream management via standardized hook
   const {
@@ -122,15 +125,32 @@ export function ExecutionDetailPage({
   }, [execution.missionId, router]);
 
   const displayError = actionError || streamError;
+  const reportLoading = terminalStatuses.includes(execution.status) && !reportLoaded;
+  const evidenceLoading = terminalStatuses.includes(execution.status) && !evidenceLoaded;
+
+  const reportStatus = report?.status
+    ? normalizeExecutionStatus(report.status)
+    : execution.status === "completed" ? "unverified" : execution.status;
+  const reportExecution = {
+    ...execution,
+    status: reportStatus,
+    error: report?.diagnosis?.summary || execution.error,
+  };
+
+  useEffect(() => {
+    if (!terminalStatuses.includes(execution.status)) return;
+    let cancelled = false;
+    getExecutionReport(execution.id)
+      .then((value) => { if (!cancelled) setReport(value); })
+      .finally(() => { if (!cancelled) setReportLoaded(true); });
+    return () => { cancelled = true; };
+  }, [execution.id, execution.status]);
 
   // Fetch evidence when execution reaches terminal state
   useEffect(() => {
     if (!terminalStatuses.includes(execution.status)) return;
 
     let cancelled = false;
-    setEvidenceLoading(true);
-    setEvidenceError(null);
-
     getExecutionEvidence(execution.id)
       .then((items) => {
         if (!cancelled) {
@@ -144,7 +164,7 @@ export function ExecutionDetailPage({
         }
       })
       .finally(() => {
-        if (!cancelled) setEvidenceLoading(false);
+        if (!cancelled) setEvidenceLoaded(true);
       });
 
     return () => { cancelled = true; };
@@ -154,7 +174,7 @@ export function ExecutionDetailPage({
     <div className="w-full max-w-5xl mx-auto space-y-6">
       {/* Header with Live Indicator */}
       <ExecutionHeader
-        execution={execution}
+        execution={reportExecution}
         connectionStatus={connectionStatus}
         onStopClick={() => setCancelOpen(true)}
         onRetryClick={handleRetry}
@@ -174,8 +194,8 @@ export function ExecutionDetailPage({
       {/* Dominant Browser Workspace Viewport */}
       <ExecutionBrowser
         url={liveUrl}
-        status={execution.status}
-        errorMessage={execution.error}
+        status={reportExecution.status}
+        errorMessage={reportExecution.error}
         latestScreenshot={liveScreenshot}
         currentAction={currentAction}
         onRetry={handleRetry}
@@ -192,13 +212,13 @@ export function ExecutionDetailPage({
 
         <div className="space-y-4">
           <ExecutionResult
-            execution={execution}
+            execution={reportExecution}
             onRetry={handleRetry}
             isRetrying={isRetrying}
           />
 
           {/* Evidence Section */}
-          {execution.status === "completed" || execution.status === "failed" ? (
+          {terminalStatuses.includes(execution.status) ? (
             <div className="rounded-xl border border-border bg-card/50 p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -224,6 +244,68 @@ export function ExecutionDetailPage({
           ) : null}
         </div>
       </div>
+
+      {terminalStatuses.includes(execution.status) && (
+        <section aria-label="Execution report" className="rounded-xl border border-border bg-card/50 p-4 sm:p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-heading font-semibold">Execution report</h2>
+            <span className="text-caption text-muted-foreground">{reportLoading ? "Loading persisted report…" : report ? `Flow version ${execution.flowVersion ?? 1} · ${reportStatus.toUpperCase()}` : "Detailed report unavailable"}</span>
+          </div>
+          <div className="grid gap-2 text-caption text-muted-foreground sm:grid-cols-2">
+            <p>Execution ID: <span className="font-mono text-foreground">{execution.id}</span></p>
+            <p>Started: {execution.startedAt ? new Date(execution.startedAt).toLocaleString() : "Not recorded"}</p>
+            <p>Completed: {execution.completedAt ? new Date(execution.completedAt).toLocaleString() : "Still in progress"}</p>
+            <p>Result: {reportStatus === "completed" ? "Required outcomes verified" : "Not conclusively passed"}</p>
+          </div>
+          {report?.diagnosis && (
+            <div className="rounded-lg border border-border bg-background/60 p-4 space-y-2">
+              <h3 className="text-body-sm font-semibold">What Kova observed</h3>
+              <p className="text-body-sm">{report.diagnosis.observed}</p>
+              <p className="text-caption text-muted-foreground">Classification: {report.failureCategory?.replaceAll("_", " ") || "not classified"}. {report.diagnosis.reason}</p>
+              <p className="text-body-sm"><strong>Next:</strong> {report.diagnosis.nextStep}</p>
+              {report.diagnosis.hypothesis && <p className="text-caption text-muted-foreground">Hypothesis: {report.diagnosis.hypothesis}</p>}
+            </div>
+          )}
+          {report && (
+            <>
+              <div className="flex flex-wrap gap-2 text-caption">
+                {Object.entries(report.stepCounts).map(([status, count]) => (
+                  <span key={status} className="rounded-md border border-border px-2 py-1">{status}: {count}</span>
+                ))}
+              </div>
+              {report.steps.some((step) => step.status === "failed" || step.status === "unverified" || step.status === "error") && (
+                <button type="button" onClick={() => {
+                  const first = report.steps.findIndex((step) => step.status === "failed" || step.status === "unverified" || step.status === "error");
+                  document.getElementById(`report-step-${first}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                }} className="text-body-sm font-medium text-primary hover:underline">
+                  Jump to first failed or unverified step
+                </button>
+              )}
+              {report.steps.length ? (
+                <ol className="space-y-2">
+                  {report.steps.map((step, index) => (
+                    <li id={`report-step-${index}`} key={String(step.stepId || index)} className="rounded-lg border border-border p-3 scroll-mt-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-body-sm font-medium">Step {Number(step.sequence ?? index) + 1}: {String(step.action || "Recorded action")}</span>
+                        <span className="text-caption uppercase text-muted-foreground">{String(step.status || "incomplete")}</span>
+                      </div>
+                      {step.expected != null && <p className="mt-1 text-caption text-muted-foreground">Expected: {String(step.expected)}</p>}
+                      {step.verification != null && (step.verification as Record<string, unknown>).observed != null && <p className="mt-1 text-caption text-muted-foreground">Observed: {String((step.verification as Record<string, unknown>).observed)}</p>}
+                      {step.url != null && <p className="mt-1 text-caption font-mono text-muted-foreground break-all">{String(step.url)}</p>}
+                      {step.verification != null && <p className="mt-1 text-caption">Verification: {String((step.verification as Record<string, unknown>).verdict || "inconclusive")}</p>}
+                      {evidence.filter((item) => Number(item.metadata?.stepIndex) === Number(step.sequence) && item.type === "SCREENSHOT").map((item) => (
+                        <button key={item.id} type="button" onClick={() => setSelectedEvidence(item)} className="mt-2 inline-flex items-center gap-1.5 text-caption text-primary hover:underline">
+                          <MaterialIcon name="image" size={14} /> View step screenshot: {item.title}
+                        </button>
+                      ))}
+                    </li>
+                  ))}
+                </ol>
+              ) : <p className="text-body-sm text-muted-foreground">No step events were persisted for this execution.</p>}
+            </>
+          )}
+        </section>
+      )}
 
       {/* Cancel confirmation dialog */}
       <ExecutionCancelDialog
