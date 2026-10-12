@@ -115,3 +115,95 @@ async def ci_run(
         executions=executions,
         count=len(executions),
     )
+
+
+from app.modules.validation.service import ValidationService
+from app.modules.validation.schemas import ValidationCreate, ValidationRunRead
+
+
+@router.post("/validate", response_model=ValidationRunRead, status_code=status.HTTP_201_CREATED)
+async def ci_validate(
+    data: ValidationCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Trigger an explainable, risk-aware continuous validation run with change impact analysis."""
+    # Verify project ownership
+    stmt = select(Project).where(Project.id == data.project_id, Project.user_id == user.id)
+    project_res = await db.execute(stmt)
+    project = project_res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found or not owned by user",
+        )
+
+    service = ValidationService(db)
+    vrun = await service.create_validation_run(data)
+    await db.commit()
+    await db.refresh(vrun)
+    return vrun
+
+
+@router.get("/validate/{validation_run_id}", response_model=ValidationRunRead)
+async def get_ci_validation(
+    validation_run_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Poll the status, baseline diff, and exit code of a continuous validation run."""
+    service = ValidationService(db)
+    vrun = await service.evaluate_validation_run(validation_run_id)
+    if not vrun:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Validation run not found")
+
+    # Verify project ownership
+    stmt = select(Project).where(Project.id == vrun.project_id, Project.user_id == user.id)
+    project_res = await db.execute(stmt)
+    if not project_res.scalar_one_or_none():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    await db.commit()
+    await db.refresh(vrun)
+    return vrun
+
+
+@router.get("/validate/{validation_run_id}/report")
+async def get_ci_validation_report(
+    validation_run_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve full traceable validation report with impact reasons, baseline comparisons, and execution breakdown."""
+    service = ValidationService(db)
+    vrun = await service.evaluate_validation_run(validation_run_id)
+    if not vrun:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Validation run not found")
+
+    # Verify project ownership
+    stmt = select(Project).where(Project.id == vrun.project_id, Project.user_id == user.id)
+    project_res = await db.execute(stmt)
+    project = project_res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    await db.commit()
+    await db.refresh(vrun)
+
+    return {
+        "validation_run_id": str(vrun.id),
+        "project_id": str(vrun.project_id),
+        "project_name": project.name,
+        "commit_sha": vrun.commit_sha,
+        "branch": vrun.branch,
+        "scope": vrun.scope,
+        "status": vrun.status,
+        "exit_code": vrun.exit_code,
+        "summary": vrun.summary,
+        "impact_report": vrun.impact_report,
+        "baseline_diff": vrun.baseline_diff,
+        "selected_flow_ids": vrun.selected_flow_ids,
+        "execution_ids": vrun.execution_ids,
+        "created_at": vrun.created_at.isoformat() if vrun.created_at else None,
+        "completed_at": vrun.completed_at.isoformat() if vrun.completed_at else None,
+    }
