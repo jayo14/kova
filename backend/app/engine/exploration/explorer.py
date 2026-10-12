@@ -1601,6 +1601,14 @@ class ExplorationEngine:
         unique: list[DiscoveredMission] = []
         seen_candidates: set[tuple[str, str, str]] = set()
         for mission in missions:
+            # Generated actions already use locator auto-waiting and navigation
+            # uses DOM readiness. Fixed sleeps add latency and make replay less
+            # reliable, so keep generated candidates state-driven.
+            mission.steps = [
+                step for step in mission.steps
+                if not isinstance(step, dict)
+                or str(step.get("type") or step.get("action") or "").lower() != "wait"
+            ]
             evidence_key = (mission.category or "", mission.name.strip().casefold(), (mission.route_analysis or {}).get("path", ""))
             if evidence_key in seen_candidates:
                 continue

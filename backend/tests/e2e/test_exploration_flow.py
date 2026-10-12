@@ -85,6 +85,7 @@ async def test_exploration_engine_goal_mission():
     goal_missions = [m for m in missions if "find pricing page" in m.name]
     assert len(goal_missions) == 1, "Should have a goal-directed mission"
     assert goal_missions[0].recommended is True
+    assert all(step.get("type") != "wait" for step in goal_missions[0].steps)
     # Confidence must be honest, not fabricated (readiness §33): a goal mission
     # that keyword-matches a control but can only verify a state change is
     # deliberately capped below auth/search journeys.

@@ -45,6 +45,7 @@ ROOT_PAGE = """<!DOCTYPE html>
 <head><title>Kova Test App</title></head>
 <body>
     <h1 id="welcome">Welcome to Kova Test</h1>
+    <nav><a href="/login">Sign in</a></nav>
     <form id="login-form">
         <input type="text" id="username" name="username" placeholder="Username" />
         <input type="password" id="password" name="password" placeholder="Password" />
