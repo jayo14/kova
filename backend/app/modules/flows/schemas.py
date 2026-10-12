@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -21,6 +22,7 @@ class FlowStep(BaseModel):
     value: str | None = None
     credential_id: str | None = None
     description: str | None = None
+    postcondition: dict | None = None
 
     model_config = ConfigDict(extra="allow")
 
@@ -35,6 +37,11 @@ class FlowStep(BaseModel):
         return self
 
 
+class FlowDependency(BaseModel):
+    kind: Literal["flow", "capability"]
+    value: str = Field(min_length=1, max_length=200)
+
+
 class FlowCreate(BaseModel):
     project_id: uuid.UUID
     name: str
@@ -44,6 +51,10 @@ class FlowCreate(BaseModel):
     steps: list[FlowStep] = Field(default_factory=list)
     success_condition: dict | None = None
     preconditions: dict | None = None
+    dependencies: list[FlowDependency] = Field(default_factory=list)
+    provides_capabilities: list[str] = Field(default_factory=list)
+    repeatability: Literal["repeatable", "non_repeatable"] = "repeatable"
+    reset_strategy: str | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -61,6 +72,10 @@ class FlowUpdate(BaseModel):
     steps: list[FlowStep] | None = None
     success_condition: dict | None = None
     preconditions: dict | None = None
+    dependencies: list[FlowDependency] | None = None
+    provides_capabilities: list[str] | None = None
+    repeatability: Literal["repeatable", "non_repeatable"] | None = None
+    reset_strategy: str | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -81,5 +96,9 @@ class FlowRead(BaseModel):
     success_condition: dict | None
     preconditions: dict | None
     version: int
+    dependencies: list[dict]
+    provides_capabilities: list[str]
+    repeatability: str
+    reset_strategy: str | None
     created_at: datetime
     updated_at: datetime
