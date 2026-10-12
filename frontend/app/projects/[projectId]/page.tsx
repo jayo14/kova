@@ -12,7 +12,10 @@ import {
   ProjectMissions,
   ProjectActivity,
   ProjectCommandInput,
+  ProjectKnowledge,
+  ProjectValidations,
 } from "@/components/projects";
+import { getProject, getProjectKnowledge, getProjectValidations } from "@/lib/api/projects";
 import type { ProjectActivity as Activity, Mission, ExecutionDetail, MissionExecution } from "@/lib/types";
 
 interface PageProps {
@@ -87,9 +90,11 @@ export default async function ProjectDetailPage({ params }: PageProps) {
   const project = await getProject(projectId, token);
   if (!project) notFound();
 
-  const [missions, executions] = await Promise.all([
+  const [missions, executions, knowledge, validations] = await Promise.all([
     getMissions(projectId, token).catch(() => []),
     getExecutions({ projectId: project.id }, token).catch(() => []),
+    getProjectKnowledge(projectId, token).catch(() => null),
+    getProjectValidations(projectId, token).catch(() => []),
   ]);
 
   const executionMap = new Map<string, MissionExecution>();
@@ -128,6 +133,8 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <div className="grid gap-6 lg:grid-cols-3">
             <div className="space-y-6 lg:col-span-2">
               <ProjectOverview project={project} />
+              <ProjectKnowledge knowledge={knowledge} />
+              <ProjectValidations validations={validations} projectId={project.id} />
               <ProjectMissions
                 missions={missions}
                 executions={executionMap}

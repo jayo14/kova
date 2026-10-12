@@ -12,3 +12,5 @@ export { ProjectMissions } from "./project-missions";
 export { ProjectActivity } from "./project-activity";
 export { ProjectCommandInput } from "./project-command";
 export { ProjectSettingsDialog } from "./project-settings";
+export { ProjectKnowledge } from "./project-knowledge";
+export { ProjectValidations } from "./project-validations";
