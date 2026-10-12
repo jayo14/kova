@@ -262,10 +262,14 @@ export interface Mission {
   description: string | null;
   persona: string | null;
   objective: string;
-  steps: Array<{ step_id?: string; action: string; selector?: string | null; value?: string | null; credential_id?: string | null; description?: string | null }>;
+  steps: Array<{ step_id?: string; action: string; selector?: string | null; value?: string | null; credential_id?: string | null; description?: string | null; postcondition?: Record<string, unknown> | null }>;
   /** Machine-verifiable success condition. Must stay structured — never stringified. */
   successCondition: Record<string, unknown> | null;
   preconditions?: Record<string, unknown> | null;
+  dependencies?: Array<{ kind: "flow" | "capability"; value: string }>;
+  providesCapabilities?: string[];
+  repeatability?: "repeatable" | "non_repeatable";
+  resetStrategy?: string | null;
   createdAt: string;
   updatedAt: string;
   version?: number;
@@ -291,6 +295,10 @@ export interface CreateMissionInput {
   /** Structured verification condition — passed through verbatim to the backend. */
   successCondition?: Record<string, unknown>;
   preconditions?: Record<string, unknown>;
+  dependencies?: Array<{ kind: "flow" | "capability"; value: string }>;
+  providesCapabilities?: string[];
+  repeatability?: "repeatable" | "non_repeatable";
+  resetStrategy?: string;
 }
 
 export interface UpdateMissionInput {
@@ -302,6 +310,10 @@ export interface UpdateMissionInput {
   /** Structured verification condition — passed through verbatim to the backend. */
   successCondition?: Record<string, unknown>;
   preconditions?: Record<string, unknown>;
+  dependencies?: Array<{ kind: "flow" | "capability"; value: string }>;
+  providesCapabilities?: string[];
+  repeatability?: "repeatable" | "non_repeatable";
+  resetStrategy?: string;
 }
 
 // ── Credentials ──────────────────────────────────────────
