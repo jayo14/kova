@@ -117,6 +117,7 @@ class FlowRunner:
         execution_id: uuid.UUID,
         flow_steps: list[dict],
         success_condition: dict | None = None,
+        preconditions: dict | None = None,
         credential_store: CredentialStore | None = None,
         target_url: str = "",
         event_recorder: Callable | None = None,
@@ -148,7 +149,7 @@ class FlowRunner:
             result = await asyncio.wait_for(
                 self._execute_inner(
                     execution_id, flow_steps, success_condition,
-                    credential_store, target_url, event_recorder,
+                    credential_store, target_url, event_recorder, preconditions,
                     objective, expected_outcome, fail_on_healed,
                 ),
                 timeout=effective_timeout,
@@ -174,6 +175,7 @@ class FlowRunner:
         credential_store: CredentialStore | None,
         target_url: str,
         event_recorder: Callable | None,
+        preconditions: dict | None = None,
         objective: str | None = None,
         expected_outcome: str | None = None,
         fail_on_healed: bool | None = None,
@@ -223,6 +225,7 @@ class FlowRunner:
                 await self._emit_events(ctx, event_recorder)
 
             browser.on_network_error = _record_network_error
+            verifier = Verifier(browser.page)
 
             # Observe URL/title changes for the viewport (framenavigated)
             nav_unbind = self._bind_nav_observer(browser, exec_id)
@@ -249,14 +252,30 @@ class FlowRunner:
                 ctx.record_event(EventTypes.BROWSER_SCREENSHOT, ss_data)
                 await self._emit_events(ctx, event_recorder)
 
+            if preconditions:
+                prerequisite_result = await verifier.verify(preconditions)
+                ctx.record_event(EventTypes.VERIFICATION_FAILED if not prerequisite_result.passed else EventTypes.VERIFICATION_PASSED, {
+                    "kind": "preconditions", **prerequisite_result.to_dict()
+                })
+                await self._emit_events(ctx, event_recorder)
+                if not prerequisite_result.passed:
+                    return {
+                        "success": False,
+                        "execution_id": str(execution_id),
+                        "error": "Required application state could not be verified before execution",
+                        "error_code": "PREREQUISITE_UNSATISFIED",
+                        "verification": prerequisite_result.to_dict(),
+                        "events": ctx.events,
+                        "observations": ctx.observations,
+                        "state": "BLOCKED",
+                    }
+
             # Step 6: Execute steps
             action_executor = ActionExecutor(
                 browser.page,
                 event_recorder=None,
                 credential_store=credential_store,
             )
-            verifier = Verifier(browser.page)
-
             for i, step in enumerate(flow_steps):
                 # Cancellation gate — checked at every step boundary
                 if await is_cancel_requested(exec_id):
@@ -898,6 +917,7 @@ class FlowRunner:
                 )
                 ctx.record_event(EventTypes.RECOVERY_STARTED, {
                     "step": step_index,
+                    "step_id": step.get("step_id") if isinstance(step, dict) else None,
                     "attempt": attempt,
                     "error_code": e.error_code,
                 })
@@ -924,6 +944,7 @@ class FlowRunner:
         ctx.record_observation(observation)
         ctx.record_event(EventTypes.AGENT_OBSERVED, {
             "step": step_index,
+            "step_id": step.get("step_id") if isinstance(step, dict) else None,
             "observation": observation,
         })
         await self._emit_events(ctx, event_recorder)
@@ -934,6 +955,7 @@ class FlowRunner:
 
         ctx.record_event(EventTypes.ACTION_STARTED, {
             "step": step_index,
+            "step_id": step.get("step_id") if isinstance(step, dict) else None,
             "type": action_type,
             "target": raw_action.get("target"),
         })

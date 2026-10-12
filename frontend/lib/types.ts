@@ -80,6 +80,9 @@ export interface SuggestedMission {
     elementsCount: number;
   };
   estimatedTimeSeconds?: number;
+  expectationSource?: "observed" | "inferred" | "unspecified";
+  reviewRequired?: boolean;
+  discoveryEvidence?: Array<Record<string, unknown>>;
 }
 
 export interface CredentialRequest {
@@ -259,11 +262,13 @@ export interface Mission {
   description: string | null;
   persona: string | null;
   objective: string;
-  steps: Array<{ action: string; selector?: string | null; value?: string | null; credential_id?: string | null; description?: string | null }>;
+  steps: Array<{ step_id?: string; action: string; selector?: string | null; value?: string | null; credential_id?: string | null; description?: string | null }>;
   /** Machine-verifiable success condition. Must stay structured — never stringified. */
   successCondition: Record<string, unknown> | null;
+  preconditions?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
+  version?: number;
 }
 
 export interface MissionExecution {
@@ -271,6 +276,7 @@ export interface MissionExecution {
   missionId: string;
   status: ExecutionStatus;
   createdAt: string;
+  flowVersion?: number;
 }
 
 export interface CreateMissionInput {
@@ -284,6 +290,7 @@ export interface CreateMissionInput {
   steps?: Array<string | Record<string, unknown>>;
   /** Structured verification condition — passed through verbatim to the backend. */
   successCondition?: Record<string, unknown>;
+  preconditions?: Record<string, unknown>;
 }
 
 export interface UpdateMissionInput {
@@ -294,6 +301,7 @@ export interface UpdateMissionInput {
   steps?: Array<string | Record<string, unknown>>;
   /** Structured verification condition — passed through verbatim to the backend. */
   successCondition?: Record<string, unknown>;
+  preconditions?: Record<string, unknown>;
 }
 
 // ── Credentials ──────────────────────────────────────────

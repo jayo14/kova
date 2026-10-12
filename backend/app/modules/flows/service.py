@@ -19,6 +19,7 @@ class FlowService:
             objective=data.objective,
             steps=[s.model_dump() for s in data.steps],
             success_condition=data.success_condition,
+            preconditions=data.preconditions,
         )
 
     async def get_flow(self, flow_id: uuid.UUID):
@@ -37,6 +38,7 @@ class FlowService:
             objective=data.objective,
             steps=steps,
             success_condition=data.success_condition,
+            preconditions=data.preconditions,
         )
 
     async def delete_flow(self, flow_id: uuid.UUID):

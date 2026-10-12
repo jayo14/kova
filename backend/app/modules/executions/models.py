@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infrastructure.database.base import Base
+from app.infrastructure.database.base import Base, JSONCompat
 
 
 class ExecutionStatus(str, enum.Enum):
@@ -40,6 +40,8 @@ class Execution(Base):
     flow_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("flows.id", ondelete="CASCADE"), nullable=False
     )
+    flow_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    flow_snapshot: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=ExecutionStatus.CREATED.value
     )

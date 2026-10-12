@@ -13,8 +13,12 @@ class ExecutionRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def create(self, flow_id: uuid.UUID) -> Execution:
-        execution = Execution(flow_id=flow_id)
+    async def create(self, flow_id: uuid.UUID, *, flow_version: int = 1, flow_snapshot: dict | None = None) -> Execution:
+        execution = Execution(
+            flow_id=flow_id,
+            flow_version=flow_version,
+            flow_snapshot=flow_snapshot or {},
+        )
         self.db.add(execution)
         await self.db.flush()
         return execution

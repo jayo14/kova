@@ -19,6 +19,7 @@ class FlowRepository:
         objective: str | None = None,
         steps: list[dict] | None = None,
         success_condition: dict | None = None,
+        preconditions: dict | None = None,
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -28,6 +29,7 @@ class FlowRepository:
             objective=objective,
             steps=steps or [],
             success_condition=success_condition,
+            preconditions=preconditions,
         )
         self.db.add(flow)
         await self.db.flush()
@@ -57,10 +59,12 @@ class FlowRepository:
         objective: str | None = None,
         steps: list[dict] | None = None,
         success_condition: dict | None = None,
+        preconditions: dict | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -73,6 +77,10 @@ class FlowRepository:
             flow.steps = steps
         if success_condition is not None:
             flow.success_condition = success_condition
+        if preconditions is not None:
+            flow.preconditions = preconditions
+        if changed:
+            flow.version += 1
         await self.db.flush()
         await self.db.refresh(flow)
         return flow

@@ -15,6 +15,7 @@ class ExecutionRead(BaseModel):
 
     id: uuid.UUID
     flow_id: uuid.UUID
+    flow_version: int = 1
     status: ExecutionStatus
     started_at: datetime | None
     completed_at: datetime | None

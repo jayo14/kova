@@ -155,13 +155,14 @@ async def _run_execution_async(task, execution_id: str):
         try:
             result = await runner.execute(
                 execution_id=execution.id,
-                flow_steps=flow.steps,
-                success_condition=flow.success_condition,
+                flow_steps=(execution.flow_snapshot or {}).get("steps", flow.steps),
+                success_condition=(execution.flow_snapshot or {}).get("success_condition", flow.success_condition),
+                preconditions=(execution.flow_snapshot or {}).get("preconditions", flow.preconditions),
                 credential_store=credential_store,
-                target_url=target_url,
+                target_url=(execution.flow_snapshot or {}).get("target_url", target_url),
                 event_recorder=event_recorder,
                 timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
-                objective=flow.objective,
+                objective=(execution.flow_snapshot or {}).get("objective", flow.objective),
             )
 
             # Persist any remaining events from the runner
@@ -205,7 +206,7 @@ async def _run_execution_async(task, execution_id: str):
                             error_code=error_code,
                             error_message=result.get("error", "Actions completed but mission could not be verified"),
                         )
-                    elif error_code == "AUTH_BLOCKED":
+                    elif error_code in ("AUTH_BLOCKED", "PREREQUISITE_UNSATISFIED"):
                         await exec_repo.update_status(
                             execution.id,
                             ExecutionStatus.BLOCKED,

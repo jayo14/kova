@@ -169,6 +169,20 @@ async def test_runner_fails_on_verification(test_server):
     assert "verification_failed" in result.get("error_code", "").lower()
 
 
+@pytest.mark.asyncio
+async def test_runner_blocks_when_preconditions_are_not_satisfied(test_server):
+    result = await FlowRunner().execute(
+        execution_id=uuid.uuid4(),
+        flow_steps=[],
+        preconditions={"text_visible": "Authenticated account home"},
+        target_url=f"{test_server}/login",
+    )
+    assert result["success"] is False
+    assert result["state"] == "BLOCKED"
+    assert result["error_code"] == "PREREQUISITE_UNSATISFIED"
+    assert result["verification"]["passed"] is False
+
+
 # --- Failure handling ---
 
 

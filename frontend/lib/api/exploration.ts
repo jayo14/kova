@@ -443,6 +443,9 @@ function mapCandidateMissions(rawList: unknown[]): SuggestedMission[] {
           ? (m.successCondition as Record<string, unknown>)
           : null,
       recommended: Boolean(m.recommended),
+      expectationSource: m.expectation_source === "observed" || m.expectation_source === "inferred" ? m.expectation_source : "unspecified",
+      reviewRequired: m.review_required !== false,
+      discoveryEvidence: Array.isArray(m.discovery_evidence) ? m.discovery_evidence as Array<Record<string, unknown>> : [],
     };
   });
 }
