@@ -23,6 +23,7 @@ class ExecutionRepository:
         statement = select(Execution).where(Execution.id == execution_id)
         if for_update:
             statement = statement.with_for_update()
+        statement = statement.execution_options(populate_existing=True)
         result = await self.db.execute(statement)
         return result.scalar_one_or_none()
 
@@ -58,7 +59,10 @@ class ExecutionRepository:
         # Serialize lifecycle updates for this row on PostgreSQL so a late
         # worker cannot race a cancellation into a terminal-state overwrite.
         result = await self.db.execute(
-            select(Execution).where(Execution.id == execution_id).with_for_update()
+            select(Execution)
+            .where(Execution.id == execution_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         execution = result.scalar_one_or_none()
         if execution is None:

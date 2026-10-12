@@ -235,13 +235,16 @@ async def _run_execution_async(task, execution_id: str):
                     )
             await db.commit()
 
+            final_execution = await exec_repo.get_by_id(execution.id)
+            final_status = final_execution.status if final_execution else "FAILED"
+
             return {
-                "status": "completed" if result.get("success") else "failed",
+                "status": final_status.lower(),
                 "execution_id": execution_id,
             }
 
         except Exception as e:
-            logger.exception("Execution %s failed with exception", execution_id)
+            logger.error("Execution %s failed with %s", execution_id, type(e).__name__)
 
             # Roll back any broken session state before attempting recovery
             try:
@@ -259,7 +262,7 @@ async def _run_execution_async(task, execution_id: str):
                         execution.id,
                         ExecutionStatus.FAILED,
                         error_code="EXECUTION_ERROR",
-                        error_message=str(e),
+                        error_message="Execution failed unexpectedly",
                     )
                     await event_svc.record_execution_failed(
                         execution.id,
