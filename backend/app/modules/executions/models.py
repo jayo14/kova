@@ -20,6 +20,7 @@ class ExecutionStatus(str, enum.Enum):
     RESUMING = "RESUMING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    ERROR = "ERROR"
     CANCELLED = "CANCELLED"
     TIMEOUT = "TIMEOUT"
     BLOCKED = "BLOCKED"
@@ -53,6 +54,7 @@ class Execution(Base):
     )
     error_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

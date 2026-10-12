@@ -21,6 +21,7 @@ class ExecutionRead(BaseModel):
     completed_at: datetime | None
     error_code: str | None
     error_message: str | None
+    failure_category: str | None = None
     created_at: datetime
     updated_at: datetime
 
