@@ -20,6 +20,7 @@ export const humanStatusLabels: Record<ExecutionStatus, string> = {
   resuming: "Resuming Kova",
   completed: "Completed",
   failed: "Execution failed",
+  error: "Execution infrastructure error",
   cancelled: "Execution cancelled",
   timeout: "Execution timed out",
   blocked: "Mission blocked",
@@ -38,6 +39,7 @@ export const humanStatusShortLabels: Record<ExecutionStatus, string> = {
   resuming: "Resuming",
   completed: "Completed",
   failed: "Failed",
+  error: "Error",
   cancelled: "Cancelled",
   timeout: "Timed out",
   blocked: "Blocked",
@@ -70,6 +72,15 @@ export function getExecutionStatusConfig(status: ExecutionStatus): StatusStyleCo
         badgeClass: "bg-destructive/10 text-destructive border border-destructive/20",
         dotClass: "bg-destructive",
         iconName: "error",
+        isAnimated: false,
+      };
+
+    case "error":
+      return {
+        label: humanStatusLabels.error,
+        badgeClass: "bg-orange-500/10 text-orange-700 dark:text-orange-400 border border-orange-500/20",
+        dotClass: "bg-orange-600",
+        iconName: "warning",
         isAnimated: false,
       };
 

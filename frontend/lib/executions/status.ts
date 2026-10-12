@@ -28,6 +28,7 @@ export const BACKEND_EXECUTION_STATUSES = [
   "RESUMING",
   "COMPLETED",
   "FAILED",
+  "ERROR",
   "CANCELLED",
   "TIMEOUT",
   "BLOCKED",
@@ -48,6 +49,7 @@ const VALID_FRONTEND_STATUSES = new Set<ExecutionStatus>([
   "resuming",
   "completed",
   "failed",
+  "error",
   "cancelled",
   "timeout",
   "blocked",
@@ -80,6 +82,7 @@ export function isTerminalStatus(status: ExecutionStatus | string): boolean {
   return (
     normalized === "completed" ||
     normalized === "failed" ||
+    normalized === "error" ||
     normalized === "cancelled" ||
     normalized === "timeout" ||
     normalized === "blocked" ||
