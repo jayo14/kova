@@ -108,7 +108,7 @@ async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "obs
         tag = (state or "observing").encode("ascii", errors="replace")[:32]
         await asyncio.wait_for(
             r.publish(frame_channel(execution_id), tag + b"\x00" + frame_bytes),
-            timeout=0.5,
+            timeout=2.5,
         )
     except Exception as e:
         logger.debug("Frame publish failed for %s (graceful degradation): %s", execution_id, e)
