@@ -218,6 +218,7 @@ class BrowserSession:
         self._context = await self._browser.new_context(
             viewport=DEFAULT_VIEWPORT,
             user_agent=DEFAULT_USER_AGENT,
+            service_workers="block",
         )
         self._page = await self._context.new_page()
 
