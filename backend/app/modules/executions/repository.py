@@ -59,6 +59,7 @@ class ExecutionRepository:
         status: ExecutionStatus,
         error_code: str | None = None,
         error_message: str | None = None,
+        failure_category: str | None = None,
     ) -> Execution:
         # Serialize lifecycle updates for this row on PostgreSQL so a late
         # worker cannot race a cancellation into a terminal-state overwrite.
@@ -81,6 +82,7 @@ class ExecutionRepository:
         if status in (
             ExecutionStatus.COMPLETED,
             ExecutionStatus.FAILED,
+            ExecutionStatus.ERROR,
             ExecutionStatus.CANCELLED,
             ExecutionStatus.TIMEOUT,
             ExecutionStatus.BLOCKED,
@@ -91,6 +93,8 @@ class ExecutionRepository:
             execution.error_code = error_code
         if error_message is not None:
             execution.error_message = error_message
+        if failure_category is not None:
+            execution.failure_category = failure_category
         await self.db.flush()
         return execution
 
