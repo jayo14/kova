@@ -29,9 +29,19 @@ if settings.SENTRY_DSN:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    yield
-    # Dispose engine pool on shutdown — prevents CancelledError on stale connections
-    await engine.dispose()
+    from app.workers.recovery import recovery_loop
+
+    recovery_task = asyncio.create_task(recovery_loop(), name="execution-recovery")
+    try:
+        yield
+    finally:
+        recovery_task.cancel()
+        try:
+            await recovery_task
+        except asyncio.CancelledError:
+            pass
+        # Dispose engine pool on shutdown — prevents CancelledError on stale connections
+        await engine.dispose()
 
 
 app = FastAPI(
