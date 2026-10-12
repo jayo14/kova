@@ -58,6 +58,7 @@ async def reconcile_executions() -> dict[str, int]:
                         ExecutionStatus.TIMEOUT,
                         error_code="WORKER_LEASE_EXPIRED",
                         error_message="Execution stopped reporting progress and exceeded its worker lease.",
+                        failure_category="execution_timeout",
                     )
                     timed_out += 1
                 except InvalidTransitionError:

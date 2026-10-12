@@ -126,6 +126,14 @@ async def test_execution_report_json_and_html(db_session):
         db_session.add(execution)
         await db_session.commit()
 
+        from app.modules.executions.event_model import ExecutionEvent
+        db_session.add(ExecutionEvent(
+            execution_id=execution.id,
+            event_type="verification.passed",
+            payload={"checks": [{"type": "url", "passed": True, "expected": "/home", "actual": "/home"}]},
+        ))
+        await db_session.commit()
+
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. Fetch JSON report via API token
@@ -143,6 +151,8 @@ async def test_execution_report_json_and_html(db_session):
 
             sig = data["signature"]
             assert _verify_report_signature(execution.id, sig)
+            expired = _generate_report_signature(execution.id, expires_at=1)
+            assert not _verify_report_signature(execution.id, expired)
 
             # 2. Access signed HTML page publicly without token
             public_resp = await client.get(

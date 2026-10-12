@@ -64,6 +64,7 @@ class EvidenceService:
                     "evidence_id": str(evidence.id),
                     "type": EvidenceType.SCREENSHOT.value,
                     "title": title,
+                    **{key: value for key, value in (extra_data or {}).items() if key in {"step_id", "step_index", "checkpoint"}},
                 },
             )
 
