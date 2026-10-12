@@ -40,6 +40,7 @@ async def _run_execution_async(task, execution_id: str):
     from app.modules.executions.repository import ExecutionEventRepository, ExecutionRepository
     from app.modules.executions.event_service import EventService
     from app.modules.executions.event_types import EventTypes
+    from app.modules.executions.state_machine import TERMINAL_STATES
     from app.modules.flows.repository import FlowRepository
     from app.engine.execution.runner import FlowRunner
 
@@ -50,17 +51,15 @@ async def _run_execution_async(task, execution_id: str):
         flow_repo = FlowRepository(db)
 
         # Load execution
-        execution = await exec_repo.get_by_id(uuid.UUID(execution_id))
+        execution = await exec_repo.get_by_id(uuid.UUID(execution_id), for_update=True)
         if execution is None:
             logger.error("Execution %s not found", execution_id)
             raise ValueError(f"Execution {execution_id} not found")
 
-        # Idempotency: skip if already terminal
-        terminal_states = {
-            ExecutionStatus.COMPLETED.value,
-            ExecutionStatus.FAILED.value,
-            ExecutionStatus.CANCELLED.value,
-        }
+        # Claim the execution under a row lock before touching credentials or
+        # launching Chromium. Duplicate broker deliveries see INITIALIZING (or
+        # later) and cannot start a second browser session.
+        terminal_states = TERMINAL_STATES
         if execution.status in terminal_states:
             logger.info(
                 "Execution %s already in terminal state %s, skipping",
@@ -68,6 +67,15 @@ async def _run_execution_async(task, execution_id: str):
                 execution.status,
             )
             return {"status": "skipped", "reason": "already_terminal"}
+
+        if execution.status not in (ExecutionStatus.CREATED.value, ExecutionStatus.QUEUED.value):
+            logger.info("Execution %s is already claimed in %s", execution_id, execution.status)
+            return {"status": "skipped", "reason": "already_claimed"}
+
+        if execution.status == ExecutionStatus.CREATED.value:
+            await exec_repo.update_status(execution.id, ExecutionStatus.QUEUED)
+        await exec_repo.update_status(execution.id, ExecutionStatus.INITIALIZING)
+        await db.commit()
 
         # Load flow
         flow = await flow_repo.get_by_id(execution.flow_id)
@@ -98,16 +106,12 @@ async def _run_execution_async(task, execution_id: str):
         project = await project_repo.get_by_id(flow.project_id)
         target_url = project.base_url if project else ""
 
-        # Transition to QUEUED (re-read to avoid race with other dispatchers)
-        current = await exec_repo.get_by_id(execution.id)
-        if current and current.status not in terminal_states:
-            await exec_repo.update_status(execution.id, ExecutionStatus.QUEUED)
-            await db.commit()
-
         # Honor a cancellation that arrived between dispatch and pickup
         from app.engine.execution.control import is_cancel_requested
         if await is_cancel_requested(execution_id):
-            await exec_repo.update_status(execution.id, ExecutionStatus.CANCELLED)
+            current = await exec_repo.get_by_id(execution.id)
+            if current and current.status not in terminal_states:
+                await exec_repo.update_status(execution.id, ExecutionStatus.CANCELLED)
             await event_svc.record_execution_cancelled(execution.id)
             await db.commit()
             logger.info("Execution %s cancelled before start", execution_id)
@@ -121,7 +125,9 @@ async def _run_execution_async(task, execution_id: str):
                     event_type=event_type,
                     payload=payload,
                 )
-                if event_type == EventTypes.EXECUTION_INITIALIZING:
+                current = await exec_repo.get_by_id(exec_id)
+                current_status = current.status if current else None
+                if event_type == EventTypes.EXECUTION_INITIALIZING and current_status != ExecutionStatus.INITIALIZING.value:
                     await exec_repo.update_status(exec_id, ExecutionStatus.INITIALIZING)
                 elif event_type == EventTypes.BROWSER_STARTED:
                     await exec_repo.update_status(exec_id, ExecutionStatus.BROWSER_READY)
@@ -171,10 +177,13 @@ async def _run_execution_async(task, execution_id: str):
             current_status = current.status if current else execution.status
 
             # Update execution status
+            persisted_result = False
             if result.get("success"):
                 if current_status not in terminal_states:
                     await exec_repo.update_status(execution.id, ExecutionStatus.COMPLETED)
-                await event_svc.record_execution_completed(execution.id, result=result)
+                    persisted_result = True
+                if persisted_result:
+                    await event_svc.record_execution_completed(execution.id, result=result)
             else:
                 error_code = result.get("error_code", "EXECUTION_ERROR")
                 # Re-read in case event_recorder already advanced status
@@ -210,14 +219,15 @@ async def _run_execution_async(task, execution_id: str):
                             error_code=error_code,
                             error_message=result.get("error", "Unknown error"),
                         )
-                if error_code == "UNVERIFIED":
+                    persisted_result = True
+                if persisted_result and error_code == "UNVERIFIED":
                     # Terminal, not a failure — still emit failed-style event for observability
                     await event_svc.record_execution_failed(
                         execution.id,
                         error_code=error_code,
                         error_message=result.get("error", "Unverified"),
                     )
-                else:
+                elif persisted_result:
                     await event_svc.record_execution_failed(
                         execution.id,
                         error_code=error_code,
@@ -243,18 +253,19 @@ async def _run_execution_async(task, execution_id: str):
             try:
                 current = await exec_repo.get_by_id(execution.id)
                 current_status = current.status if current else execution.status
-                if current_status not in terminal_states:
+                persisted_failure = current_status not in terminal_states
+                if persisted_failure:
                     await exec_repo.update_status(
                         execution.id,
                         ExecutionStatus.FAILED,
                         error_code="EXECUTION_ERROR",
                         error_message=str(e),
                     )
-                await event_svc.record_execution_failed(
-                    execution.id,
-                    error_code="EXECUTION_ERROR",
-                    error_message=str(e),
-                )
+                    await event_svc.record_execution_failed(
+                        execution.id,
+                        error_code="EXECUTION_ERROR",
+                        error_message="Execution failed unexpectedly",
+                    )
                 await db.commit()
             except Exception:
                 logger.exception("Failed to persist execution failure for %s", execution_id)
