@@ -9,6 +9,7 @@ from app.engine.browser.evidence_storage import evidence_storage
 from app.modules.executions.evidence_model import EvidenceStatus, EvidenceType
 from app.modules.executions.evidence_repository import EvidenceRepository
 from app.modules.executions.event_service import EventService
+from app.modules.executions.reporting import sanitize_payload, sanitize_text
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +49,12 @@ class EvidenceService:
             evidence = await self.repo.create(
                 execution_id=execution_id,
                 type=EvidenceType.SCREENSHOT.value,
-                title=title,
-                description=description,
+                title=sanitize_text(title, limit=500),
+                description=sanitize_text(description) if description else None,
                 status=EvidenceStatus.CAPTURED.value,
                 storage_key=upload_result.get("storage_key"),
                 mime_type=mime_type,
-                metadata={"size_bytes": len(screenshot_bytes), **(extra_data or {})},
+                metadata=sanitize_payload({"size_bytes": len(screenshot_bytes), **(extra_data or {})}),
             )
 
             # Emit event
@@ -109,14 +110,14 @@ class EvidenceService:
             evidence = await self.repo.create(
                 execution_id=execution_id,
                 type=EvidenceType.VERIFICATION.value,
-                title=title,
-                description=description,
+                title=sanitize_text(title, limit=500),
+                description=sanitize_text(description),
                 status=(
                     EvidenceStatus.VERIFIED.value
                     if checks and all(check.get("passed") is True for check in checks)
                     else EvidenceStatus.FAILED.value
                 ),
-                metadata={"checks": checks or [], **(extra_data or {})},
+                metadata=sanitize_payload({"checks": checks or [], **(extra_data or {})}),
             )
 
             await self.event_service.record_event(
