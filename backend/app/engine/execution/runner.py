@@ -594,6 +594,8 @@ class FlowRunner:
             ctx.record_event(EventTypes.EXECUTION_FAILED, {
                 "error": str(e),
                 "error_code": error_code,
+                "step": ctx.current_step_index,
+                "step_id": ctx.current_step_id,
                 "completed_at": ctx.completed_at.isoformat(),
             })
             await self._emit_events(ctx, event_recorder)
