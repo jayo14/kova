@@ -19,10 +19,11 @@ class ExecutionRepository:
         await self.db.flush()
         return execution
 
-    async def get_by_id(self, execution_id: uuid.UUID) -> Execution | None:
-        result = await self.db.execute(
-            select(Execution).where(Execution.id == execution_id)
-        )
+    async def get_by_id(self, execution_id: uuid.UUID, *, for_update: bool = False) -> Execution | None:
+        statement = select(Execution).where(Execution.id == execution_id)
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self.db.execute(statement)
         return result.scalar_one_or_none()
 
     async def list_by_flow(
@@ -54,7 +55,12 @@ class ExecutionRepository:
         error_code: str | None = None,
         error_message: str | None = None,
     ) -> Execution:
-        execution = await self.get_by_id(execution_id)
+        # Serialize lifecycle updates for this row on PostgreSQL so a late
+        # worker cannot race a cancellation into a terminal-state overwrite.
+        result = await self.db.execute(
+            select(Execution).where(Execution.id == execution_id).with_for_update()
+        )
+        execution = result.scalar_one_or_none()
         if execution is None:
             raise ValueError(f"Execution {execution_id} not found")
 
