@@ -405,3 +405,66 @@ export interface UpdateMemberRoleInput {
   memberId: string;
   role: MemberRole;
 }
+
+export interface ProductModel {
+  id: string;
+  projectId: string;
+  version: number;
+  name: string;
+  purpose?: string | null;
+  capabilities: Array<{
+    name: string;
+    description?: string;
+    routes?: string[];
+    roles?: string[];
+    is_inferred?: boolean;
+    confidence?: number;
+  }>;
+  routes: Array<{ path: string; purpose?: string }>;
+  roles: Array<{ role: string; description?: string }>;
+  entities: Array<Record<string, unknown>>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ValidationRun {
+  id: string;
+  projectId: string;
+  commitSha: string | null;
+  branch: string | null;
+  prNumber: number | null;
+  baseUrl: string | null;
+  scope: "targeted" | "expanded" | "full";
+  status: string;
+  exitCode: number | null;
+  selectedFlowIds: string[];
+  executionIds: string[];
+  impactReport: {
+    changedFiles?: string[];
+    affectedCapabilities?: string[];
+    affectedRoutes?: string[];
+    selectionReasons?: Record<string, string>;
+    confidence?: number;
+    uncertainty?: string[];
+    recommendedScope?: string;
+  };
+  baselineRunId: string | null;
+  baselineDiff: {
+    newlyFailing?: string[];
+    recovered?: string[];
+    unchangedPassing?: string[];
+    blocked?: string[];
+    unverified?: string[];
+    statusChanged?: Array<{ flow_id: string; previous: string; current: string }>;
+  };
+  summary: {
+    totalFlows?: number;
+    passed?: number;
+    failed?: number;
+    blocked?: number;
+    unverified?: number;
+    error?: number;
+  };
+  createdAt: string;
+  completedAt: string | null;
+}
