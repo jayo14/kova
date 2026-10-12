@@ -18,6 +18,7 @@ class ExecutionContext:
     target_url: str
     state: ExecutionState = ExecutionState.IDLE
     current_step_index: int = 0
+    current_step_id: str | None = None
     observations: list[dict] = field(default_factory=list)
     events: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
