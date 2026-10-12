@@ -118,6 +118,7 @@ class FlowRunner:
         flow_steps: list[dict],
         success_condition: dict | None = None,
         preconditions: dict | None = None,
+        dependency_plan: list[dict] | None = None,
         credential_store: CredentialStore | None = None,
         target_url: str = "",
         event_recorder: Callable | None = None,
@@ -149,7 +150,7 @@ class FlowRunner:
             result = await asyncio.wait_for(
                 self._execute_inner(
                     execution_id, flow_steps, success_condition,
-                    credential_store, target_url, event_recorder, preconditions,
+                    credential_store, target_url, event_recorder, preconditions, dependency_plan,
                     objective, expected_outcome, fail_on_healed,
                 ),
                 timeout=effective_timeout,
@@ -176,6 +177,7 @@ class FlowRunner:
         target_url: str,
         event_recorder: Callable | None,
         preconditions: dict | None = None,
+        dependency_plan: list[dict] | None = None,
         objective: str | None = None,
         expected_outcome: str | None = None,
         fail_on_healed: bool | None = None,
@@ -252,30 +254,110 @@ class FlowRunner:
                 ctx.record_event(EventTypes.BROWSER_SCREENSHOT, ss_data)
                 await self._emit_events(ctx, event_recorder)
 
-            if preconditions:
-                prerequisite_result = await verifier.verify(preconditions)
-                ctx.record_event(EventTypes.VERIFICATION_FAILED if not prerequisite_result.passed else EventTypes.VERIFICATION_PASSED, {
-                    "kind": "preconditions", **prerequisite_result.to_dict()
-                })
-                await self._emit_events(ctx, event_recorder)
-                if not prerequisite_result.passed:
-                    return {
-                        "success": False,
-                        "execution_id": str(execution_id),
-                        "error": "Required application state could not be verified before execution",
-                        "error_code": "PREREQUISITE_UNSATISFIED",
-                        "verification": prerequisite_result.to_dict(),
-                        "events": ctx.events,
-                        "observations": ctx.observations,
-                        "state": "BLOCKED",
-                    }
-
             # Step 6: Execute steps
             action_executor = ActionExecutor(
                 browser.page,
                 event_recorder=None,
                 credential_store=credential_store,
             )
+            target_preconditions_met = False
+            if preconditions:
+                prerequisite_result = await verifier.verify(preconditions)
+                target_preconditions_met = prerequisite_result.passed
+                ctx.record_event(EventTypes.VERIFICATION_PASSED if target_preconditions_met else EventTypes.VERIFICATION_FAILED, {
+                    "kind": "preconditions", **prerequisite_result.to_dict(),
+                })
+                await self._emit_events(ctx, event_recorder)
+
+            # Setup flows share this run's isolated context. Skip setup only
+            # when the target's complete declared precondition is already true.
+            if dependency_plan and not target_preconditions_met:
+                setup_step_offset = 0
+                for dependency in dependency_plan:
+                    dep_condition = dependency.get("success_condition")
+                    if dep_condition:
+                        existing_state = await verifier.verify(dep_condition)
+                        if existing_state.passed:
+                            ctx.record_event(EventTypes.VERIFICATION_PASSED, {
+                                "kind": "dependency_already_satisfied",
+                                "flow_id": dependency.get("id"),
+                                "flow_version": dependency.get("version"),
+                                **existing_state.to_dict(),
+                            })
+                            await self._emit_events(ctx, event_recorder)
+                            continue
+                    dep_preconditions = dependency.get("preconditions")
+                    if dep_preconditions:
+                        dep_check = await verifier.verify(dep_preconditions)
+                        if not dep_check.passed:
+                            return {
+                                "success": False, "execution_id": str(execution_id),
+                                "error": f"Prerequisite flow {dependency.get('name')} has unmet preconditions",
+                                "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
+                                "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
+                                "events": ctx.events, "observations": ctx.observations,
+                            }
+                    for dep_step in dependency.get("steps", []):
+                        if await is_cancel_requested(exec_id):
+                            return {
+                                "success": False, "execution_id": str(execution_id),
+                                "error": "Execution cancelled during prerequisite setup",
+                                "error_code": ErrorCode.CANCELLED, "state": "CANCELLED",
+                                "events": ctx.events, "observations": ctx.observations,
+                            }
+                        ctx.current_step_index = setup_step_offset
+                        browser.current_step_index = setup_step_offset
+                        await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
+                        await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, setup_step_offset, event_recorder)
+                        dep_check = await self._verify_step_postcondition(ctx, browser, verifier, dep_step, setup_step_offset, event_recorder)
+                        if dep_check is not None and not dep_check.passed:
+                            return {
+                                "success": False, "execution_id": str(execution_id),
+                                "error": f"Prerequisite step {dep_step.get('step_id')} failed verification",
+                                "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
+                                "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
+                                "events": ctx.events, "observations": ctx.observations,
+                            }
+                        setup_step_offset += 1
+                    if not dep_condition:
+                        return {
+                            "success": False, "execution_id": str(execution_id),
+                            "error": f"Prerequisite flow {dependency.get('name')} has no verifiable postcondition",
+                            "error_code": "PREREQUISITE_UNSATISFIED", "blocked_dependency": dependency.get("id"),
+                            "state": "BLOCKED", "events": ctx.events, "observations": ctx.observations,
+                        }
+                    dep_check = await verifier.verify(dep_condition)
+                    ctx.record_event(EventTypes.VERIFICATION_PASSED if dep_check.passed else EventTypes.VERIFICATION_FAILED, {
+                        "kind": "dependency_postcondition", "flow_id": dependency.get("id"),
+                        "flow_version": dependency.get("version"), **dep_check.to_dict(),
+                    })
+                    await self._emit_events(ctx, event_recorder)
+                    if not dep_check.passed:
+                        return {
+                            "success": False, "execution_id": str(execution_id),
+                            "error": f"Prerequisite flow {dependency.get('name')} did not establish the required state",
+                            "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
+                            "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
+                            "events": ctx.events, "observations": ctx.observations,
+                        }
+                if preconditions:
+                    prerequisite_result = await verifier.verify(preconditions)
+                    target_preconditions_met = prerequisite_result.passed
+                    if not target_preconditions_met:
+                        return {
+                            "success": False, "execution_id": str(execution_id),
+                            "error": "Setup flows finished but target preconditions remain unsatisfied",
+                            "error_code": "PREREQUISITE_UNSATISFIED", "verification": prerequisite_result.to_dict(),
+                            "state": "BLOCKED", "events": ctx.events, "observations": ctx.observations,
+                        }
+            if preconditions and not target_preconditions_met:
+                return {
+                    "success": False, "execution_id": str(execution_id),
+                    "error": "Required application state could not be verified and no setup flow resolved it",
+                    "error_code": "PREREQUISITE_UNSATISFIED", "state": "BLOCKED",
+                    "verification": prerequisite_result.to_dict() if preconditions else None,
+                    "events": ctx.events, "observations": ctx.observations,
+                }
             for i, step in enumerate(flow_steps):
                 # Cancellation gate — checked at every step boundary
                 if await is_cancel_requested(exec_id):
@@ -319,6 +401,12 @@ class FlowRunner:
                 except Exception:
                     pass
                 await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
+                step_check = await self._verify_step_postcondition(ctx, browser, verifier, step, i, event_recorder)
+                if step_check is not None and not step_check.passed:
+                    failed_checks = [check for check in step_check.checks if not check.passed]
+                    unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
+                    error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
+                    raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
                 # Drain any human input queued mid-step
                 await self._process_user_input(browser, exec_id)
                 # Pause gate after step
@@ -428,7 +516,9 @@ class FlowRunner:
                 )
 
             # Step 8: Capture evidence
-            await self._capture_evidence(ctx, browser, verification, event_recorder)
+            evidence_persisted = await self._capture_evidence(ctx, browser, verification, event_recorder)
+            if not evidence_persisted:
+                raise ExecutionError("Verified result could not be persisted with evidence", error_code="EVIDENCE_PERSISTENCE_FAILED")
 
             # Enforce gate on 5xx or failed requests after submit/click steps
             click_or_submit_indices = {
@@ -846,6 +936,50 @@ class FlowRunner:
         "confirm", "pay", "checkout", "purchase", "place order", "submit payment",
     )
 
+    async def _verify_step_postcondition(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        verifier: Verifier,
+        step: dict,
+        step_index: int,
+        event_recorder: Callable | None,
+    ):
+        condition = step.get("postcondition") if isinstance(step, dict) else None
+        if not condition:
+            return None
+        result = await verifier.verify(condition)
+        event_payload = {
+            "kind": "step_postcondition", "step": step_index,
+            "step_id": step.get("step_id"), "expected": condition,
+            **result.to_dict(),
+        }
+        ctx.record_event(EventTypes.VERIFICATION_PASSED if result.passed else EventTypes.VERIFICATION_FAILED, event_payload)
+        await self._emit_events(ctx, event_recorder)
+
+        if event_recorder is not None:
+            try:
+                from app.infrastructure.database.session import async_session_factory
+                from app.modules.executions.evidence_service import EvidenceService
+
+                async with async_session_factory() as db:
+                    evidence = await EvidenceService(db).create_verification_evidence(
+                        execution_id=uuid.UUID(ctx.execution_id),
+                        title=f"Step {step.get('step_id', step_index)} verification",
+                        description="Step postcondition passed" if result.passed else "Step postcondition failed",
+                        checks=[check.to_dict() for check in result.checks],
+                        extra_data={"step_id": step.get("step_id"), "step_index": step_index, "expected": condition},
+                    )
+                    if evidence is None:
+                        raise RuntimeError("verification evidence was not persisted")
+                    await db.commit()
+            except Exception as exc:
+                raise ExecutionError(
+                    f"Could not persist evidence for step {step.get('step_id', step_index)}",
+                    error_code="EVIDENCE_PERSISTENCE_FAILED",
+                ) from exc
+        return result
+
     @staticmethod
     def _is_destructive_step(step: dict) -> bool:
         """Heuristically detect steps whose retry could cause real damage."""
@@ -1227,7 +1361,7 @@ class FlowRunner:
         browser: BrowserSession,
         verification,
         event_recorder: Callable | None,
-    ) -> None:
+    ) -> bool:
         """Capture evidence after successful verification.
 
         Creates:
@@ -1237,20 +1371,23 @@ class FlowRunner:
         Standalone/test runs (no event_recorder) skip persistence entirely.
         """
         if event_recorder is None:
-            return
+            return True
 
         execution_id = uuid.UUID(ctx.execution_id)
         try:
-            await asyncio.wait_for(
+            persisted = await asyncio.wait_for(
                 self._capture_evidence_inner(
                     ctx, browser, verification, event_recorder, execution_id
                 ),
                 timeout=8.0,
             )
+            return True if persisted is None else persisted
         except asyncio.TimeoutError:
             logger.warning("Evidence capture timed out for %s", execution_id)
+            return False
         except Exception as e:
             logger.warning("Evidence capture overall failed: %s", e)
+            return False
 
     async def _execution_row_exists(self, execution_id: uuid.UUID) -> bool:
         """True when the execution has a DB row (real worker runs only)."""
@@ -1286,14 +1423,15 @@ class FlowRunner:
         verification,
         event_recorder: Callable | None,
         execution_id: uuid.UUID,
-    ) -> None:
+    ) -> bool | None:
+        evidence_written = False
         try:
             if not await self._execution_row_exists(execution_id):
                 logger.debug(
                     "Skip evidence for %s — no execution row (standalone run)",
                     execution_id,
                 )
-                return
+                return None
 
             from app.modules.executions.evidence_service import EvidenceService
             from app.infrastructure.database.session import async_session_factory
@@ -1310,12 +1448,13 @@ class FlowRunner:
                         description = "; ".join(check_descriptions) if check_descriptions else "All checks passed"
 
                         try:
-                            await evidence_service.create_verification_evidence(
+                            verification_evidence = await evidence_service.create_verification_evidence(
                                 execution_id=execution_id,
                                 title=title,
                                 description=description,
                                 checks=[c.to_dict() for c in verification.checks],
                             )
+                            evidence_written = verification_evidence is not None
                         except Exception as e:
                             logger.warning("Could not persist verification evidence: %s", e)
 
@@ -1356,9 +1495,12 @@ class FlowRunner:
                     await db.commit()
                 except Exception as e:
                     logger.warning("Could not commit evidence session: %s", e)
+                    return False
+                return evidence_written
 
         except Exception as e:
             logger.warning("Evidence capture overall failed: %s", e)
+            return False
 
     async def _capture_failure_evidence(
         self,
