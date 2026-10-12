@@ -41,7 +41,7 @@ async def _run_execution_async(task, execution_id: str):
     from app.modules.executions.event_service import EventService
     from app.modules.executions.event_types import EventTypes
     from app.modules.executions.state_machine import TERMINAL_STATES
-    from app.modules.executions.reporting import classify_failure, sanitize_text
+    from app.modules.executions.reporting import classify_failure, sanitize_payload, sanitize_text
     from app.modules.flows.repository import FlowRepository
     from app.engine.execution.runner import FlowRunner
 
@@ -124,7 +124,7 @@ async def _run_execution_async(task, execution_id: str):
                 await event_repo.create(
                     execution_id=exec_id,
                     event_type=event_type,
-                    payload=payload,
+                    payload=sanitize_payload(payload),
                 )
                 current = await exec_repo.get_by_id(exec_id)
                 current_status = current.status if current else None
@@ -186,7 +186,9 @@ async def _run_execution_async(task, execution_id: str):
                     await exec_repo.update_status(execution.id, ExecutionStatus.COMPLETED)
                     persisted_result = True
                 if persisted_result:
-                    await event_svc.record_execution_completed(execution.id, result=result)
+                    await event_svc.record_execution_completed(
+                        execution.id, result=sanitize_payload(result)
+                    )
             else:
                 error_code = result.get("error_code", "EXECUTION_ERROR")
                 # Re-read in case event_recorder already advanced status
@@ -241,13 +243,13 @@ async def _run_execution_async(task, execution_id: str):
                     await event_svc.record_execution_failed(
                         execution.id,
                         error_code=error_code,
-                        error_message=result.get("error", "Unverified"),
+                        error_message=sanitize_text(result.get("error", "Unverified")),
                     )
                 elif persisted_result:
                     await event_svc.record_execution_failed(
                         execution.id,
                         error_code=error_code,
-                        error_message=result.get("error", "Unknown error"),
+                        error_message=sanitize_text(result.get("error", "Unknown error")),
                     )
             await db.commit()
 
