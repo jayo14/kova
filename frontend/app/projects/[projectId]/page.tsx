@@ -15,7 +15,7 @@ import {
   ProjectKnowledge,
   ProjectValidations,
 } from "@/components/projects";
-import { getProject, getProjectKnowledge, getProjectValidations } from "@/lib/api/projects";
+import { getProjectKnowledge, getProjectValidations } from "@/lib/api/projects";
 import type { ProjectActivity as Activity, Mission, ExecutionDetail, MissionExecution } from "@/lib/types";
 
 interface PageProps {
