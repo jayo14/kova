@@ -626,7 +626,10 @@ export async function submitCredential(
   onEvent({ type: "state_change", state: "authenticating" });
 
   try {
-    await submitExplorationCredentials(currentSessionId, email, password, false, token);
+    const updated = await submitExplorationCredentials(currentSessionId, email, password, false, token);
+    if (updated?.status) {
+      onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
+    }
     if (activeStreamSessionId !== currentSessionId) {
       streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
     }
@@ -691,7 +694,10 @@ export async function createAccount(
   onEvent({ type: "state_change", state: "authenticating" });
 
   try {
-    await createExplorationAccount(currentSessionId, email, password, token);
+    const updated = await createExplorationAccount(currentSessionId, email, password, token);
+    if (updated?.status) {
+      onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
+    }
     if (activeStreamSessionId !== currentSessionId) {
       streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
     }
