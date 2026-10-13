@@ -155,6 +155,7 @@ class ExplorationService:
                 user_id=user_id,
                 url=target_url,
                 goal=data.goal,
+                project_id=matched_project.id,
             ),
         )
 
@@ -211,6 +212,7 @@ class ExplorationService:
                 goal=session.goal,
                 credential={"email": data.email, "password": data.password},
                 selected_role=session.selected_role,
+                project_id=session.project_id,
             ),
         )
 
@@ -277,6 +279,7 @@ class ExplorationService:
                 credential={"email": email, "password": password},
                 selected_role=session.selected_role,
                 create_account=True,
+                project_id=session.project_id,
             ),
         )
 
@@ -311,6 +314,7 @@ class ExplorationService:
                 url=session.url,
                 goal=session.goal,
                 selected_role=role_selected,
+                project_id=session.project_id,
             ),
         )
 
@@ -451,6 +455,7 @@ class ExplorationService:
         credential: dict | None = None,
         selected_role: str | None = None,
         create_account: bool = False,
+        project_id: uuid.UUID | None = None,
     ):
         """Runs the exploration engine with an isolated DB session."""
         from app.infrastructure.database.session import async_session_factory
@@ -562,14 +567,24 @@ class ExplorationService:
 
             existing_browser = _active_browser_sessions.get(session_id)
 
+            # Resolve project ID if not explicitly passed
+            resolved_project_id = project_id
+            if resolved_project_id is None:
+                try:
+                    sess = await repo.get_by_id_and_user(session_id, user_id)
+                    if sess:
+                        resolved_project_id = sess.project_id
+                except Exception as e:
+                    logger.debug("Could not resolve session project_id: %s", e)
+
             # Resolve a project credential so generated auth journeys can
             # reference it by id instead of embedding secrets in steps.
             credential_id: str | None = None
-            if session.project_id:
+            if resolved_project_id:
                 try:
                     from app.modules.credentials.repository import CredentialRepository
                     cred_repo = CredentialRepository(db)
-                    project_creds = await cred_repo.list_by_project(session.project_id, limit=1)
+                    project_creds = await cred_repo.list_by_project(resolved_project_id, limit=1)
                     if project_creds:
                         credential_id = project_creds[0].name
                 except Exception as e:
