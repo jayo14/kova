@@ -70,21 +70,39 @@ class OpenAICompatibleProvider(AIProvider):
 
     def __init__(
         self,
-        model: str,
-        api_key: str,
-        base_url: str,
+        model: str | None = None,
+        api_key: str = "",
+        base_url: str = "",
         name: str = "openai_compatible",
+        models: list[str] | str | None = None,
     ):
-        if not model or not api_key:
-            raise AIProviderError(f"Provider {name} requires model and api_key")
+        raw_models: list[str] = []
+        if models:
+            if isinstance(models, str):
+                raw_models = [m.strip() for m in models.split(",") if m.strip()]
+            else:
+                raw_models = [m.strip() for m in models if m.strip()]
+        elif model:
+            raw_models = [m.strip() for m in model.split(",") if m.strip()]
+
+        if not raw_models or not api_key:
+            raise AIProviderError(f"Provider {name} requires model(s) and api_key")
+
         self.name = name
-        self._model = model
+        self._models = raw_models
+        self._model = raw_models[0]
         self._api_key = api_key
         self._base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
 
     @property
     def model_name(self) -> str:
-        return self._model
+        if len(self._models) == 1:
+            return self._models[0]
+        return f"{self._models[0]} (+{len(self._models) - 1} fallbacks: {', '.join(self._models[1:])})"
+
+    @property
+    def models(self) -> list[str]:
+        return self._models
 
     async def generate_structured(
         self,
@@ -98,16 +116,6 @@ class OpenAICompatibleProvider(AIProvider):
             f"You MUST respond ONLY with a single valid JSON object strictly conforming to this JSON Schema:\n"
             f"{schema_json}"
         )
-        payload = {
-            "model": self._model,
-            "temperature": ai_settings.AI_TEMPERATURE,
-            "max_tokens": ai_settings.AI_MAX_OUTPUT_TOKENS,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": augmented_system},
-                {"role": "user", "content": prompt},
-            ],
-        }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -116,35 +124,65 @@ class OpenAICompatibleProvider(AIProvider):
             headers["HTTP-Referer"] = "https://kova.dev"
             headers["X-Title"] = "Kova Agent"
 
-        try:
-            async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as client:
-                resp = await client.post(
-                    f"{self._base_url}/chat/completions",
-                    headers=headers,
-                    json=payload,
-                )
-        except httpx.TimeoutException as e:
-            raise AIProviderError(f"AI request timed out: {e}", provider=self.name) from e
-        except httpx.HTTPError as e:
-            raise AIProviderError(f"AI request failed: {e}", provider=self.name) from e
+        errors: list[str] = []
+        for idx, model in enumerate(self._models):
+            payload = {
+                "model": model,
+                "temperature": ai_settings.AI_TEMPERATURE,
+                "max_tokens": ai_settings.AI_MAX_OUTPUT_TOKENS,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {"role": "system", "content": augmented_system},
+                    {"role": "user", "content": prompt},
+                ],
+            }
+            try:
+                logger.info("Attempting generation on provider '%s' with model '%s'", self.name, model)
+                async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as client:
+                    resp = await client.post(
+                        f"{self._base_url}/chat/completions",
+                        headers=headers,
+                        json=payload,
+                    )
+            except httpx.TimeoutException as e:
+                err_msg = f"Timed out: {e}"
+                logger.warning("Model '%s' timed out on '%s'.", model, self.name)
+                errors.append(f"{model}: {err_msg}")
+                continue
+            except httpx.HTTPError as e:
+                err_msg = f"HTTP transport error: {e}"
+                logger.warning("Model '%s' network error on '%s': %s", model, self.name, err_msg)
+                errors.append(f"{model}: {err_msg}")
+                continue
 
-        if resp.status_code >= 400:
-            err_msg = resp.text[:300] if resp.text else ""
-            raise AIProviderError(
-                f"AI provider returned {resp.status_code}: {err_msg}",
-                provider=self.name,
-                status_code=resp.status_code,
-            )
+            if resp.status_code >= 400:
+                resp_text = resp.text[:250] if resp.text else ""
+                err_msg = f"HTTP {resp.status_code}: {resp_text}"
+                logger.warning("Model '%s' failed on '%s' (%s).", model, self.name, err_msg)
+                errors.append(f"{model}: {err_msg}")
+                continue
 
-        try:
-            body = resp.json()
-            content = body["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError) as e:
-            raise AIProviderError(
-                f"Malformed AI response envelope: {e}", provider=self.name
-            ) from e
+            try:
+                body = resp.json()
+                content = body["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, ValueError) as e:
+                err_msg = f"Malformed AI response envelope: {e}"
+                logger.warning("Model '%s' envelope malformed on '%s': %s", model, self.name, err_msg)
+                errors.append(f"{model}: {err_msg}")
+                continue
 
-        return self._parse_structured(content, schema)
+            try:
+                return self._parse_structured(content, schema)
+            except AIProviderError as e:
+                logger.warning("Model '%s' output validation failed on '%s': %s", model, self.name, e)
+                errors.append(f"{model}: {e}")
+                continue
+
+        # All models in this provider's fallback list failed
+        raise AIProviderError(
+            f"All models exhausted for provider '{self.name}': {'; '.join(errors)}",
+            provider=self.name,
+        )
 
     def _parse_structured(self, content: str, schema: type[T]) -> T:
         """Parse model text into a validated schema instance. Fail-closed."""
@@ -198,12 +236,12 @@ class FailoverAIProvider(AIProvider):
         errors: list[str] = []
         for provider in self._providers:
             try:
-                logger.info("Attempting AI generation with provider '%s' (model: %s)", provider.name, provider.model_name)
+                logger.info("Attempting AI generation with provider '%s' (models: %s)", provider.name, provider.model_name)
                 result = await provider.generate_structured(system, prompt, schema)
                 return result
             except AIProviderError as e:
                 logger.warning(
-                    "AI provider '%s' failed (status %s: %s). Falling over to next provider...",
+                    "AI provider '%s' exhausted all options (status %s: %s). Failing over to next provider in chain...",
                     provider.name,
                     getattr(e, "status_code", None),
                     e,
@@ -211,7 +249,7 @@ class FailoverAIProvider(AIProvider):
                 errors.append(f"{provider.name}: {e}")
             except Exception as e:
                 logger.warning(
-                    "AI provider '%s' encountered unexpected error: %s. Falling over...",
+                    "AI provider '%s' encountered unexpected error: %s. Failing over...",
                     provider.name,
                     e,
                 )
@@ -235,10 +273,10 @@ def get_ai_provider() -> AIProvider | None:
             active_providers: list[AIProvider] = []
             for prov_name in ai_settings.failover_providers:
                 creds = ai_settings.get_provider_credentials(prov_name)
-                if creds and creds["api_key"] and creds["model"]:
+                if creds and creds["api_key"] and creds["models"]:
                     active_providers.append(
                         OpenAICompatibleProvider(
-                            model=creds["model"],
+                            models=creds["models"],
                             api_key=creds["api_key"],
                             base_url=creds["base_url"],
                             name=creds["name"],
@@ -263,9 +301,9 @@ def get_ai_provider() -> AIProvider | None:
 
         # Single provider mode
         creds = ai_settings.get_provider_credentials(ai_settings.AI_PROVIDER)
-        if creds and creds["api_key"] and creds["model"]:
+        if creds and creds["api_key"] and creds["models"]:
             return OpenAICompatibleProvider(
-                model=creds["model"],
+                models=creds["models"],
                 api_key=creds["api_key"],
                 base_url=creds["base_url"],
                 name=creds["name"],

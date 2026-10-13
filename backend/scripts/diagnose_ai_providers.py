@@ -77,16 +77,18 @@ PROVIDERS = [
 
 async def probe_provider(info: dict[str, Any]) -> dict[str, Any]:
     name = info["name"]
-    api_key = info["key_val"]().strip()
-    model = info["model"]().strip()
-    base_url = info["base_url"]()
+    creds = ai_settings.get_provider_credentials(info["id"])
+    api_key = creds["api_key"].strip() if creds else ""
+    models = creds["models"] if creds else []
+    base_url = creds["base_url"] if creds else ""
 
     result = {
         "id": info["id"],
         "name": name,
         "key_env": info["key_env"],
         "has_key": bool(api_key),
-        "model": model,
+        "models": models,
+        "primary_model": models[0] if models else "",
         "status": "NOT CONFIGURED",
         "latency_ms": 0.0,
         "available_models": [],
@@ -114,10 +116,10 @@ async def probe_provider(info: dict[str, Any]) -> dict[str, Any]:
         except Exception as e:
             result["sample_error"] = f"Models list error: {e}"
 
-        # 2. Test structured chat completion probe
+        # 2. Test structured chat completion probe with fallback list
         t0 = time.perf_counter()
         provider_instance = OpenAICompatibleProvider(
-            model=model,
+            models=models,
             api_key=api_key,
             base_url=base_url,
             name=name,
@@ -154,7 +156,10 @@ async def main():
     print("-" * 80)
     for r in results:
         lat = f"{r['latency_ms']}ms" if r['latency_ms'] > 0 else "-"
-        print(f"{r['name']:<16} | {r['key_env']:<20} | {r['status']:<18} | {lat:<9} | {r['model']}")
+        fallbacks_str = f" (+{len(r['models'])-1} fallbacks)" if len(r['models']) > 1 else " (no fallback)"
+        print(f"{r['name']:<16} | {r['key_env']:<20} | {r['status']:<18} | {lat:<9} | {r['primary_model']}{fallbacks_str}")
+        if len(r['models']) > 1:
+            print(f"   └─ Fallback Chain: {' -> '.join(r['models'])}")
         if r["sample_error"]:
             print(f"   └─ Error: {r['sample_error']}")
         if r["available_models"]:
