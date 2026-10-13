@@ -1811,7 +1811,7 @@ class ExplorationEngine:
                 {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
                 {"type": "click", "target": password_selector},
                 {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
-                {"type": "click", "target": "button[type='submit'], button:has-text('Log in'), button:has-text('Sign up'), button:has-text('Create')"},
+                {"type": "click", "target": "button[type='submit'], button:has-text('Sign in'), button:has-text('Sign In'), button:has-text('Log in'), button:has-text('Log In'), button:has-text('Sign up'), button:has-text('Sign Up'), button:has-text('Create'), button:has-text('Continue'), input[type='submit']"},
                 {"type": "wait", "value": "3000"},
             ])
 
@@ -2289,7 +2289,7 @@ class ExplorationEngine:
                     {"type": "wait", "value": "2000"},
                     {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
                     {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
-                    {"type": "click", "target": "button[type='submit'], button:has-text('Sign up'), button:has-text('Create'), button:has-text('Register')"},
+                    {"type": "click", "target": "button[type='submit'], button:has-text('Sign up'), button:has-text('Sign Up'), button:has-text('Create'), button:has-text('Register'), button:has-text('Continue'), input[type='submit']"},
                     {"type": "wait", "value": "3000"},
                 ],
                 "success_condition": {
@@ -2436,7 +2436,7 @@ class ExplorationEngine:
                     {"type": "wait", "value": "2000"},
                     {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
                     {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
-                    {"type": "click", "target": "button[type='submit'], button:has-text('Log in'), button:has-text('Sign in')"},
+                    {"type": "click", "target": "button[type='submit'], button:has-text('Log in'), button:has-text('Log In'), button:has-text('Sign in'), button:has-text('Sign In'), button:has-text('Continue'), input[type='submit']"},
                     {"type": "wait", "value": "3000"},
                 ],
                 "success_condition": {

@@ -201,6 +201,8 @@ export function ExplorePage() {
     abortRef.current = controller;
     startedUrlRef.current = submittedUrl;
 
+    start(submittedUrl, goal);
+
     startExploration(
       submittedUrl,
       goal,
@@ -422,24 +424,27 @@ export function ExplorePage() {
     }
   };
 
-  const showSplitBrowser = state.url && !["idle", "failed", "cancelled", "mission_created", "mission_selected"].includes(state.state);
+  const activeUrl = state.url || initialUrl;
+  const showSplitBrowser =
+    Boolean(activeUrl) &&
+    !["idle", "failed", "cancelled", "mission_created", "mission_selected"].includes(state.state);
 
   const showScreenshotOverlay = SCREENSHOT_STATES.has(state.state) && state.screenshots.length > 0;
   const latestScreenshot = state.screenshots.length > 0 ? state.screenshots[state.screenshots.length - 1].url : null;
 
   const hostname = (() => {
     try {
-      return new URL(state.url).hostname;
+      return new URL(activeUrl).hostname;
     } catch {
-      return state.url || "product";
+      return activeUrl || "product";
     }
   })();
 
-  const cleanProjectName = extractProjectName(state.url || initialUrl || hostname);
+  const cleanProjectName = extractProjectName(activeUrl || hostname);
 
   return (
     <AgentShell
-      url={state.url}
+      url={activeUrl}
       state={state.state}
       projectName={cleanProjectName}
       onStop={handleStop}

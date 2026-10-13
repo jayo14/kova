@@ -257,14 +257,16 @@ export function LiveViewport({
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     // When agent controls: click opens takeover affordance, does not inject input
     if (!isHumanControlled) {
-      setShowTakeoverDialog(true);
+      if (state !== "failed" && state !== "disconnected") {
+        setShowTakeoverDialog(true);
+      }
       return;
     }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const { x, y } = getCanvasRelativeCoords(e, canvas);
     sendInput({ kind: "click", x, y });
-  }, [isHumanControlled, sendInput]);
+  }, [isHumanControlled, state, sendInput]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isHumanControlled) return;
@@ -473,18 +475,34 @@ export function LiveViewport({
           <span
             className={cn(
               "h-2 w-2 rounded-full shrink-0",
-              isHumanControlled ? "bg-amber-500" : "bg-primary animate-pulse"
+              state === "failed"
+                ? "bg-destructive"
+                : state === "disconnected"
+                ? "bg-muted-foreground/40"
+                : isHumanControlled
+                ? "bg-amber-500"
+                : "bg-primary animate-pulse"
             )}
           />
           <span className="text-caption text-muted-foreground truncate">
-            {isHumanControlled ? "You are controlling" : "Kova is controlling"}
+            {state === "failed"
+              ? "Execution ended"
+              : state === "disconnected"
+              ? "Session ended"
+              : isHumanControlled
+              ? "You are controlling"
+              : "Kova is controlling"}
           </span>
         </div>
-        {isHumanControlled ? (
+        {state === "failed" || state === "disconnected" ? (
+          <span className="text-caption text-muted-foreground/50 text-[11px] font-mono px-2 py-0.5 rounded border border-border/40">
+            Inactive
+          </span>
+        ) : isHumanControlled ? (
           <button
             type="button"
             onClick={handleReturnControl}
-            className="flex items-center gap-1 rounded-md bg-amber-500 text-white px-2.5 py-1 text-caption font-medium hover:bg-amber-600 transition-colors shrink-0"
+            className="flex items-center gap-1 rounded-md bg-amber-500 text-white px-2.5 py-1 text-caption font-medium hover:bg-amber-600 transition-colors shrink-0 cursor-pointer"
           >
             <MaterialIcon name="undo" size={14} />
             <span>Return control to Kova</span>
@@ -493,7 +511,7 @@ export function LiveViewport({
           <button
             type="button"
             onClick={handleTakeoverAccept}
-            className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-caption font-medium text-foreground hover:bg-muted transition-colors shrink-0"
+            className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-caption font-medium text-foreground hover:bg-muted transition-colors shrink-0 cursor-pointer"
           >
             <MaterialIcon name="person" size={14} />
             <span>Take over</span>

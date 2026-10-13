@@ -89,32 +89,59 @@ export function exploreReducer(
         state: "connecting",
       };
 
-    case "TRANSITION":
+    case "TRANSITION": {
+      const isTerminalOrReady =
+        action.state === "ready" ||
+        action.state === "completed" ||
+        action.state === "failed" ||
+        action.state === "cancelled";
+      const activities = isTerminalOrReady
+        ? state.activities.map((a) =>
+            a.status === "active" ? { ...a, status: "completed" as const } : a
+          )
+        : state.activities;
       return {
         ...state,
+        activities,
         state: action.state,
       };
+    }
 
     case "ADD_ACTIVITY": {
-      const exists = state.activities.find((a) => a.id === action.activity.id);
-      const activities = exists
+      const isNewActive = action.activity.status === "active";
+      // If a new activity arrives as active, automatically mark any prior active activities as completed
+      const updatedPrior = isNewActive
         ? state.activities.map((a) =>
+            a.status === "active" && a.id !== action.activity.id
+              ? { ...a, status: "completed" as const }
+              : a
+          )
+        : state.activities;
+
+      const exists = updatedPrior.find((a) => a.id === action.activity.id);
+      const activities = exists
+        ? updatedPrior.map((a) =>
             a.id === action.activity.id ? action.activity : a
           )
-        : [...state.activities, action.activity];
+        : [...updatedPrior, action.activity];
       return {
         ...state,
         activities,
       };
     }
 
-    case "SET_AUTH_REQUIRED":
+    case "SET_AUTH_REQUIRED": {
+      const activities = state.activities.map((a) =>
+        a.status === "active" ? { ...a, status: "completed" as const } : a
+      );
       return {
         ...state,
+        activities,
         state: "auth_required",
         credentialRequest: action.request,
         authMode: "choice",
       };
+    }
 
     case "SET_AUTH_MODE":
       return {
@@ -122,12 +149,17 @@ export function exploreReducer(
         authMode: action.mode,
       };
 
-    case "SET_QUESTION":
+    case "SET_QUESTION": {
+      const activities = state.activities.map((a) =>
+        a.status === "active" ? { ...a, status: "completed" as const } : a
+      );
       return {
         ...state,
+        activities,
         state: "asking",
         question: action.question,
       };
+    }
 
     case "SET_DISCOVERIES":
       return {
@@ -204,6 +236,7 @@ export function exploreReducer(
     case "SET_PAGE":
       return {
         ...state,
+        url: state.url || action.url || "",
         currentPath: action.path || state.currentPath,
       };
 
