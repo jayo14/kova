@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import type { ValidationRun } from "@/lib/types";
-import { MaterialIcon } from "@/components/ui/material-icon";
+import { MaterialIcon } from "@/components/shared/material-icon";
 
 interface ProjectValidationsProps {
   validations: ValidationRun[];

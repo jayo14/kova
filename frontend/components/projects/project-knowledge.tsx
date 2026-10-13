@@ -1,8 +1,7 @@
 "use client";
 
-import React from "react";
 import type { ProductModel } from "@/lib/types";
-import { MaterialIcon } from "@/components/ui/material-icon";
+import { MaterialIcon } from "@/components/shared/material-icon";
 
 interface ProjectKnowledgeProps {
   knowledge: ProductModel | null;
