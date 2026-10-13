@@ -546,9 +546,11 @@ class AgentReasoner:
     ) -> RecoveryProposal:
         if self.provider:
             system = (
-                "A browser automation step failed. Propose recovery. Output ONLY JSON. "
-                "strategy ∈ retry_same|alternative_target|alternative_route|observe_more|"
-                "request_human|abort. Destructive actions must never be retried blindly. "
+                "A browser automation step or verification failed. Propose intelligent recovery. Output ONLY JSON. "
+                "strategy ∈ retry_same|alternative_target|alternative_route|observe_more|request_human|abort. "
+                "If the page was redirected to an authentication barrier (e.g. /signin, /login) because the target route "
+                "is protected, recognize that authentication is required and propose alternative_route or retry_same with auth. "
+                "Destructive actions must never be retried blindly. "
                 "When human input is needed (OTP, CAPTCHA, expired link requiring new "
                 "email is OK to retry, payment), request_human."
             )
@@ -576,7 +578,12 @@ class AgentReasoner:
                 strategy="retry_same",
                 reason="Email may still arrive — one bounded re-check is safe",
             )
-        if failure_code in ("RESET_LINK_EXPIRED", "AUTH_REQUIRED", "UNEXPECTED_DIALOG"):
+        if failure_code in ("AUTH_BLOCKED", "AUTH_REQUIRED"):
+            return RecoveryProposal(
+                strategy="alternative_route",
+                reason="Target is protected by authentication barrier — sign in before accessing destination",
+            )
+        if failure_code in ("RESET_LINK_EXPIRED", "UNEXPECTED_DIALOG"):
             return RecoveryProposal(
                 strategy="request_human",
                 reason=f"{failure_code} requires human judgment",
