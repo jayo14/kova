@@ -188,6 +188,8 @@ export async function navigateExploration(
   );
 }
 
+let activeStreamSessionId: string | null = null;
+
 /**
  * Connects to live Server-Sent Events stream for an exploration session.
  */
@@ -197,6 +199,11 @@ export async function streamExplorationEvents(
   signal?: AbortSignal,
   token?: string
 ): Promise<void> {
+  if (activeStreamSessionId === sessionId) {
+    return;
+  }
+  activeStreamSessionId = sessionId;
+
   const baseUrl = getApiBaseUrl();
   const streamUrl = `${baseUrl}/api/v1/exploration/${encodeURIComponent(sessionId)}/events/stream`;
 
@@ -262,6 +269,10 @@ export async function streamExplorationEvents(
   } catch (err) {
     if ((err as Error).name !== "AbortError") {
       await syncSessionState(sessionId, onEvent, token);
+    }
+  } finally {
+    if (activeStreamSessionId === sessionId) {
+      activeStreamSessionId = null;
     }
   }
 }
@@ -616,6 +627,9 @@ export async function submitCredential(
 
   try {
     await submitExplorationCredentials(currentSessionId, email, password, false, token);
+    if (activeStreamSessionId !== currentSessionId) {
+      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    }
   } catch (err) {
     // If the POST itself fails (network, server), report it
     const message = err instanceof Error ? err.message : "Could not submit credentials to the server.";
@@ -639,6 +653,9 @@ export async function answerQuestion(
 
   try {
     await submitExplorationAnswer(currentSessionId, questionId, answer, token);
+    if (activeStreamSessionId !== currentSessionId) {
+      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to submit answer";
     onEvent({ type: "error", message });
@@ -675,6 +692,9 @@ export async function createAccount(
 
   try {
     await createExplorationAccount(currentSessionId, email, password, token);
+    if (activeStreamSessionId !== currentSessionId) {
+      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not create account on the server.";
     onEvent({ type: "error", message });

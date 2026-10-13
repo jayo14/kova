@@ -454,7 +454,7 @@ class ExplorationEngine:
                     "status": "active",
                 })
 
-                auth_success, auth_detail = await self._perform_login(page, credential)
+                auth_success, auth_detail = await self._perform_login(page, credential, is_signup=create_account)
                 if not auth_success:
                     should_close_browser = False
                     error_msg = auth_detail or "Authentication failed with provided credentials."
@@ -804,12 +804,38 @@ class ExplorationEngine:
                 continue
         return None
 
-    async def _perform_login(self, page, credential: dict) -> tuple[bool, str]:
-        """Fills login form, submits credentials, and verifies navigation."""
+    async def _perform_login(self, page, credential: dict, is_signup: bool = False) -> tuple[bool, str]:
+        """Fills login or signup form, submits credentials, and verifies navigation."""
         email = credential.get("email", "")
         password = credential.get("password", "")
 
-        # Rapidly locate email/username input using unified selector
+        # 1. Locate name input (required by many signup/registration forms)
+        name_selector = (
+            'input[name="name" i], '
+            'input[name*="full_name" i], '
+            'input[name*="fullname" i], '
+            'input[autocomplete="name" i], '
+            'input[placeholder*="name" i], '
+            'input[placeholder*="Elvis" i], '
+            'input[aria-label*="name" i], '
+            'input[id*="name" i]:not([id*="user" i])'
+        )
+        try:
+            name_loc = page.locator(name_selector).first
+            if await name_loc.is_visible(timeout=1000):
+                display_name = credential.get("name") or "Kova Tester"
+                await name_loc.focus()
+                await name_loc.fill(display_name)
+                try:
+                    await name_loc.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # 2. Rapidly locate email/username input using unified selector
         email_selector = (
             'input[type="email"], '
             'input[name="email" i], '
@@ -872,12 +898,43 @@ class ExplorationEngine:
             except Exception:
                 pass
 
-            await password_input.focus()
-            await password_input.fill(password)
+            # Fill all visible password inputs (handles password + confirm password fields)
             try:
-                await password_input.evaluate(
-                    "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-                )
+                pwd_locs = await page.locator(password_selector).all()
+                for p_loc in pwd_locs:
+                    try:
+                        if await p_loc.is_visible(timeout=500):
+                            await p_loc.focus()
+                            await p_loc.fill(password)
+                            await p_loc.evaluate(
+                                "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                            )
+                    except Exception:
+                        pass
+            except Exception:
+                await password_input.focus()
+                await password_input.fill(password)
+                try:
+                    await password_input.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                    )
+                except Exception:
+                    pass
+
+            # Automatically agree to terms/privacy checkboxes if required on registration forms
+            terms_selector = (
+                'input[type="checkbox"][name*="term" i], '
+                'input[type="checkbox"][name*="agree" i], '
+                'input[type="checkbox"][id*="term" i], '
+                'input[type="checkbox"][id*="agree" i], '
+                'input[type="checkbox"][aria-label*="term" i], '
+                'input[type="checkbox"][aria-label*="agree" i]'
+            )
+            try:
+                terms_cb = page.locator(terms_selector).first
+                if await terms_cb.is_visible(timeout=500):
+                    if not await terms_cb.is_checked():
+                        await terms_cb.check()
             except Exception:
                 pass
 
@@ -923,7 +980,10 @@ class ExplorationEngine:
                 pass
 
             # Poll for authentication resolution (URL change, password detachment, or explicit error alert)
-            login_url_indicators = ["/login", "/signin", "/sign-in", "/auth/login", "/log-in", "/session/new"]
+            auth_url_indicators = [
+                "/login", "/signin", "/sign-in", "/auth/login", "/log-in", "/session/new",
+                "/signup", "/sign-up", "/register", "/auth/signup", "/registration"
+            ]
             max_wait_seconds = 8.0
             poll_interval = 0.5
             elapsed = 0.0
@@ -935,12 +995,12 @@ class ExplorationEngine:
                 # 1. Check for explicit visible error banner
                 auth_error = await self._extract_visible_auth_error(page)
                 if auth_error:
-                    logger.info("Login failed — explicit error banner detected: %s", auth_error)
+                    logger.info("Auth submission failed — explicit error banner detected: %s", auth_error)
                     return False, auth_error
 
-                # 2. Check if navigated away from login URL
+                # 2. Check if navigated away from auth URL
                 current_url = page.url.lower()
-                stayed_on_login = any(kw in current_url for kw in login_url_indicators)
+                stayed_on_auth = any(kw in current_url for kw in auth_url_indicators)
 
                 # 3. Check if password field is still visible
                 is_still_password = False
@@ -950,31 +1010,32 @@ class ExplorationEngine:
                     logger.debug("Password field check failed (likely navigated): %s", e)
                     is_still_password = False
 
-                # If URL changed away from login, or password field detached/hidden
-                if not stayed_on_login or not is_still_password:
-                    logger.info("Login succeeded — navigated away or password field detached (elapsed: %.1fs)", elapsed)
+                # If URL changed away from login/signup, or password field detached/hidden
+                if not stayed_on_auth or not is_still_password:
+                    logger.info("Auth succeeded — navigated away or password field detached (elapsed: %.1fs)", elapsed)
                     try:
                         await page.wait_for_load_state("domcontentloaded", timeout=3000)
                     except Exception:
                         pass
                     return True, ""
 
-            # Check if still stuck on login page after polling timeout
+            # Check if still stuck on auth page after polling timeout
             auth_error = await self._extract_visible_auth_error(page)
             if auth_error:
                 return False, auth_error
 
             current_url = page.url.lower()
-            stayed_on_login = any(kw in current_url for kw in login_url_indicators)
+            stayed_on_auth = any(kw in current_url for kw in auth_url_indicators)
             is_still_password = False
             try:
                 is_still_password = await page.locator('input[type="password"]').first.is_visible(timeout=500)
             except Exception:
                 is_still_password = False
 
-            if stayed_on_login and is_still_password:
-                logger.info("Login failed — still on login page with password field visible after %.1fs", max_wait_seconds)
-                return False, "Login failed. The credentials may be incorrect or the page requires additional input."
+            if stayed_on_auth and is_still_password:
+                logger.info("Auth failed — still on auth page with password field visible after %.1fs", max_wait_seconds)
+                fail_msg = "Account creation failed. The registration form may require additional verification or custom fields." if is_signup else "Login failed. The credentials may be incorrect or the page requires additional input."
+                return False, fail_msg
 
             return True, ""
 

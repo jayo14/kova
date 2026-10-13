@@ -274,8 +274,6 @@ async def stream_exploration_events(
                             ExplorationStatus.COMPLETED.value,
                             ExplorationStatus.FAILED.value,
                             ExplorationStatus.CANCELLED.value,
-                            ExplorationStatus.AUTH_REQUIRED.value,
-                            ExplorationStatus.ASKING.value,
                         }
                         if current_session.status in terminal_statuses:
                             # Ensure any remaining events are completely flushed
