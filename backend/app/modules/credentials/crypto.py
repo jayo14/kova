@@ -25,8 +25,13 @@ def get_fernet() -> Fernet:
                 "CREDENTIAL_ENCRYPTION_KEY must be a valid 32-byte url-safe base64 Fernet key."
             ) from exc
 
-    # Hardcoded dev key allowed only in test environments
-    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") or settings.ENVIRONMENT == "test":
+    # Hardcoded dev key allowed in test and development environments
+    if (
+        "pytest" in sys.modules
+        or os.environ.get("PYTEST_CURRENT_TEST")
+        or settings.ENVIRONMENT in ("test", "development")
+        or not settings.is_production
+    ):
         return Fernet(_DEV_FERNET_KEY)
 
     raise ValueError("CREDENTIAL_ENCRYPTION_KEY is required and must be configured outside tests.")

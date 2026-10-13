@@ -749,12 +749,12 @@ class ExplorationEngine:
                         if inspect.isawaitable(btn):
                             btn = await btn
                         try:
-                            vis = btn.is_visible()
+                            vis = btn.is_visible(timeout=1000) if hasattr(btn, "is_visible") else False
                             if inspect.isawaitable(vis):
                                 vis = await vis
                             if not vis:
                                 continue
-                            txt = btn.inner_text()
+                            txt = btn.inner_text(timeout=1000) if hasattr(btn, "inner_text") else ""
                             if inspect.isawaitable(txt):
                                 txt = await txt
                             text = (txt or "").lower()
@@ -770,6 +770,7 @@ class ExplorationEngine:
         candidates = [
             'button[type="submit"]',
             'input[type="submit"]',
+            'button:has-text("Create account"), button:has-text("Create Account"), button:has-text("Sign up"), button:has-text("Sign Up"), button:has-text("Register")',
             '#login-btn, #submit-btn, [data-testid*="login" i], [data-testid*="submit" i]',
             'button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login")',
             'button:has-text("Continue"), button:has-text("Submit"), button:has-text("Next")',
@@ -786,12 +787,12 @@ class ExplorationEngine:
                     if inspect.isawaitable(btn):
                         btn = await btn
                     try:
-                        vis = btn.is_visible()
+                        vis = btn.is_visible(timeout=1000) if hasattr(btn, "is_visible") else False
                         if inspect.isawaitable(vis):
                             vis = await vis
                         if not vis:
                             continue
-                        txt = btn.inner_text()
+                        txt = btn.inner_text(timeout=1000) if hasattr(btn, "inner_text") else ""
                         if inspect.isawaitable(txt):
                             txt = await txt
                         text = (txt or "").lower()
@@ -948,30 +949,39 @@ class ExplorationEngine:
             submit_btn = await self._find_submit_button(page, password_input)
 
             # Attempt submission via submit button
+            submitted = False
             if submit_btn:
                 try:
                     await submit_btn.scroll_into_view_if_needed(timeout=1500)
                     await submit_btn.click(timeout=3000)
+                    submitted = True
                 except Exception:
                     try:
                         await submit_btn.click(force=True, timeout=2000)
+                        submitted = True
                     except Exception:
                         pass
 
-            # Always also dispatch Enter key and requestSubmit() on form to guarantee sign in
+            # Fallback to Enter key and requestSubmit() only if submit button was not present or failed
+            if not submitted:
+                try:
+                    await password_input.focus()
+                    await password_input.press("Enter")
+                    submitted = True
+                except Exception:
+                    pass
+
+                if not submitted:
+                    try:
+                        await password_input.evaluate("el => el.form ? el.form.requestSubmit() : null")
+                    except Exception:
+                        pass
+
+            # Capture live screenshot immediately after submit trigger (in background so polling begins promptly)
             try:
-                await password_input.focus()
-                await password_input.press("Enter")
+                self._spawn_bg(self._capture_and_emit_screenshot(page))
             except Exception:
                 pass
-
-            try:
-                await password_input.evaluate("el => el.form ? el.form.requestSubmit() : null")
-            except Exception:
-                pass
-
-            # Capture live screenshot immediately after submit trigger
-            await self._capture_and_emit_screenshot(page)
 
             # Wait briefly for page to begin responding to submit
             try:

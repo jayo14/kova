@@ -89,6 +89,10 @@ export function ExplorePage() {
           break;
         case "state_change":
           transition(event.state);
+          if (event.state !== "auth_required" && event.state !== "authenticating") {
+            setCredentialLoading(false);
+            setAuthMode("choice");
+          }
           break;
         case "screenshot":
           addScreenshot(event.screenshot, "Playwright snapshot");
@@ -101,6 +105,8 @@ export function ExplorePage() {
           break;
         case "auth_required":
           setAuthRequired(event.request);
+          setCredentialLoading(false);
+          setAuthMode("choice");
           break;
         case "question":
           setQuestion(event.question);
@@ -112,6 +118,7 @@ export function ExplorePage() {
           setMissions(event.missions, event.recommendation);
           break;
         case "error":
+          setCredentialLoading(false);
           // Auth errors stay in auth_required state with error message
           // Fatal errors transition to failed state
           if (state.state === "authenticating" || state.state === "auth_required") {
@@ -123,7 +130,7 @@ export function ExplorePage() {
           break;
       }
     },
-    [addActivity, transition, addScreenshot, setPage, setAuthRequired, setQuestion, setDiscoveries, setMissions, fail, state.state]
+    [addActivity, transition, addScreenshot, setPage, setAuthRequired, setQuestion, setDiscoveries, setMissions, fail, setAuthMode, state.state]
   );
 
   const handleEventRef = useRef(handleEvent);
@@ -237,6 +244,7 @@ export function ExplorePage() {
       setAuthMode("creating_account");
       setCredentialLoading(true);
       setCredentialError(null);
+      transition("authenticating");
 
       try {
         const controller = new AbortController();
@@ -251,9 +259,8 @@ export function ExplorePage() {
         const message = err instanceof Error ? err.message : "Could not create account.";
         setCredentialError(message);
         setAuthMode("choice");
-        transition("auth_required");
-      } finally {
         setCredentialLoading(false);
+        transition("auth_required");
       }
     }
   };

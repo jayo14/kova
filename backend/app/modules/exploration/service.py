@@ -35,7 +35,7 @@ from app.modules.projects.schemas import ProjectCreate
 logger = logging.getLogger(__name__)
 
 # Maximum time an exploration can run before being forcibly timed out
-EXPLORATION_TIMEOUT_SECONDS = 120
+EXPLORATION_TIMEOUT_SECONDS = 240
 
 # Active browser sessions keyed by exploration session ID
 _active_browser_sessions: dict[uuid.UUID, BrowserSession] = {}
@@ -195,7 +195,7 @@ class ExplorationService:
                 logger.warning("Could not save credential to project: %s", e)
 
         # Transition status to AUTHENTICATING and clear pending credential_request
-        await self.repo.update_status(
+        updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
             clear_credential_request=True,
@@ -216,7 +216,7 @@ class ExplorationService:
             ),
         )
 
-        return session
+        return updated_session or session
 
     async def create_account(
         self,
@@ -260,7 +260,7 @@ class ExplorationService:
                 logger.warning("Could not save created credential to project: %s", e)
 
         # Transition status to AUTHENTICATING and clear pending credential_request
-        await self.repo.update_status(
+        updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
             clear_credential_request=True,
@@ -282,7 +282,7 @@ class ExplorationService:
             ),
         )
 
-        return session
+        return updated_session or session
 
     async def submit_answer(
         self,
@@ -297,7 +297,7 @@ class ExplorationService:
         role_selected = data.answer
 
         # Transition status to DISCOVERING and clear resolved question
-        await self.repo.update_status(
+        updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.DISCOVERING,
             selected_role=role_selected,
@@ -318,7 +318,7 @@ class ExplorationService:
             ),
         )
 
-        return session
+        return updated_session or session
 
     async def cancel_session(
         self,
