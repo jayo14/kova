@@ -28,6 +28,7 @@ const activeStatuses: ExecutionStatus[] = [
   "running",
   "waiting",
   "paused",
+  "human_controlled",
   "resuming",
 ];
 
@@ -36,6 +37,7 @@ const agentControlledStatuses: ExecutionStatus[] = [
   "initializing",
   "browser_ready",
   "paused",
+  "human_controlled",
   "resuming",
 ];
 
@@ -190,8 +192,8 @@ export function ExecutionBrowser({
           </div>
         )}
 
-        {/* Live Viewport (canonical execution browser) */}
-        {executionId ? (
+        {/* Live Viewport (active execution browser) */}
+        {executionId && isActive ? (
           <div className="absolute inset-0 w-full h-full z-20">
             <LiveViewport
               executionId={executionId}
@@ -199,7 +201,7 @@ export function ExecutionBrowser({
             />
           </div>
         ) : (
-          /* Static screenshot fallback before execution starts */
+          /* Static screenshot fallback / final snapshot */
           <div className="absolute inset-0 w-full h-full z-20 flex items-center justify-center p-2 sm:p-4 bg-background/95">
             {latestScreenshot ? (
               <div className="relative w-full h-full flex flex-col items-center justify-center">
@@ -211,7 +213,7 @@ export function ExecutionBrowser({
                   className="max-h-full max-w-full w-auto h-auto rounded-lg border border-border/80 object-contain shadow-md bg-background animate-in fade-in duration-200"
                 />
               </div>
-            ) : (
+            ) : isActive ? (
               <div className="flex flex-col items-center text-center p-6 max-w-md animate-in fade-in duration-300">
                 <div className="relative mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl bg-primary opacity-20" />
@@ -222,6 +224,26 @@ export function ExecutionBrowser({
                 </h3>
                 <p className="text-body-xs text-muted-foreground mb-4">
                   {currentAction || `Launching Chromium on ${displayHost}...`}
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center text-center p-6 max-w-md animate-in fade-in duration-300">
+                <div className="relative mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-secondary/50">
+                  <MaterialIcon
+                    name={status === "completed" ? "check_circle" : status === "blocked" ? "shield" : "browser_updated"}
+                    size={32}
+                    className="text-muted-foreground"
+                  />
+                </div>
+                <h3 className="text-body-md font-semibold text-foreground mb-1.5">
+                  {status === "completed"
+                    ? "Execution completed"
+                    : status === "blocked"
+                    ? "Execution blocked"
+                    : "Execution finished"}
+                </h3>
+                <p className="text-body-xs text-muted-foreground mb-4">
+                  {errorMessage || `Browser session ended for ${displayHost}.`}
                 </p>
               </div>
             )}
@@ -261,16 +283,50 @@ export function ExecutionBrowser({
           </div>
         )}
 
-        {/* Terminal Failed */}
-        {!isActive && (status === "failed" || status === "timeout") && (
-          <div className="absolute bottom-4 left-4 right-4 z-30 flex items-center justify-between rounded-xl border border-destructive/30 bg-card/95 backdrop-blur-md p-3.5 shadow-lg animate-in fade-in slide-in-from-bottom-3 duration-300">
+        {/* Terminal Blocked */}
+        {!isActive && status === "blocked" && (
+          <div className="absolute bottom-4 left-4 right-4 z-30 flex items-center justify-between rounded-xl border border-amber-500/30 bg-card/95 backdrop-blur-md p-3.5 shadow-lg animate-in fade-in slide-in-from-bottom-3 duration-300">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-destructive/10 text-destructive shrink-0">
-                <MaterialIcon name={status === "timeout" ? "timer_off" : "error"} size={18} />
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                <MaterialIcon name="shield" size={18} />
               </div>
               <div>
                 <p className="text-body-sm font-semibold text-foreground">
-                  {status === "timeout" ? "Execution timed out" : "Execution failed"}
+                  Execution blocked
+                </p>
+                <p className="text-caption text-muted-foreground line-clamp-1">
+                  {errorMessage || "Verification blocked: human action or valid test account required."}
+                </p>
+              </div>
+            </div>
+            {onRetry && (
+              <button
+                onClick={onRetry}
+                disabled={isRetrying}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-caption font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
+                type="button"
+              >
+                <MaterialIcon
+                  name="refresh"
+                  size={14}
+                  className={cn(isRetrying && "animate-spin")}
+                />
+                <span>Run again</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Terminal Failed / Error / Timeout / Cancelled */}
+        {!isActive && (status === "failed" || status === "timeout" || status === "error" || status === "cancelled" || status === "unverified") && (
+          <div className="absolute bottom-4 left-4 right-4 z-30 flex items-center justify-between rounded-xl border border-destructive/30 bg-card/95 backdrop-blur-md p-3.5 shadow-lg animate-in fade-in slide-in-from-bottom-3 duration-300">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-destructive/10 text-destructive shrink-0">
+                <MaterialIcon name={status === "timeout" ? "timer_off" : status === "cancelled" ? "cancel" : "error"} size={18} />
+              </div>
+              <div>
+                <p className="text-body-sm font-semibold text-foreground">
+                  {status === "timeout" ? "Execution timed out" : status === "cancelled" ? "Execution cancelled" : "Execution failed"}
                 </p>
                 <p className="text-caption text-muted-foreground line-clamp-1">
                   {errorMessage || "Kova could not accomplish the mission objective."}

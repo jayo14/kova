@@ -30,6 +30,11 @@ ALLOWED_NAMED_KEYS = {
     "End",
     "PageUp",
     "PageDown",
+    "Shift",
+    "Control",
+    "Alt",
+    "Meta",
+    "CapsLock",
 }
 
 from app.engine.browser.actions import ActionType
