@@ -290,34 +290,34 @@ async def stream_exploration_events(
                                     }
                                     yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
 
-                        # If status is READY, ensure candidate_missions have been delivered
-                        has_missions_event = any(ev.event_type == "missions" for ev in final_events)
-                        if current_session.status == ExplorationStatus.READY.value and not has_missions_event:
-                            await asyncio.sleep(0.5)
-                            retry_events = await event_repo.list_by_session(parsed_id, limit=500)
-                            for ev in retry_events:
-                                if ev.id not in seen_event_ids:
-                                    seen_event_ids.add(ev.id)
-                                    data_payload = {
-                                        "id": str(ev.id),
-                                        "exploration_id": str(ev.exploration_id),
-                                        "event_type": ev.event_type,
-                                        "payload": ev.payload,
-                                        "created_at": ev.created_at.isoformat() if ev.created_at else None,
-                                    }
-                                    yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
+                            # If status is READY, ensure candidate_missions have been delivered
+                            has_missions_event = any(ev.event_type == "missions" for ev in final_events)
+                            if current_session.status == ExplorationStatus.READY.value and not has_missions_event:
+                                await asyncio.sleep(0.5)
+                                retry_events = await event_repo.list_by_session(parsed_id, limit=500)
+                                for ev in retry_events:
+                                    if ev.id not in seen_event_ids:
+                                        seen_event_ids.add(ev.id)
+                                        data_payload = {
+                                            "id": str(ev.id),
+                                            "exploration_id": str(ev.exploration_id),
+                                            "event_type": ev.event_type,
+                                            "payload": ev.payload,
+                                            "created_at": ev.created_at.isoformat() if ev.created_at else None,
+                                        }
+                                        yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
 
-                        # Emit terminal state_change if not already emitted
-                        if current_session.status not in seen_statuses:
-                            seen_statuses.add(current_session.status)
-                            yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
-                        yield "event: done\ndata: {}\n\n"
-                        break
-                    else:
-                        # Emit non-terminal state_change for new statuses
-                        if current_session.status not in seen_statuses:
-                            seen_statuses.add(current_session.status)
-                            yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
+                            # Emit terminal state_change if not already emitted
+                            if current_session.status not in seen_statuses:
+                                seen_statuses.add(current_session.status)
+                                yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
+                            yield "event: done\ndata: {}\n\n"
+                            break
+                        else:
+                            # Emit non-terminal state_change for new statuses
+                            if current_session.status not in seen_statuses:
+                                seen_statuses.add(current_session.status)
+                                yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
 
                     # Heartbeat every ~15 seconds — must stay inside the loop
                     ping_counter += 1

@@ -34,6 +34,15 @@ export function AgentActivity({
 }: AgentActivityProps) {
   if (activities.length === 0) return null;
 
+  // Identify the single active activity (last active item wins)
+  const lastActiveIndex = activities.reduce((lastIdx, act, idx) => {
+    return act.status === "active" ? idx : lastIdx;
+  }, -1);
+
+  const completedCount = activities.filter(
+    (a, idx) => a.status === "completed" || (a.status === "active" && idx !== lastActiveIndex)
+  ).length;
+
   return (
     <div className={cn("flex flex-col space-y-2", className)}>
       {title && (
@@ -42,36 +51,37 @@ export function AgentActivity({
             {title}
           </span>
           <span className="text-[11px] font-mono text-muted-foreground/50">
-            {activities.filter((a) => a.status === "completed").length}/{activities.length}
+            {completedCount}/{activities.length}
           </span>
         </div>
       )}
 
       <div className="space-y-1.5" role="log" aria-live="polite">
-        {activities.map((item) => {
+        {activities.map((item, index) => {
           const displayMessage = sanitizeActivityMessage(item.message);
+          const isCurrentActive = item.status === "active" && index === lastActiveIndex;
+          const isCompleted = item.status === "completed" || (item.status === "active" && index !== lastActiveIndex);
 
           return (
             <div
               key={item.id}
               className={cn(
                 "flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-300",
-                item.status === "active" &&
-                  "bg-primary/5 border border-primary/15 shadow-xs",
-                item.status === "completed" && "bg-transparent opacity-85",
+                isCurrentActive && "bg-primary/5 border border-primary/20 shadow-xs",
+                isCompleted && "bg-transparent opacity-90",
                 item.status === "failed" && "bg-destructive/5 border border-destructive/20",
                 item.status === "pending" && "opacity-50"
               )}
             >
               <div className="shrink-0 flex items-center justify-center w-4 h-4">
-                {item.status === "completed" && (
+                {isCompleted && (
                   <MaterialIcon
-                    name="check"
+                    name="check_circle"
                     size={16}
-                    className="text-primary font-bold"
+                    className="text-emerald-500 font-medium"
                   />
                 )}
-                {item.status === "active" && (
+                {isCurrentActive && (
                   <span className="relative flex h-2.5 w-2.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
                     <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-primary" />
@@ -82,9 +92,9 @@ export function AgentActivity({
                 )}
                 {item.status === "failed" && (
                   <MaterialIcon
-                    name="close"
+                    name="cancel"
                     size={16}
-                    className="text-destructive font-bold"
+                    className="text-destructive font-medium"
                   />
                 )}
               </div>
@@ -92,8 +102,8 @@ export function AgentActivity({
               <span
                 className={cn(
                   "text-body-sm transition-colors",
-                  item.status === "completed" && "text-muted-foreground",
-                  item.status === "active" && "font-medium text-foreground",
+                  isCompleted && "text-muted-foreground",
+                  isCurrentActive && "font-medium text-foreground",
                   item.status === "pending" && "text-muted-foreground/60",
                   item.status === "failed" && "text-destructive"
                 )}

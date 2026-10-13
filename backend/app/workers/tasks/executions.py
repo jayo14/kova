@@ -88,18 +88,33 @@ async def _run_execution_async(task, execution_id: str):
         from app.engine.credentials.models import Credential as EngineCredential
         from app.engine.credentials.store import CredentialStore
         from app.modules.credentials.repository import CredentialRepository
+        from app.modules.credentials.crypto import decrypt_credential
 
         cred_repo = CredentialRepository(db)
         db_credentials = await cred_repo.list_by_project(flow.project_id)
         credential_store = CredentialStore()
         for cred in db_credentials:
+            decrypted_pass = cred.password
+            if decrypted_pass and decrypted_pass.startswith("gAAAAA"):
+                try:
+                    decrypted_pass = decrypt_credential(decrypted_pass)
+                except Exception as dec_err:
+                    logger.warning("Failed to decrypt password for credential %s: %s", cred.id, dec_err)
+
             credential_store.add(
                 EngineCredential(
-                    id=cred.name,
+                    id=str(cred.id),
                     email=cred.email,
-                    password=cred.password,
+                    password=decrypted_pass,
                 )
             )
+            if cred.name:
+                credential_store.add(EngineCredential(id=cred.name, email=cred.email, password=decrypted_pass))
+                credential_store.add(EngineCredential(id=cred.name.lower(), email=cred.email, password=decrypted_pass))
+            if not credential_store.has("default"):
+                credential_store.add(EngineCredential(id="default", email=cred.email, password=decrypted_pass))
+            if not credential_store.has("login"):
+                credential_store.add(EngineCredential(id="login", email=cred.email, password=decrypted_pass))
 
         # Load project for target_url
         from app.modules.projects.repository import ProjectRepository
