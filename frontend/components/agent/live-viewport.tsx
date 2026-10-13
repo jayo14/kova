@@ -241,6 +241,7 @@ export function LiveViewport({
     if (!isHumanControlled) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
+    canvas.focus();
     const { x, y } = getCanvasRelativeCoords(e, canvas);
     sendInput({ kind: "mouse_down", x, y, button: e.button });
   }, [isHumanControlled, sendInput]);
@@ -259,7 +260,11 @@ export function LiveViewport({
       setShowTakeoverDialog(true);
       return;
     }
-  }, [isHumanControlled]);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const { x, y } = getCanvasRelativeCoords(e, canvas);
+    sendInput({ kind: "click", x, y });
+  }, [isHumanControlled, sendInput]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isHumanControlled) return;
@@ -269,10 +274,21 @@ export function LiveViewport({
     sendInput({ kind: "mouse_move", x, y });
   }, [isHumanControlled, sendInput]);
 
-  const handleCanvasWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    if (!isHumanControlled) return;
-    e.preventDefault();
-    sendInput({ kind: "scroll", delta_x: e.deltaX, delta_y: e.deltaY });
+  // Non-passive wheel event listener on the canvas DOM element to allow preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      if (!isHumanControlled) return;
+      e.preventDefault();
+      sendInput({ kind: "scroll", delta_x: e.deltaX, delta_y: e.deltaY });
+    };
+
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      canvas.removeEventListener("wheel", handleWheel);
+    };
   }, [isHumanControlled, sendInput]);
 
   // Keyboard input handler
@@ -280,13 +296,33 @@ export function LiveViewport({
     if (!isHumanControlled) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key.startsWith("F") && e.key.length <= 3) return;
+      if (e.ctrlKey && e.shiftKey) return;
+      if (e.metaKey && e.shiftKey) return;
+
       e.preventDefault();
       sendInput({ kind: "key_down", key: e.key });
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key.startsWith("F") && e.key.length <= 3) return;
+      if (e.ctrlKey && e.shiftKey) return;
+      if (e.metaKey && e.shiftKey) return;
+
       e.preventDefault();
       sendInput({ kind: "key_up", key: e.key });
     };
@@ -317,27 +353,39 @@ export function LiveViewport({
           <button
             type="button"
             aria-label="Back"
-            title="Back"
+            title={isHumanControlled ? "Back" : "Take over control to navigate"}
+            disabled={!isHumanControlled}
             onClick={() => sendNav("back")}
-            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            className={cn(
+              "p-1 rounded text-muted-foreground transition-colors",
+              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+            )}
           >
             <MaterialIcon name="arrow_back" size={14} />
           </button>
           <button
             type="button"
             aria-label="Forward"
-            title="Forward"
+            title={isHumanControlled ? "Forward" : "Take over control to navigate"}
+            disabled={!isHumanControlled}
             onClick={() => sendNav("forward")}
-            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            className={cn(
+              "p-1 rounded text-muted-foreground transition-colors",
+              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+            )}
           >
             <MaterialIcon name="arrow_forward" size={14} />
           </button>
           <button
             type="button"
             aria-label="Reload"
-            title="Reload"
+            title={isHumanControlled ? "Reload" : "Take over control to reload"}
+            disabled={!isHumanControlled}
             onClick={() => sendNav("reload")}
-            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            className={cn(
+              "p-1 rounded text-muted-foreground transition-colors",
+              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+            )}
           >
             <MaterialIcon name="refresh" size={14} />
           </button>
@@ -352,16 +400,16 @@ export function LiveViewport({
           ref={canvasRef}
           width={BROWSER_VIEWPORT.width}
           height={BROWSER_VIEWPORT.height}
+          tabIndex={isHumanControlled ? 0 : -1}
           className={cn(
-            "w-full h-full object-contain",
-            isHumanControlled ? "cursor-pointer" : "cursor-default"
+            "w-full h-full object-contain outline-none",
+            isHumanControlled ? "cursor-pointer focus:ring-1 focus:ring-primary/30" : "cursor-default"
           )}
           style={{ imageRendering: "auto" }}
           onMouseDown={handleCanvasMouseDown}
           onMouseUp={handleCanvasMouseUp}
           onClick={handleCanvasClick}
           onMouseMove={isHumanControlled ? handleCanvasMouseMove : undefined}
-          onWheel={isHumanControlled ? handleCanvasWheel : undefined}
         />
 
         {/* Agent cursor overlay */}
