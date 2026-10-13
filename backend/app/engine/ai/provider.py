@@ -92,13 +92,19 @@ class OpenAICompatibleProvider(AIProvider):
         prompt: str,
         schema: type[T],
     ) -> T:
+        schema_json = json.dumps(schema.model_json_schema())
+        augmented_system = (
+            f"{system}\n\n"
+            f"You MUST respond ONLY with a single valid JSON object strictly conforming to this JSON Schema:\n"
+            f"{schema_json}"
+        )
         payload = {
             "model": self._model,
             "temperature": ai_settings.AI_TEMPERATURE,
             "max_tokens": ai_settings.AI_MAX_OUTPUT_TOKENS,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": system},
+                {"role": "system", "content": augmented_system},
                 {"role": "user", "content": prompt},
             ],
         }
