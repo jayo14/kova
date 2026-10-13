@@ -62,17 +62,22 @@ class AIProvider(ABC):
 class OpenAICompatibleProvider(AIProvider):
     """Provider for any OpenAI-compatible chat completions API.
 
-    Works with OpenAI, Azure OpenAI gateways, OpenRouter, Together, vLLM,
-    Ollama (with /v1), LM Studio, and other compatible endpoints. Structured
-    output is requested via response_format=json_object and validated locally
-    against the Pydantic schema (portable across compatible providers).
+    Works with OpenAI, Azure OpenAI gateways, OpenRouter, Google Gemini,
+    Groq, NVIDIA NIM, Together, vLLM, Ollama (with /v1), and LM Studio.
+    Structured output is requested via response_format=json_object and validated
+    locally against the Pydantic schema (portable across compatible providers).
     """
 
-    name = "openai_compatible"
-
-    def __init__(self, model: str, api_key: str, base_url: str):
+    def __init__(
+        self,
+        model: str,
+        api_key: str,
+        base_url: str,
+        name: str = "openai_compatible",
+    ):
         if not model or not api_key:
-            raise AIProviderError("OpenAI-compatible provider requires model and api_key")
+            raise AIProviderError(f"Provider {name} requires model and api_key")
+        self.name = name
         self._model = model
         self._api_key = api_key
         self._base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
@@ -97,14 +102,19 @@ class OpenAICompatibleProvider(AIProvider):
                 {"role": "user", "content": prompt},
             ],
         }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        if "openrouter" in self.name.lower() or "openrouter.ai" in self._base_url:
+            headers["HTTP-Referer"] = "https://kova.dev"
+            headers["X-Title"] = "Kova Agent"
+
         try:
             async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as client:
                 resp = await client.post(
                     f"{self._base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self._api_key}",
-                        "Content-Type": "application/json",
-                    },
+                    headers=headers,
                     json=payload,
                 )
         except httpx.TimeoutException as e:
@@ -113,8 +123,9 @@ class OpenAICompatibleProvider(AIProvider):
             raise AIProviderError(f"AI request failed: {e}", provider=self.name) from e
 
         if resp.status_code >= 400:
+            err_msg = resp.text[:300] if resp.text else ""
             raise AIProviderError(
-                f"AI provider returned {resp.status_code}",
+                f"AI provider returned {resp.status_code}: {err_msg}",
                 provider=self.name,
                 status_code=resp.status_code,
             )
@@ -154,21 +165,115 @@ class OpenAICompatibleProvider(AIProvider):
             ) from e
 
 
+class FailoverAIProvider(AIProvider):
+    """Provider that wraps multiple AI providers with automatic fallback on failure."""
+
+    name = "failover"
+
+    def __init__(self, providers: list[AIProvider]):
+        if not providers:
+            raise AIProviderError("FailoverAIProvider requires at least one provider")
+        self._providers = providers
+
+    @property
+    def model_name(self) -> str:
+        return f"failover({', '.join(f'{p.name}:{p.model_name}' for p in self._providers)})"
+
+    @property
+    def providers(self) -> list[AIProvider]:
+        return self._providers
+
+    async def generate_structured(
+        self,
+        system: str,
+        prompt: str,
+        schema: type[T],
+    ) -> T:
+        errors: list[str] = []
+        for provider in self._providers:
+            try:
+                logger.info("Attempting AI generation with provider '%s' (model: %s)", provider.name, provider.model_name)
+                result = await provider.generate_structured(system, prompt, schema)
+                return result
+            except AIProviderError as e:
+                logger.warning(
+                    "AI provider '%s' failed (status %s: %s). Falling over to next provider...",
+                    provider.name,
+                    getattr(e, "status_code", None),
+                    e,
+                )
+                errors.append(f"{provider.name}: {e}")
+            except Exception as e:
+                logger.warning(
+                    "AI provider '%s' encountered unexpected error: %s. Falling over...",
+                    provider.name,
+                    e,
+                )
+                errors.append(f"{provider.name}: {e}")
+
+        raise AIProviderError(
+            f"All AI providers in failover chain failed: {'; '.join(errors)}",
+            provider=self.name,
+        )
+
+
 def get_ai_provider() -> AIProvider | None:
-    """Return the configured provider, or None when AI is disabled.
+    """Return the configured provider or failover composite, or None when AI is disabled.
 
     Never raises at import/startup — a missing key means deterministic-only mode.
     """
     if not ai_settings.ai_enabled:
         return None
     try:
-        if ai_settings.AI_PROVIDER == "openai_compatible":
+        if ai_settings.AI_PROVIDER == "failover":
+            active_providers: list[AIProvider] = []
+            for prov_name in ai_settings.failover_providers:
+                creds = ai_settings.get_provider_credentials(prov_name)
+                if creds and creds["api_key"] and creds["model"]:
+                    active_providers.append(
+                        OpenAICompatibleProvider(
+                            model=creds["model"],
+                            api_key=creds["api_key"],
+                            base_url=creds["base_url"],
+                            name=creds["name"],
+                        )
+                    )
+            # Also check if generic AI_API_KEY is configured
+            if ai_settings.AI_API_KEY and ai_settings.AI_MODEL:
+                active_providers.append(
+                    OpenAICompatibleProvider(
+                        model=ai_settings.AI_MODEL,
+                        api_key=ai_settings.AI_API_KEY,
+                        base_url=ai_settings.AI_BASE_URL,
+                        name="generic_fallback",
+                    )
+                )
+
+            if not active_providers:
+                return None
+            if len(active_providers) == 1:
+                return active_providers[0]
+            return FailoverAIProvider(providers=active_providers)
+
+        # Single provider mode
+        creds = ai_settings.get_provider_credentials(ai_settings.AI_PROVIDER)
+        if creds and creds["api_key"] and creds["model"]:
+            return OpenAICompatibleProvider(
+                model=creds["model"],
+                api_key=creds["api_key"],
+                base_url=creds["base_url"],
+                name=creds["name"],
+            )
+
+        if ai_settings.AI_API_KEY and ai_settings.AI_MODEL:
             return OpenAICompatibleProvider(
                 model=ai_settings.AI_MODEL,
                 api_key=ai_settings.AI_API_KEY,
                 base_url=ai_settings.AI_BASE_URL,
+                name="openai_compatible",
             )
-        logger.warning("Unknown AI_PROVIDER '%s' — AI layer disabled", ai_settings.AI_PROVIDER)
+
+        logger.warning("Unknown or unconfigured AI_PROVIDER '%s' — AI layer disabled", ai_settings.AI_PROVIDER)
         return None
     except AIProviderError as e:
         logger.warning("AI provider init failed (%s) — AI layer disabled", e)
