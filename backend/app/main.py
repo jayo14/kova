@@ -52,13 +52,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+import logging
+from fastapi.responses import JSONResponse
+from fastapi import Request
+
+logger = logging.getLogger(__name__)
+
 # CORS: restrict in production, allow all in development
 if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["*"],
         allow_headers=["*"],
     )
 else:
@@ -69,6 +75,71 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+
+def _cors_headers_for_request(request: Request) -> dict[str, str]:
+    origin = request.headers.get("origin")
+    if not origin:
+        return {}
+    if settings.is_production:
+        if origin in settings.cors_origins_list:
+            return {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+            }
+        return {}
+    return {
+        "Access-Control-Allow-Origin": origin,
+        "Access-Control-Allow-Credentials": "true",
+    }
+
+
+@app.middleware("http")
+async def cors_exception_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            headers = _cors_headers_for_request(request)
+            if exc.headers:
+                headers.update(exc.headers)
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=headers,
+            )
+        logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+        headers = _cors_headers_for_request(request)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error" if settings.is_production else str(exc)},
+            headers=headers,
+        )
+
+
+@app.exception_handler(500)
+async def server_error_handler(request: Request, exc: Exception):
+    headers = _cors_headers_for_request(request)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error" if settings.is_production else str(exc)},
+        headers=headers,
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, HTTPException):
+        headers = _cors_headers_for_request(request)
+        if exc.headers:
+            headers.update(exc.headers)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=headers,
+        )
+    logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+    return await server_error_handler(request, exc)
 
 app.include_router(auth.router)
 app.include_router(auth.router, prefix="/api/v1")

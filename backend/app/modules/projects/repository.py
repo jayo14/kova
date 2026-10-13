@@ -114,6 +114,16 @@ class ProjectRepository:
         await self.db.execute(
             delete(Flow).where(Flow.project_id == project_id)
         )
+        try:
+            from app.modules.validation.models import ProductModel, ValidationRun
+            await self.db.execute(
+                delete(ProductModel).where(ProductModel.project_id == project_id)
+            )
+            await self.db.execute(
+                delete(ValidationRun).where(ValidationRun.project_id == project_id)
+            )
+        except Exception:
+            pass
         await self.db.delete(project)
         await self.db.flush()
         return True

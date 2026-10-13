@@ -67,3 +67,36 @@ async def test_health_routes_separate_liveness_from_readiness(monkeypatch):
         assert ready.json() == {"status": "ready"}
 
         assert (await client.get("/sentry-debug")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_default_cors_origins_includes_vercel_app():
+    from cryptography.fernet import Fernet
+    from app.config.settings import Settings
+    default_settings = Settings(
+        DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/kova",
+        ENVIRONMENT="production",
+        JWT_SECRET_KEY="x" * 32,
+        CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+    )
+    assert "https://kova-x.vercel.app" in default_settings.cors_origins_list
+
+
+@pytest.mark.asyncio
+async def test_unhandled_exception_preserves_cors_headers():
+    """Verify that unhandled exceptions caught by the exception handler return 500 with CORS headers."""
+    @app.get("/test-internal-error")
+    async def crash():
+        raise RuntimeError("Simulated crash")
+
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get(
+            "/test-internal-error",
+            headers={"Origin": "https://kova-x.vercel.app"},
+        )
+        assert res.status_code == 500
+        assert res.headers.get("access-control-allow-origin") == "https://kova-x.vercel.app"
+        assert res.headers.get("access-control-allow-credentials") == "true"
+        data = res.json()
+        assert "detail" in data
