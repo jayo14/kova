@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 
 from app.infrastructure.database.base import Base, JSONCompat
 
@@ -40,4 +40,4 @@ class Flow(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    project = relationship("Project", backref="flows")
+    project = relationship("Project", backref=backref("flows", passive_deletes=True))

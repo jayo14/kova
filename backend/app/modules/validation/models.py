@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 
 from app.infrastructure.database.base import Base, JSONCompat
 
@@ -48,7 +48,7 @@ class ProductModel(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    project = relationship("Project", backref="product_models")
+    project = relationship("Project", backref=backref("product_models", passive_deletes=True))
 
 
 class ValidationRun(Base):
@@ -88,5 +88,5 @@ class ValidationRun(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    project = relationship("Project", backref="validation_runs")
+    project = relationship("Project", backref=backref("validation_runs", passive_deletes=True))
     baseline_run = relationship("ValidationRun", remote_side=[id])

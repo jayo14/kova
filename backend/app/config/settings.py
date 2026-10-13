@@ -43,7 +43,7 @@ class Settings(BaseSettings):
             url = "postgresql+asyncpg://" + url[len("postgresql://"):]
         return url
 
-    CORS_ORIGINS: str = "https://kova.app,https://www.kova.app"
+    CORS_ORIGINS: str = "https://kova.app,https://www.kova.app,https://kova-x.vercel.app"
 
     @property
     def cors_origins_list(self) -> list[str]:
