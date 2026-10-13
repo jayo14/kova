@@ -292,12 +292,14 @@ async def stream_execution_events(
     execution_id: str,
     request: Request,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
 ):
     """Server-Sent Events (SSE) live event stream for execution updates."""
+    from app.infrastructure.database.session import async_session_factory
+
     try:
         parsed_id = uuid.UUID(execution_id)
-        execution = await _verify_execution_ownership(db, parsed_id, user.id)
+        async with async_session_factory() as auth_db:
+            execution = await _verify_execution_ownership(auth_db, parsed_id, user.id)
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid execution ID")
     if execution is None:
@@ -306,8 +308,8 @@ async def stream_execution_events(
     last_event_id_header = request.headers.get("Last-Event-ID")
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        from app.infrastructure.database.session import async_session_factory
         from app.modules.executions.repository import ExecutionRepository, ExecutionEventRepository
+        from app.modules.executions.state_machine import TERMINAL_STATES
 
         seen_event_ids: set[uuid.UUID] = set()
         if last_event_id_header:
@@ -322,6 +324,9 @@ async def stream_execution_events(
             while True:
                 if await request.is_disconnected():
                     break
+
+                chunks_to_send: list[str] = []
+                is_terminal = False
 
                 async with async_session_factory() as poll_db:
                     event_repo = ExecutionEventRepository(poll_db)
@@ -339,22 +344,28 @@ async def stream_execution_events(
                                 "payload": ev.payload,
                                 "created_at": ev.created_at.isoformat() if ev.created_at else None,
                             }
-                            yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
+                            chunks_to_send.append(
+                                f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
+                            )
 
                     # Check current execution status
                     current_exec = await exec_repo.get_by_id(parsed_id)
-                    if current_exec:
-                        from app.modules.executions.state_machine import TERMINAL_STATES
-                        terminal_statuses = TERMINAL_STATES
-                        if current_exec.status in terminal_statuses:
-                            yield "event: done\ndata: {}\n\n"
-                            break
+                    if current_exec and current_exec.status in TERMINAL_STATES:
+                        is_terminal = True
 
-                    # Heartbeat every ~15s (30 * 0.5s) — must stay inside the loop
-                    ping_counter += 1
-                    if ping_counter >= 30:
-                        ping_counter = 0
-                        yield ": ping\n\n"
+                # Yield collected events outside of the database session context
+                for chunk in chunks_to_send:
+                    yield chunk
+
+                if is_terminal:
+                    yield "event: done\ndata: {}\n\n"
+                    break
+
+                # Heartbeat every ~15s (30 * 0.5s)
+                ping_counter += 1
+                if ping_counter >= 30:
+                    ping_counter = 0
+                    yield ": ping\n\n"
 
                 await asyncio.sleep(0.5)
 

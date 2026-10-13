@@ -114,34 +114,41 @@ async def _run_multiple_executions_async(task, execution_ids: list[str], paralle
             project = await project_repo.get_by_id(flow.project_id)
             target_url = project.base_url if project else ""
 
-            current = await exec_repo.get_by_id(execution.id)
+            exec_uuid = uuid.UUID(exec_id_str)
+            current = await exec_repo.get_by_id(exec_uuid)
             if current and current.status not in terminal_states:
-                await exec_repo.update_status(execution.id, ExecutionStatus.QUEUED)
+                await exec_repo.update_status(exec_uuid, ExecutionStatus.QUEUED)
                 await db.commit()
 
-            async def event_recorder(exec_id: uuid.UUID, event_type: str, payload: dict):
-                try:
-                    await event_repo.create(execution_id=exec_id, event_type=event_type, payload=payload)
-                    if event_type == "execution.initializing":
-                        await exec_repo.update_status(exec_id, ExecutionStatus.INITIALIZING)
-                    elif event_type == "browser.started":
-                        await exec_repo.update_status(exec_id, ExecutionStatus.BROWSER_READY)
-                    elif event_type == "execution.started":
-                        await exec_repo.update_status(exec_id, ExecutionStatus.RUNNING)
-                    await db.commit()
-                except Exception as ev_err:
-                    logger.warning("Failed to record event %s: %s", event_type, ev_err)
+            flow_steps = flow.steps
+            success_condition = flow.success_condition
+
+            emit_lock = asyncio.Lock()
+
+            async def event_recorder(target_exec_id: uuid.UUID, event_type: str, payload: dict):
+                async with emit_lock:
                     try:
-                        await db.rollback()
-                    except Exception:
-                        pass
+                        from app.infrastructure.database.session import async_session_factory
+                        async with async_session_factory() as event_db:
+                            rec_event_repo = ExecutionEventRepository(event_db)
+                            rec_exec_repo = ExecutionRepository(event_db)
+                            await rec_event_repo.create(execution_id=target_exec_id, event_type=event_type, payload=payload)
+                            if event_type == "execution.initializing":
+                                await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.INITIALIZING)
+                            elif event_type == "browser.started":
+                                await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.BROWSER_READY)
+                            elif event_type == "execution.started":
+                                await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.RUNNING)
+                            await event_db.commit()
+                    except Exception as ev_err:
+                        logger.warning("Failed to record event %s: %s", event_type, ev_err)
 
             runner = FlowRunner()
             try:
                 result = await runner.execute(
-                    execution_id=execution.id,
-                    flow_steps=flow.steps,
-                    success_condition=flow.success_condition,
+                    execution_id=exec_uuid,
+                    flow_steps=flow_steps,
+                    success_condition=success_condition,
                     credential_store=credential_store,
                     target_url=target_url,
                     event_recorder=event_recorder,
@@ -149,36 +156,39 @@ async def _run_multiple_executions_async(task, execution_ids: list[str], paralle
                 )
 
                 for evt in result.get("events", []):
-                    await event_repo.create(
-                        execution_id=execution.id,
-                        event_type=evt["type"],
-                        payload=evt.get("data", {}),
-                    )
+                    try:
+                        await event_repo.create(
+                            execution_id=exec_uuid,
+                            event_type=evt["type"],
+                            payload=evt.get("data", {}),
+                        )
+                    except Exception:
+                        pass
 
-                current = await exec_repo.get_by_id(execution.id)
-                current_status = current.status if current else execution.status
+                current = await exec_repo.get_by_id(exec_uuid)
+                current_status = current.status if current else None
 
                 if result.get("success"):
                     if current_status not in terminal_states:
-                        await exec_repo.update_status(execution.id, ExecutionStatus.COMPLETED)
-                    await event_svc.record_execution_completed(execution.id, result=result)
+                        await exec_repo.update_status(exec_uuid, ExecutionStatus.COMPLETED)
+                    await event_svc.record_execution_completed(exec_uuid, result=result)
                 else:
                     error_code = result.get("error_code", "EXECUTION_ERROR")
-                    current = await exec_repo.get_by_id(execution.id)
-                    current_status = current.status if current else execution.status
+                    current = await exec_repo.get_by_id(exec_uuid)
+                    current_status = current.status if current else None
                     if current_status not in terminal_states:
                         if error_code == "EXECUTION_TIMEOUT":
                             await exec_repo.update_status(
-                                execution.id, ExecutionStatus.TIMEOUT,
+                                exec_uuid, ExecutionStatus.TIMEOUT,
                                 error_code=error_code, error_message=result.get("error", "Timed out"),
                             )
                         else:
                             await exec_repo.update_status(
-                                execution.id, ExecutionStatus.FAILED,
+                                exec_uuid, ExecutionStatus.FAILED,
                                 error_code=error_code, error_message=result.get("error", "Unknown"),
                             )
                     await event_svc.record_execution_failed(
-                        execution.id, error_code=error_code, error_message=result.get("error", "Unknown"),
+                        exec_uuid, error_code=error_code, error_message=result.get("error", "Unknown"),
                     )
                 await db.commit()
                 return {"status": "completed" if result.get("success") else "failed", "execution_id": exec_id_str}
@@ -186,21 +196,21 @@ async def _run_multiple_executions_async(task, execution_ids: list[str], paralle
             except Exception as e:
                 logger.exception("Execution %s failed", exec_id_str)
                 try:
-                    await db.rollback()
-                except Exception:
-                    pass
-                try:
-                    current = await exec_repo.get_by_id(execution.id)
-                    current_status = current.status if current else execution.status
-                    if current_status not in terminal_states:
-                        await exec_repo.update_status(
-                            execution.id, ExecutionStatus.FAILED,
-                            error_code="EXECUTION_ERROR", error_message=str(e),
-                        )
-                    await event_svc.record_execution_failed(
-                        execution.id, error_code="EXECUTION_ERROR", error_message=str(e),
-                    )
-                    await db.commit()
+                    from app.infrastructure.database.session import async_session_factory
+                    async with async_session_factory() as fail_db:
+                        fail_exec_repo = ExecutionRepository(fail_db)
+                        fail_event_svc = EventService(fail_db)
+                        current_rec = await fail_exec_repo.get_by_id(exec_uuid)
+                        current_status = current_rec.status if current_rec else None
+                        if current_status not in terminal_states:
+                            await fail_exec_repo.update_status(
+                                exec_uuid, ExecutionStatus.FAILED,
+                                error_code="EXECUTION_ERROR", error_message=str(e),
+                            )
+                            await fail_event_svc.record_execution_failed(
+                                exec_uuid, error_code="EXECUTION_ERROR", error_message=str(e),
+                            )
+                            await fail_db.commit()
                 except Exception:
                     logger.exception("Failed to persist failure for %s", exec_id_str)
                 return {"status": "failed", "execution_id": exec_id_str, "error": str(e)}

@@ -20,8 +20,6 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
-from app.infrastructure.database.session import get_session
-
 from app.engine.execution.control import (
     set_control_state,
     get_control_state,
@@ -247,12 +245,17 @@ async def _pump_loop(execution_id: str, websocket: WebSocket) -> None:
             logger.debug("Pump task ended: %s", e)
 
 
+async def get_optional_session() -> AsyncSession | None:
+    """Dependency placeholder that returns None so WebSockets do not hold open persistent DB sessions."""
+    return None
+
+
 @router.websocket("/ws/viewport/{execution_id}")
 async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
     token: str = Query(default=""),
-    db: AsyncSession = Depends(get_session),
+    db: AsyncSession | None = Depends(get_optional_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 

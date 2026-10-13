@@ -26,6 +26,7 @@ class ExecutionContext:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     control_state: str = "agent"  # "agent" | "human" | "paused"
+    _emitted_count: int = 0
 
     def transition(self, new_state: ExecutionState) -> None:
         """Transition to a new state with validation.

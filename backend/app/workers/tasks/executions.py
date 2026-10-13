@@ -51,8 +51,9 @@ async def _run_execution_async(task, execution_id: str):
         event_svc = EventService(db)
         flow_repo = FlowRepository(db)
 
+        exec_uuid = uuid.UUID(execution_id)
         # Load execution
-        execution = await exec_repo.get_by_id(uuid.UUID(execution_id), for_update=True)
+        execution = await exec_repo.get_by_id(exec_uuid, for_update=True)
         if execution is None:
             logger.error("Execution %s not found", execution_id)
             raise ValueError(f"Execution {execution_id} not found")
@@ -74,15 +75,25 @@ async def _run_execution_async(task, execution_id: str):
             return {"status": "skipped", "reason": "already_claimed"}
 
         if execution.status == ExecutionStatus.CREATED.value:
-            await exec_repo.update_status(execution.id, ExecutionStatus.QUEUED)
-        await exec_repo.update_status(execution.id, ExecutionStatus.INITIALIZING)
+            await exec_repo.update_status(exec_uuid, ExecutionStatus.QUEUED)
+        await exec_repo.update_status(exec_uuid, ExecutionStatus.INITIALIZING)
         await db.commit()
 
+        # Extract snapshot and flow configuration upfront so we never rely on expired ORM attributes
+        flow_id = execution.flow_id
+        flow_snapshot = execution.flow_snapshot or {}
+
         # Load flow
-        flow = await flow_repo.get_by_id(execution.flow_id)
+        flow = await flow_repo.get_by_id(flow_id)
         if flow is None:
-            logger.error("Flow %s not found", execution.flow_id)
-            raise ValueError(f"Flow {execution.flow_id} not found")
+            logger.error("Flow %s not found", flow_id)
+            raise ValueError(f"Flow {flow_id} not found")
+
+        flow_steps = flow_snapshot.get("steps", flow.steps)
+        success_condition = flow_snapshot.get("success_condition", flow.success_condition)
+        preconditions = flow_snapshot.get("preconditions", flow.preconditions)
+        dependency_plan = flow_snapshot.get("dependency_plan", [])
+        objective = flow_snapshot.get("objective", flow.objective)
 
         # Load credentials for this project
         from app.engine.credentials.models import Credential as EngineCredential
@@ -120,48 +131,51 @@ async def _run_execution_async(task, execution_id: str):
         from app.modules.projects.repository import ProjectRepository
         project_repo = ProjectRepository(db)
         project = await project_repo.get_by_id(flow.project_id)
-        target_url = project.base_url if project else ""
+        target_url = flow_snapshot.get("target_url", project.base_url if project else "")
 
         # Honor a cancellation that arrived between dispatch and pickup
         from app.engine.execution.control import is_cancel_requested
         if await is_cancel_requested(execution_id):
-            current = await exec_repo.get_by_id(execution.id)
+            current = await exec_repo.get_by_id(exec_uuid)
             if current and current.status not in terminal_states:
-                await exec_repo.update_status(execution.id, ExecutionStatus.CANCELLED)
-            await event_svc.record_execution_cancelled(execution.id)
+                await exec_repo.update_status(exec_uuid, ExecutionStatus.CANCELLED)
+            await event_svc.record_execution_cancelled(exec_uuid)
             await db.commit()
             logger.info("Execution %s cancelled before start", execution_id)
             return {"status": "cancelled", "execution_id": execution_id}
 
-        # Realtime event recorder callback to stream updates immediately
-        async def event_recorder(exec_id: uuid.UUID, event_type: str, payload: dict):
-            try:
-                await event_repo.create(
-                    execution_id=exec_id,
-                    event_type=event_type,
-                    payload=sanitize_payload(payload),
-                )
-                current = await exec_repo.get_by_id(exec_id)
-                current_status = current.status if current else None
-                if event_type == EventTypes.EXECUTION_INITIALIZING and current_status != ExecutionStatus.INITIALIZING.value:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.INITIALIZING)
-                elif event_type == EventTypes.BROWSER_STARTED:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.BROWSER_READY)
-                elif event_type == EventTypes.EXECUTION_STARTED:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.RUNNING)
-                elif event_type == EventTypes.EXECUTION_PAUSED:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.PAUSED)
-                elif event_type == EventTypes.EXECUTION_HUMAN_CONTROLLED:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.HUMAN_CONTROLLED)
-                elif event_type == EventTypes.EXECUTION_RESUMED:
-                    await exec_repo.update_status(exec_id, ExecutionStatus.RESUMING)
-                await db.commit()
-            except Exception as ev_err:
-                logger.warning("Failed to record event %s: %s", event_type, ev_err)
+        # Realtime event recorder callback to stream updates immediately without racing outer session
+        emit_lock = asyncio.Lock()
+
+        async def event_recorder(target_exec_id: uuid.UUID, event_type: str, payload: dict):
+            async with emit_lock:
                 try:
-                    await db.rollback()
-                except Exception:
-                    logger.debug("Event recorder rollback failed")
+                    from app.infrastructure.database.session import async_session_factory
+                    async with async_session_factory() as event_db:
+                        rec_event_repo = ExecutionEventRepository(event_db)
+                        rec_exec_repo = ExecutionRepository(event_db)
+                        await rec_event_repo.create(
+                            execution_id=target_exec_id,
+                            event_type=event_type,
+                            payload=sanitize_payload(payload),
+                        )
+                        current_rec = await rec_exec_repo.get_by_id(target_exec_id)
+                        current_status = current_rec.status if current_rec else None
+                        if event_type == EventTypes.EXECUTION_INITIALIZING and current_status != ExecutionStatus.INITIALIZING.value:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.INITIALIZING)
+                        elif event_type == EventTypes.BROWSER_STARTED:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.BROWSER_READY)
+                        elif event_type == EventTypes.EXECUTION_STARTED:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.RUNNING)
+                        elif event_type == EventTypes.EXECUTION_PAUSED:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.PAUSED)
+                        elif event_type == EventTypes.EXECUTION_HUMAN_CONTROLLED:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.HUMAN_CONTROLLED)
+                        elif event_type == EventTypes.EXECUTION_RESUMED:
+                            await rec_exec_repo.update_status(target_exec_id, ExecutionStatus.RESUMING)
+                        await event_db.commit()
+                except Exception as ev_err:
+                    logger.warning("Failed to record event %s: %s", event_type, ev_err)
 
         # Run the execution engine with timeout
         from app.engine.execution.runner import FlowRunner, EXECUTION_TIMEOUT_SECONDS
@@ -170,50 +184,53 @@ async def _run_execution_async(task, execution_id: str):
 
         try:
             result = await runner.execute(
-                execution_id=execution.id,
-                flow_steps=(execution.flow_snapshot or {}).get("steps", flow.steps),
-                success_condition=(execution.flow_snapshot or {}).get("success_condition", flow.success_condition),
-                preconditions=(execution.flow_snapshot or {}).get("preconditions", flow.preconditions),
-                dependency_plan=(execution.flow_snapshot or {}).get("dependency_plan", []),
+                execution_id=exec_uuid,
+                flow_steps=flow_steps,
+                success_condition=success_condition,
+                preconditions=preconditions,
+                dependency_plan=dependency_plan,
                 credential_store=credential_store,
-                target_url=(execution.flow_snapshot or {}).get("target_url", target_url),
+                target_url=target_url,
                 event_recorder=event_recorder,
                 timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
-                objective=(execution.flow_snapshot or {}).get("objective", flow.objective),
+                objective=objective,
             )
 
             # Persist any remaining events from the runner
             for evt in result.get("events", []):
-                await event_repo.create(
-                    execution_id=execution.id,
-                    event_type=evt["type"],
-                    payload=evt.get("data", {}),
-                )
+                try:
+                    await event_repo.create(
+                        execution_id=exec_uuid,
+                        event_type=evt["type"],
+                        payload=evt.get("data", {}),
+                    )
+                except Exception:
+                    pass
 
             # Re-read current status — event_recorder may have advanced it
-            current = await exec_repo.get_by_id(execution.id)
-            current_status = current.status if current else execution.status
+            current = await exec_repo.get_by_id(exec_uuid)
+            current_status = current.status if current else None
 
             # Update execution status
             persisted_result = False
             if result.get("success"):
                 if current_status not in terminal_states:
-                    await exec_repo.update_status(execution.id, ExecutionStatus.COMPLETED)
+                    await exec_repo.update_status(exec_uuid, ExecutionStatus.COMPLETED)
                     persisted_result = True
                 if persisted_result:
                     await event_svc.record_execution_completed(
-                        execution.id, result=sanitize_payload(result)
+                        exec_uuid, result=sanitize_payload(result)
                     )
             else:
                 error_code = result.get("error_code", "EXECUTION_ERROR")
                 # Re-read in case event_recorder already advanced status
-                current = await exec_repo.get_by_id(execution.id)
-                current_status = current.status if current else execution.status
+                current = await exec_repo.get_by_id(exec_uuid)
+                current_status = current.status if current else None
                 if current_status not in terminal_states:
                     # Map error codes to structured statuses (never mark UNVERIFIED as FAILED)
                     if error_code == "EXECUTION_TIMEOUT":
                         await exec_repo.update_status(
-                            execution.id,
+                            exec_uuid,
                             ExecutionStatus.TIMEOUT,
                             error_code=error_code,
                             error_message=sanitize_text(result.get("error", "Execution timed out")),
@@ -221,7 +238,7 @@ async def _run_execution_async(task, execution_id: str):
                         )
                     elif error_code == "UNVERIFIED":
                         await exec_repo.update_status(
-                            execution.id,
+                            exec_uuid,
                             ExecutionStatus.UNVERIFIED,
                             error_code=error_code,
                             error_message=sanitize_text(result.get("error", "Actions completed but mission could not be verified")),
@@ -229,7 +246,7 @@ async def _run_execution_async(task, execution_id: str):
                         )
                     elif error_code in ("AUTH_BLOCKED", "PREREQUISITE_UNSATISFIED"):
                         await exec_repo.update_status(
-                            execution.id,
+                            exec_uuid,
                             ExecutionStatus.BLOCKED,
                             error_code=error_code,
                             error_message=sanitize_text(result.get("error", "Blocked on authentication page")),
@@ -246,7 +263,7 @@ async def _run_execution_async(task, execution_id: str):
                             else ExecutionStatus.FAILED
                         )
                         await exec_repo.update_status(
-                            execution.id,
+                            exec_uuid,
                             terminal_status,
                             error_code=error_code,
                             error_message=sanitize_text(result.get("error", "Unknown error")),
@@ -256,19 +273,19 @@ async def _run_execution_async(task, execution_id: str):
                 if persisted_result and error_code == "UNVERIFIED":
                     # Terminal, not a failure — still emit failed-style event for observability
                     await event_svc.record_execution_failed(
-                        execution.id,
+                        exec_uuid,
                         error_code=error_code,
                         error_message=sanitize_text(result.get("error", "Unverified")),
                     )
                 elif persisted_result:
                     await event_svc.record_execution_failed(
-                        execution.id,
+                        exec_uuid,
                         error_code=error_code,
                         error_message=sanitize_text(result.get("error", "Unknown error")),
                     )
             await db.commit()
 
-            final_execution = await exec_repo.get_by_id(execution.id)
+            final_execution = await exec_repo.get_by_id(exec_uuid)
             final_status = final_execution.status if final_execution else "FAILED"
 
             return {
@@ -279,31 +296,28 @@ async def _run_execution_async(task, execution_id: str):
         except Exception as e:
             logger.error("Execution %s failed with %s", execution_id, type(e).__name__)
 
-            # Roll back any broken session state before attempting recovery
+            # Persist unexpected worker failures distinctly from application assertions using a clean session.
             try:
-                await db.rollback()
-            except Exception:
-                logger.debug("Rollback failed (session may already be clean)")
-
-            # Persist unexpected worker failures distinctly from application assertions.
-            try:
-                current = await exec_repo.get_by_id(execution.id)
-                current_status = current.status if current else execution.status
-                persisted_failure = current_status not in terminal_states
-                if persisted_failure:
-                    await exec_repo.update_status(
-                        execution.id,
-                        ExecutionStatus.ERROR,
-                        error_code="EXECUTION_ERROR",
-                        error_message="Execution failed unexpectedly",
-                        failure_category="internal_kova",
-                    )
-                    await event_svc.record_execution_failed(
-                        execution.id,
-                        error_code="EXECUTION_ERROR",
-                        error_message="Execution failed unexpectedly",
-                    )
-                await db.commit()
+                from app.infrastructure.database.session import async_session_factory
+                async with async_session_factory() as fail_db:
+                    fail_exec_repo = ExecutionRepository(fail_db)
+                    fail_event_svc = EventService(fail_db)
+                    current_rec = await fail_exec_repo.get_by_id(exec_uuid)
+                    current_status = current_rec.status if current_rec else None
+                    if current_status not in terminal_states:
+                        await fail_exec_repo.update_status(
+                            exec_uuid,
+                            ExecutionStatus.ERROR,
+                            error_code="EXECUTION_ERROR",
+                            error_message="Execution failed unexpectedly",
+                            failure_category="internal_kova",
+                        )
+                        await fail_event_svc.record_execution_failed(
+                            exec_uuid,
+                            error_code="EXECUTION_ERROR",
+                            error_message="Execution failed unexpectedly",
+                        )
+                        await fail_db.commit()
             except Exception:
                 logger.exception("Failed to persist execution failure for %s", execution_id)
 

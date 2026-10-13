@@ -115,6 +115,7 @@ class FlowRunner:
 
     def __init__(self) -> None:
         self._last_mouse_up: dict[str, tuple[float, int, int]] = {}
+        self._emit_lock = asyncio.Lock()
 
     async def execute(
         self,
@@ -227,8 +228,11 @@ class FlowRunner:
 
             # Hook network errors to execution context
             async def _record_network_error(err_data: dict[str, Any]):
-                ctx.record_event(EventTypes.NETWORK_ERROR, err_data)
-                await self._emit_events(ctx, event_recorder)
+                try:
+                    ctx.record_event(EventTypes.NETWORK_ERROR, err_data)
+                    await self._emit_events(ctx, event_recorder)
+                except Exception as ne_err:
+                    logger.debug("Failed to record network error event: %s", ne_err)
 
             browser.on_network_error = _record_network_error
             verifier = Verifier(browser.page)
@@ -1596,19 +1600,20 @@ class FlowRunner:
         if not event_recorder:
             return
 
-        # Emit all uncommitted events — skip failures, don't abort remaining
-        while ctx.events:
-            event = ctx.events[0]
-            try:
-                await event_recorder(
-                    uuid.UUID(ctx.execution_id),
-                    event["type"],
-                    event.get("data", {}),
-                )
-                ctx.events.pop(0)
-            except Exception as e:
-                logger.warning("Failed to emit event %s, skipping: %s", event["type"], e)
-                ctx.events.pop(0)
+        # Emit all uncommitted events safely without mutating ctx.events
+        async with self._emit_lock:
+            while ctx._emitted_count < len(ctx.events):
+                event = ctx.events[ctx._emitted_count]
+                try:
+                    await event_recorder(
+                        uuid.UUID(ctx.execution_id),
+                        event["type"],
+                        event.get("data", {}),
+                    )
+                except Exception as e:
+                    logger.warning("Failed to emit event %s, skipping: %s", event.get("type"), e)
+                finally:
+                    ctx._emitted_count += 1
 
 
 def _is_url_like(text: str) -> bool:
