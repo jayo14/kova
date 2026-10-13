@@ -188,8 +188,12 @@ export function AgentBrowserViewport({
             reason={credentialRequest?.reason}
             onChoice={onAuthChoice ? (choice, details) => onAuthChoice(choice, details) : () => {}}
             error={credentialError}
-            loading={credentialLoading && authMode === "creating_account"}
-            loadingMessage={authMode === "creating_account" ? "Creating account..." : undefined}
+            loading={state === "authenticating" || credentialLoading}
+            loadingMessage={
+              authMode === "creating_account"
+                ? "Creating test account & setting up workspace..."
+                : "Authenticating with provided credentials..."
+            }
           />
         )}
 

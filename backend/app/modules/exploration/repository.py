@@ -73,6 +73,8 @@ class ExplorationRepository:
         credential_request: dict | None = None,
         selected_role: str | None = None,
         project_id: uuid.UUID | None = None,
+        clear_credential_request: bool = False,
+        clear_question: bool = False,
     ) -> ExplorationSession | None:
         session = await self.get_by_id(session_id)
         if session is None:
@@ -87,9 +89,13 @@ class ExplorationRepository:
             session.discoveries = discoveries
         if candidate_missions is not None:
             session.candidate_missions = candidate_missions
-        if question is not None:
+        if clear_question:
+            session.question = None
+        elif question is not None:
             session.question = question
-        if credential_request is not None:
+        if clear_credential_request:
+            session.credential_request = None
+        elif credential_request is not None:
             session.credential_request = credential_request
         if selected_role is not None:
             session.selected_role = selected_role

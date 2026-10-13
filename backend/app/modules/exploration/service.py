@@ -185,7 +185,6 @@ class ExplorationService:
                 cred_name = f"explore-cred-{uuid.uuid4().hex[:6]}"
                 await cred_service.create_credential(
                     project_id=session.project_id,
-                    user_id=user_id,
                     data=CredentialCreate(
                         name=cred_name,
                         email=data.email,
@@ -195,10 +194,11 @@ class ExplorationService:
             except Exception as e:
                 logger.warning("Could not save credential to project: %s", e)
 
-        # Transition status to AUTHENTICATING
+        # Transition status to AUTHENTICATING and clear pending credential_request
         await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
+            clear_credential_request=True,
         )
         await self.db.commit()
 
@@ -234,15 +234,14 @@ class ExplorationService:
 
         # Generate credentials if not provided
         import secrets
-        import string
         email = data.email
         password = data.password
         if not email:
             random_suffix = secrets.token_hex(4)
-            email = f"kova-test-{random_suffix}@example.com"
+            email = f"kova-tester-{random_suffix}@example.com"
         if not password:
-            alphabet = string.ascii_letters + string.digits
-            password = ''.join(secrets.choice(alphabet) for _ in range(16))
+            random_suffix = secrets.token_hex(4)
+            password = f"KovaPass!{random_suffix}"
 
         # Save credential for the project
         if session.project_id:
@@ -251,7 +250,6 @@ class ExplorationService:
                 cred_name = f"auto-created-{uuid.uuid4().hex[:6]}"
                 await cred_service.create_credential(
                     project_id=session.project_id,
-                    user_id=user_id,
                     data=CredentialCreate(
                         name=cred_name,
                         email=email,
@@ -261,10 +259,11 @@ class ExplorationService:
             except Exception as e:
                 logger.warning("Could not save created credential to project: %s", e)
 
-        # Transition status to AUTHENTICATING
+        # Transition status to AUTHENTICATING and clear pending credential_request
         await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
+            clear_credential_request=True,
         )
         await self.db.commit()
 
@@ -297,11 +296,12 @@ class ExplorationService:
 
         role_selected = data.answer
 
-        # Transition status to DISCOVERING
+        # Transition status to DISCOVERING and clear resolved question
         await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.DISCOVERING,
             selected_role=role_selected,
+            clear_question=True,
         )
         await self.db.commit()
 
@@ -641,6 +641,8 @@ class ExplorationService:
                     question=result.get("question"),
                     credential_request=result.get("credential_request"),
                     selected_role=selected_role,
+                    clear_credential_request=(result.get("credential_request") is None and status != ExplorationStatus.AUTH_REQUIRED),
+                    clear_question=(result.get("question") is None and status != ExplorationStatus.ASKING),
                 )
                 await db.commit()
 
