@@ -442,6 +442,114 @@ class FlowRunner:
                     )]
                 )
 
+            # --- AI / Self-Healing Auth Barrier Gate ---
+            detected_expected_dest = None
+            if not verification.passed:
+                from app.engine.browser.auth import is_auth_url, is_auth_page, perform_login
+
+                current_page_url = getattr(browser.page, "url", "")
+                failed_checks = [c for c in verification.checks if not c.passed]
+
+                # Invoke AI Reasoner if LLM provider is active
+                from app.engine.ai.settings import ai_settings
+                ai_recovery_reason = ""
+                if ai_settings.ai_enabled:
+                    try:
+                        from app.engine.ai.provider import get_ai_provider
+                        from app.engine.ai.reasoner import AgentReasoner
+                        from app.engine.ai.memory import AgentMemory
+                        ai_provider = get_ai_provider()
+                        if ai_provider:
+                            reasoner = AgentReasoner(provider=ai_provider)
+                            memory = AgentMemory(
+                                execution_id=str(execution_id),
+                                objective=objective or "Verify user journey",
+                            )
+                            current_obs = await browser.observe()
+                            recovery_prop = await reasoner.propose_recovery(
+                                memory=memory,
+                                failure=f"Verification failed on {current_page_url}",
+                                failure_code="VERIFICATION_FAILED",
+                                observation=current_obs,
+                            )
+                            if recovery_prop:
+                                ai_recovery_reason = recovery_prop.reason
+                                logger.info("AI Reasoner proposal: %s (%s)", recovery_prop.strategy, recovery_prop.reason)
+                                ctx.record_event("ai_reasoning", {
+                                    "strategy": recovery_prop.strategy,
+                                    "reason": recovery_prop.reason,
+                                    "current_url": current_page_url,
+                                })
+                                await self._emit_events(ctx, event_recorder)
+                    except Exception as ai_err:
+                        logger.warning("AI Reasoner call failed: %s", ai_err)
+
+                auth_detected = False
+                for c in failed_checks:
+                    act = getattr(c, "actual", None)
+                    exp = getattr(c, "expected", None)
+                    if (act and is_auth_url(str(act))) or is_auth_url(current_page_url):
+                        auth_detected = True
+                        if exp:
+                            detected_expected_dest = str(exp)
+                        break
+
+                if not auth_detected and await is_auth_page(browser.page, current_page_url):
+                    auth_detected = True
+
+                if auth_detected:
+                    # Look for test credentials in the execution credential store
+                    cred_to_use = None
+                    for cid in ctx.credentials.list_ids():
+                        c = ctx.credentials.get(cid)
+                        if c and c.email and c.get_password():
+                            cred_to_use = c
+                            break
+
+                    if cred_to_use:
+                        logger.info(
+                            "Auth barrier detected on %s (expected %s). Attempting AI self-healing authentication as %s",
+                            current_page_url, detected_expected_dest, cred_to_use.email,
+                        )
+                        ctx.record_event(EventTypes.RECOVERY_STARTED, {
+                            "strategy": "auth_barrier_healing",
+                            "message": f"Target page requires authentication (redirected to {current_page_url}). Logging in using project credentials.",
+                            "email": cred_to_use.email,
+                            "expected_destination": detected_expected_dest or target_url,
+                        })
+                        await self._emit_events(ctx, event_recorder)
+
+                        login_ok, login_msg = await perform_login(
+                            browser.page,
+                            email=cred_to_use.email,
+                            password=cred_to_use.get_password(),
+                        )
+
+                        if login_ok:
+                            from urllib.parse import urljoin
+                            re_target = target_url or detected_expected_dest
+                            if detected_expected_dest and detected_expected_dest.startswith("/"):
+                                re_target = urljoin(current_page_url, detected_expected_dest)
+
+                            if re_target:
+                                logger.info("Login succeeded, navigating to target destination: %s", re_target)
+                                await browser.navigate(re_target)
+                                await asyncio.sleep(1.0)
+
+                            # Re-verify success condition after authenticating
+                            re_verification = await verifier.verify(success_condition)
+                            if re_verification.passed:
+                                logger.info("Verification passed after AI authentication healing!")
+                                verification = re_verification
+                                ctx.record_event("ai_assisted", {
+                                    "healing_type": "auth_barrier_healed",
+                                    "original_auth_url": current_page_url,
+                                    "destination": browser.page.url,
+                                    "authenticated_as": cred_to_use.email,
+                                    "message": f"Detected auth wall on {detected_expected_dest or 'target'}. Authenticated with test credentials and successfully verified objective.",
+                                })
+                                await self._emit_events(ctx, event_recorder)
+
             if verification.passed:
                 ctx.record_event(EventTypes.VERIFICATION_PASSED, verification.to_dict())
             else:
@@ -476,10 +584,14 @@ class FlowRunner:
                     c.type in UNVERIFIED_CONDITION_TYPES for c in failed_checks
                 )
 
-                # Check if we're stuck on an auth page
-                is_auth_blocked = any(
-                    "still on auth" in msg.lower() or "url_changed_from" in c.type
-                    for c, msg in zip(failed_checks, error_messages)
+                # Check if we're stuck on an auth page or encountered an auth barrier
+                from app.engine.browser.auth import is_auth_url, is_auth_page
+                current_p_url = getattr(browser.page, "url", "")
+                is_auth_blocked = (
+                    any("still on auth" in msg.lower() or "url_changed_from" in c.type for c, msg in zip(failed_checks, error_messages))
+                    or is_auth_url(current_p_url)
+                    or any(c.actual and is_auth_url(str(c.actual)) for c in failed_checks)
+                    or await is_auth_page(browser.page, current_p_url)
                 )
                 # Check if we're on a blank/error page
                 is_page_error = any(
@@ -511,6 +623,18 @@ class FlowRunner:
                 elif is_auth_blocked:
                     error_code = "AUTH_BLOCKED"
                     final_status = ExecutionState.FAILED
+                    dest_info = detected_expected_dest or target_url or "target page"
+                    auth_err_msg = (
+                        f"Authentication required: Target page '{dest_info}' is protected behind an auth barrier "
+                        f"(redirected to '{current_p_url}'). "
+                    )
+                    if ai_recovery_reason:
+                        auth_err_msg += f"AI Analysis: {ai_recovery_reason}. "
+                    if not any(ctx.credentials.list_ids()):
+                        auth_err_msg += "No test credentials configured in project. Please add a test account in Project Credentials so Kova can authenticate."
+                    else:
+                        auth_err_msg += f"Verification failed: {error_str}"
+                    raise ExecutionError(auth_err_msg, error_code=error_code)
                 elif is_page_error:
                     error_code = ErrorCode.PAGE_LOAD_FAILED
                     final_status = ExecutionState.FAILED
@@ -1170,6 +1294,55 @@ class FlowRunner:
                                         action_type = raw_action.get("type", "")
                     except Exception as ai_err:
                         logger.warning("AI target healing failed: %s", ai_err)
+
+            if not result["success"]:
+                # Check if the failure happened because the browser was redirected to an auth barrier
+                from app.engine.browser.auth import is_auth_url, is_auth_page, perform_login
+                current_p_url = getattr(browser.page, "url", "")
+                if is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url):
+                    cred_to_use = None
+                    for cid in ctx.credentials.list_ids():
+                        c = ctx.credentials.get(cid)
+                        if c and c.email and c.get_password():
+                            cred_to_use = c
+                            break
+                    if cred_to_use:
+                        logger.info(
+                            "Step %d on %s failed due to auth wall. Attempting AI self-healing login as %s",
+                            step_index, current_p_url, cred_to_use.email,
+                        )
+                        ctx.record_event(EventTypes.RECOVERY_STARTED, {
+                            "step": step_index,
+                            "strategy": "auth_barrier_healing",
+                            "message": f"Action blocked by auth redirect ({current_p_url}). Logging in using project credentials.",
+                            "email": cred_to_use.email,
+                        })
+                        await self._emit_events(ctx, event_recorder)
+
+                        login_ok, _ = await perform_login(
+                            browser.page,
+                            email=cred_to_use.email,
+                            password=cred_to_use.get_password(),
+                        )
+                        if login_ok:
+                            if raw_action.get("type") == "navigate" and raw_action.get("url"):
+                                await browser.navigate(raw_action["url"])
+                            elif ctx.target_url:
+                                await browser.navigate(ctx.target_url)
+                            await asyncio.sleep(1.0)
+
+                            retry_res = await action_executor.execute(
+                                raw_action,
+                                execution_id=uuid.UUID(ctx.execution_id) if ctx.execution_id else None,
+                            )
+                            if retry_res.get("success"):
+                                result = retry_res
+                                ctx.record_event("ai_assisted", {
+                                    "step": step_index,
+                                    "healing_type": "auth_barrier_healed",
+                                    "message": f"Authenticated as {cred_to_use.email} and successfully retried action.",
+                                })
+                                await self._emit_events(ctx, event_recorder)
 
             if not result["success"]:
                 # Capture failure snapshot so UI displays the browser state at failure

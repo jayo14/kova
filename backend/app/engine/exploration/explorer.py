@@ -1349,6 +1349,12 @@ class ExplorationEngine:
             route_info["status"] = response.status
             route_info["accessible"] = 200 <= response.status < 400
 
+            final_url = getattr(response, "url", route["url"])
+            from app.engine.browser.auth import is_auth_url
+            if is_auth_url(final_url) and not is_auth_url(route["url"]):
+                route_info["requires_auth"] = True
+                route_info["auth_redirect_url"] = final_url
+
             if route_info["accessible"]:
                 try:
                     body = await response.text()
