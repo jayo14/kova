@@ -231,16 +231,19 @@ async def stream_exploration_events(
     session_id: str,
     request: Request,
     user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
 ):
     """Server-Sent Events (SSE) live event stream for exploration progress."""
-    session = await _get_authorized_session(session_id, user.id, db)
-    parsed_id = session.id
+    from app.infrastructure.database.session import async_session_factory
+
+    async with async_session_factory() as auth_db:
+        session = await _get_authorized_session(session_id, user.id, auth_db)
+        parsed_id = session.id
 
     async def event_generator() -> AsyncGenerator[str, None]:
-        from app.infrastructure.database.session import async_session_factory
         seen_event_ids: set[uuid.UUID] = set()
         seen_statuses: set[str] = set()
+        has_missions_event = False
+        ready_wait_cycles = 0
         ping_counter = 0
 
         try:
@@ -248,15 +251,20 @@ async def stream_exploration_events(
                 if await request.is_disconnected():
                     break
 
+                chunks_to_send: list[str] = []
+                should_terminate = False
+
                 async with async_session_factory() as poll_db:
                     event_repo = ExplorationEventRepository(poll_db)
                     session_repo = ExplorationRepository(poll_db)
 
                     # Fetch any new events
-                    events = await event_repo.list_by_session(parsed_id, limit=200)
+                    events = await event_repo.list_by_session(parsed_id, limit=500)
                     for ev in events:
                         if ev.id not in seen_event_ids:
                             seen_event_ids.add(ev.id)
+                            if ev.event_type == "missions":
+                                has_missions_event = True
                             data_payload = {
                                 "id": str(ev.id),
                                 "exploration_id": str(ev.exploration_id),
@@ -264,7 +272,9 @@ async def stream_exploration_events(
                                 "payload": ev.payload,
                                 "created_at": ev.created_at.isoformat() if ev.created_at else None,
                             }
-                            yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
+                            chunks_to_send.append(
+                                f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
+                            )
 
                     # Check if session is terminal
                     current_session = await session_repo.get_by_id(parsed_id)
@@ -275,55 +285,41 @@ async def stream_exploration_events(
                             ExplorationStatus.FAILED.value,
                             ExplorationStatus.CANCELLED.value,
                         }
-                        if current_session.status in terminal_statuses:
-                            # Ensure any remaining events are completely flushed
-                            final_events = await event_repo.list_by_session(parsed_id, limit=500)
-                            for ev in final_events:
-                                if ev.id not in seen_event_ids:
-                                    seen_event_ids.add(ev.id)
-                                    data_payload = {
-                                        "id": str(ev.id),
-                                        "exploration_id": str(ev.exploration_id),
-                                        "event_type": ev.event_type,
-                                        "payload": ev.payload,
-                                        "created_at": ev.created_at.isoformat() if ev.created_at else None,
-                                    }
-                                    yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
-
-                            # If status is READY, ensure candidate_missions have been delivered
-                            has_missions_event = any(ev.event_type == "missions" for ev in final_events)
-                            if current_session.status == ExplorationStatus.READY.value and not has_missions_event:
-                                await asyncio.sleep(0.5)
-                                retry_events = await event_repo.list_by_session(parsed_id, limit=500)
-                                for ev in retry_events:
-                                    if ev.id not in seen_event_ids:
-                                        seen_event_ids.add(ev.id)
-                                        data_payload = {
-                                            "id": str(ev.id),
-                                            "exploration_id": str(ev.exploration_id),
-                                            "event_type": ev.event_type,
-                                            "payload": ev.payload,
-                                            "created_at": ev.created_at.isoformat() if ev.created_at else None,
-                                        }
-                                        yield f"id: {ev.id}\nevent: {ev.event_type}\ndata: {json.dumps(data_payload)}\n\n"
-
-                            # Emit terminal state_change if not already emitted
+                        # If READY, wait for candidate missions event up to a few cycles (~3s) so frontend receives them before done
+                        if (
+                            current_session.status == ExplorationStatus.READY.value
+                            and not has_missions_event
+                            and ready_wait_cycles < 6
+                        ):
+                            ready_wait_cycles += 1
+                        elif current_session.status in terminal_statuses:
                             if current_session.status not in seen_statuses:
                                 seen_statuses.add(current_session.status)
-                                yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
-                            yield "event: done\ndata: {}\n\n"
-                            break
+                                chunks_to_send.append(
+                                    f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
+                                )
+                            chunks_to_send.append("event: done\ndata: {}\n\n")
+                            should_terminate = True
                         else:
                             # Emit non-terminal state_change for new statuses
                             if current_session.status not in seen_statuses:
                                 seen_statuses.add(current_session.status)
-                                yield f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
+                                chunks_to_send.append(
+                                    f"event: state_change\ndata: {json.dumps({'status': current_session.status})}\n\n"
+                                )
 
-                    # Heartbeat every ~15 seconds — must stay inside the loop
-                    ping_counter += 1
-                    if ping_counter >= 30:
-                        ping_counter = 0
-                        yield ": ping\n\n"
+                # Yield outside of the database session context
+                for chunk in chunks_to_send:
+                    yield chunk
+
+                if should_terminate:
+                    break
+
+                # Heartbeat every ~15 seconds
+                ping_counter += 1
+                if ping_counter >= 30:
+                    ping_counter = 0
+                    yield ": ping\n\n"
 
                 await asyncio.sleep(0.5)
 

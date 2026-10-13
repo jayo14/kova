@@ -42,6 +42,25 @@ export default function RootLayout({
   return (
     <html lang="en" data-scroll-behavior="smooth" className={`${satoshi.variable} h-full antialiased`}>
       <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              (function() {
+                if (typeof window !== 'undefined' && window.performance && typeof window.performance.measure === 'function') {
+                  var origMeasure = window.performance.measure.bind(window.performance);
+                  window.performance.measure = function(name, startOrOptions, end) {
+                    try {
+                      return origMeasure(name, startOrOptions, end);
+                    } catch (e) {
+                      // Suppress Next.js Turbopack dev timing calculation bug (negative timestamp)
+                      return undefined;
+                    }
+                  };
+                }
+              })();
+            `,
+          }}
+        />
         <link
           rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap"
