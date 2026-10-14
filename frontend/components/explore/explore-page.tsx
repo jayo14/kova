@@ -18,6 +18,9 @@ import { Logo } from "@/components/shared/logo";
 import {
   startExploration,
   submitCredential,
+  submitExistingCredential,
+  getCurrentSessionId,
+  getCurrentProjectId,
   answerQuestion,
   cancelExploration,
   createAccount,
@@ -107,6 +110,11 @@ export function ExplorePage() {
           setAuthRequired(event.request);
           setCredentialLoading(false);
           setAuthMode("choice");
+          if ((event.request as unknown as { projectId?: string; project_id?: string })?.projectId) {
+            setResolvedProjectId((event.request as unknown as { projectId: string }).projectId);
+          } else if ((event.request as unknown as { project_id?: string })?.project_id) {
+            setResolvedProjectId((event.request as unknown as { project_id: string }).project_id);
+          }
           break;
         case "question":
           setQuestion(event.question);
@@ -235,8 +243,35 @@ export function ExplorePage() {
     }
   };
 
-  const handleAuthChoice = async (choice: AuthChoice, details?: { email: string; password: string }) => {
-    if (choice === "manual_login" && details) {
+  const handleAuthChoice = async (
+    choice: AuthChoice,
+    details?: { email?: string; password?: string; credentialId?: string }
+  ) => {
+    if (choice === "use_existing" && details?.credentialId) {
+      setAuthMode("use_existing");
+      setCredentialLoading(true);
+      setCredentialError(null);
+      transition("authenticating");
+
+      try {
+        const controller = new AbortController();
+        abortRef.current = controller;
+        await submitExistingCredential(
+          details.credentialId,
+          handleEvent,
+          controller.signal
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not sign in with stored credential.";
+        setCredentialError(message);
+        setAuthMode("choice");
+        setCredentialLoading(false);
+        transition("auth_required");
+      }
+      return;
+    }
+
+    if (choice === "manual_login" && details?.email && details?.password) {
       setAuthMode("manual_login");
       await handleCredentialSubmit(details.email, details.password);
       return;
@@ -548,6 +583,8 @@ export function ExplorePage() {
               credentialLoading={credentialLoading}
               onUrlChange={handleUrlChange}
               onThumbnailClick={handleThumbnailClick}
+              projectId={resolvedProjectId || getCurrentProjectId()}
+              sessionId={getCurrentSessionId() || initialSessionId || undefined}
               className="h-full"
             />
           </div>
