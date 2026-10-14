@@ -1782,18 +1782,74 @@ class ExplorationEngine:
                     )
                 )
 
-        # Phase 3: Generate persona-based journeys from route analysis
+        # Phase 3: Generate intelligent user journeys (AI-synthesized feature journeys first)
         mission_count = 0
         max_missions = 6
 
-        # Goal-directed mission (highest priority)
-        if self.goal and mission_count < max_missions:
-            goal_mission = self._build_goal_mission(
-                self.goal, current_url, title, persona_name, interactive_elements
-            )
-            if goal_mission:
-                missions.append(goal_mission)
-                mission_count += 1
+        # Step 3a: Attempt AI-powered journey synthesis
+        ai_provider = get_ai_provider()
+        ai_reasoner = AgentReasoner(ai_provider) if ai_provider else None
+
+        if ai_reasoner and (route_map or interactive_elements):
+            try:
+                page_text = " ".join([el.get("name", "") for el in interactive_elements[:15]])
+                ai_journeys_result = await ai_reasoner.synthesize_journeys(
+                    base_url=current_url,
+                    title=title,
+                    goal=self.goal,
+                    persona=persona_name,
+                    routes=route_map,
+                    interactive_elements=interactive_elements,
+                    page_summary=page_text,
+                    max_journeys=max_missions,
+                )
+                if ai_journeys_result and ai_journeys_result.journeys:
+                    self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
+                    has_recommended = False
+                    for j in ai_journeys_result.journeys:
+                        is_rec = j.recommended and not has_recommended
+                        # Never recommend an auth journey if there are other feature journeys
+                        if is_rec and j.category == "auth" and len(ai_journeys_result.journeys) > 1:
+                            is_rec = False
+                        if is_rec:
+                            has_recommended = True
+
+                        missions.append(
+                            DiscoveredMission(
+                                id=f"mission-{uuid.uuid4().hex[:8]}",
+                                name=j.name,
+                                title=j.title,
+                                description=j.description,
+                                objective=j.objective,
+                                persona=j.persona or persona_name,
+                                category=j.category,
+                                journey=j.journey,
+                                steps=j.steps,
+                                successCondition=j.success_condition or None,
+                                confidence=j.confidence,
+                                recommended=is_rec,
+                                estimated_time_seconds=j.estimated_time_seconds,
+                                expectation_source="ai_synthesized",
+                                review_required=True,
+                            )
+                        )
+                    if not has_recommended and missions:
+                        first_non_auth = next((m for m in missions if m.category != "auth"), missions[0])
+                        first_non_auth.recommended = True
+                    mission_count = len(missions)
+            except Exception as e:
+                logger.warning("AI journey synthesis failed, falling back to heuristics: %s", e)
+
+        # Step 3b: Heuristic route-based journeys (if AI did not produce missions)
+        if not missions:
+            # Goal-directed mission (highest priority)
+            if self.goal and mission_count < max_missions:
+                goal_mission = self._build_goal_mission(
+                    self.goal, current_url, title, persona_name, interactive_elements
+                )
+                if goal_mission:
+                    missions.append(goal_mission)
+                    mission_count += 1
 
         # Chained auth journey (if both signup and login exist)
         if signup_routes and login_routes and mission_count < max_missions:
