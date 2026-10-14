@@ -99,6 +99,144 @@ async def find_submit_button(page: Any, password_input: Any = None) -> Any:
     return None
 
 
+async def locate_auth_input_element(page_or_frame: Any, selector: str, timeout: int = 1000) -> Any | None:
+    """Locate a visible input element within a page or frame."""
+    try:
+        loc = page_or_frame.locator(selector).first
+        if await loc.is_visible(timeout=timeout):
+            return loc
+    except Exception:
+        pass
+    return None
+
+
+async def find_auth_inputs_across_frames(page: Any) -> tuple[Any | None, Any | None, Any | None, Any]:
+    """Finds name, email, and password inputs across main page and all child frames.
+
+    Returns (name_input, email_input, password_input, active_frame_or_page).
+    """
+    frames = [page]
+    try:
+        page_frames = getattr(page, "frames", [])
+        for f in page_frames:
+            if f not in frames:
+                frames.append(f)
+    except Exception:
+        pass
+
+    name_selector = (
+        'input[name="name" i], '
+        'input[name*="full_name" i], '
+        'input[name*="fullname" i], '
+        'input[autocomplete="name" i], '
+        'input[placeholder*="name" i], '
+        'input[aria-label*="name" i], '
+        'input[id*="name" i]:not([id*="user" i])'
+    )
+    email_selector = (
+        'input[type="email"], '
+        'input[name="email" i], '
+        'input[name="username" i], '
+        'input[name="identifier" i], '
+        'input[name="login" i], '
+        'input[name="user" i], '
+        'input[autocomplete="email" i], '
+        'input[autocomplete="username" i], '
+        '#email, #username, #identifier, '
+        'input[placeholder*="email" i], '
+        'input[placeholder*="username" i], '
+        'input[placeholder*="phone" i], '
+        'input[aria-label*="email" i], '
+        'input[aria-label*="username" i], '
+        'input[data-testid*="email" i], '
+        'input[data-testid*="username" i]'
+    )
+    fallback_email_selector = (
+        'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])'
+    )
+    password_selector = (
+        'input[type="password"], '
+        'input[name="password" i], '
+        'input[name="pass" i], '
+        'input[name*="password" i], '
+        'input[autocomplete*="password" i], '
+        '#password, #pass, '
+        'input[placeholder*="password" i], '
+        'input[aria-label*="password" i], '
+        'input[data-testid*="password" i]'
+    )
+
+    for scope in frames:
+        email_input = await locate_auth_input_element(scope, email_selector, timeout=800)
+        password_input = await locate_auth_input_element(scope, password_selector, timeout=800)
+
+        if not email_input:
+            email_input = await locate_auth_input_element(scope, fallback_email_selector, timeout=500)
+
+        if email_input or password_input:
+            name_input = await locate_auth_input_element(scope, name_selector, timeout=400)
+            return name_input, email_input, password_input, scope
+
+    return None, None, None, page
+
+
+async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
+    """Attempts to reveal or navigate to login/signup modal or page if inputs are missing."""
+    if is_signup:
+        button_selectors = [
+            'a:has-text("Sign up")', 'button:has-text("Sign up")',
+            'a:has-text("Sign Up")', 'button:has-text("Sign Up")',
+            'a:has-text("Create account")', 'button:has-text("Create account")',
+            'a:has-text("Create Account")', 'button:has-text("Create Account")',
+            'a:has-text("Get started")', 'button:has-text("Get started")',
+            'a:has-text("Get Started")', 'button:has-text("Get Started")',
+            'a:has-text("Register")', 'button:has-text("Register")',
+            'a:has-text("Join")', 'button:has-text("Join")',
+            'a[href*="signup" i]', 'a[href*="register" i]', 'a[href*="create-account" i]',
+        ]
+        fallback_paths = ["/auth/signup", "/signup", "/sign-up", "/register"]
+    else:
+        button_selectors = [
+            'a:has-text("Sign in")', 'button:has-text("Sign in")',
+            'a:has-text("Sign In")', 'button:has-text("Sign In")',
+            'a:has-text("Log in")', 'button:has-text("Log in")',
+            'a:has-text("Log In")', 'button:has-text("Log In")',
+            'a:has-text("Login")', 'button:has-text("Login")',
+            'a:has-text("Account")', 'button:has-text("Account")',
+            'a[href*="signin" i]', 'a[href*="login" i]', 'a[href*="sign-in" i]', 'a[href*="log-in" i]',
+        ]
+        fallback_paths = ["/auth/signin", "/auth/login", "/login", "/signin", "/sign-in"]
+
+    # 1. Try finding and clicking button/link on the page
+    for sel in button_selectors:
+        try:
+            loc = page.locator(sel).first
+            if await loc.is_visible(timeout=600):
+                await loc.click(timeout=1500)
+                await asyncio.sleep(1.0)
+                return True
+        except Exception:
+            continue
+
+    # 2. Try direct navigation to standard paths if still on base page
+    current_url = getattr(page, "url", "")
+    if current_url:
+        parsed = urlparse(current_url)
+        base = f"{parsed.scheme}://{parsed.netloc}"
+        for path in fallback_paths:
+            try:
+                target_url = f"{base}{path}"
+                resp = await page.request.get(target_url, timeout=2000, fail_on_status_code=False)
+                if 200 <= resp.status < 400:
+                    await page.goto(target_url, wait_until="domcontentloaded", timeout=4000)
+                    await asyncio.sleep(1.0)
+                    return True
+            except Exception:
+                continue
+
+    return False
+
+
 async def perform_login(
     page: Any,
     email: str,
@@ -116,75 +254,41 @@ async def perform_login(
 
     initial_url = getattr(page, "url", "")
 
-    # 1. Locate name input if present
-    name_selector = (
-        'input[name="name" i], '
-        'input[name*="full_name" i], '
-        'input[name*="fullname" i], '
-        'input[autocomplete="name" i], '
-        'input[placeholder*="name" i], '
-        'input[aria-label*="name" i], '
-        'input[id*="name" i]:not([id*="user" i])'
-    )
-    try:
-        name_loc = page.locator(name_selector).first
-        if await name_loc.is_visible(timeout=800):
-            display_name = name or "Kova Tester"
-            await name_loc.focus()
-            await name_loc.fill(display_name)
-            await name_loc.evaluate(
+    # Locate inputs across page and any frames
+    name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
+
+    # If inputs are not found on current page, attempt to open auth modal or navigate to auth route
+    if not email_input or not password_input:
+        opened = await open_auth_view_if_needed(page, is_signup=is_signup)
+        if opened:
+            name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
+
+    # Multi-step authentication: email entered on step 1, password appears on step 2
+    if email_input and not password_input:
+        try:
+            await email_input.focus()
+            await email_input.fill(email)
+            await email_input.evaluate(
                 "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
             )
-    except Exception:
-        pass
+            next_btn = await find_submit_button(active_scope or page)
+            if next_btn:
+                await next_btn.click(timeout=2000)
+                await asyncio.sleep(1.0)
+                _, _, password_input, active_scope = await find_auth_inputs_across_frames(page)
+        except Exception as ex:
+            logger.debug("Multi-step email submit attempt: %s", ex)
 
-    # 2. Locate email/username input
-    email_selector = (
-        'input[type="email"], '
-        'input[name="email" i], '
-        'input[name="username" i], '
-        'input[autocomplete="email" i], '
-        'input[autocomplete="username" i], '
-        '#email, #username, '
-        'input[placeholder*="email" i], '
-        'input[placeholder*="username" i], '
-        'input[aria-label*="email" i], '
-        'input[aria-label*="username" i]'
-    )
-    email_input = None
-    try:
-        loc = page.locator(email_selector).first
-        if await loc.is_visible(timeout=1500):
-            email_input = loc
-    except Exception:
-        pass
-
-    if not email_input:
+    if name_input:
         try:
-            loc = page.locator(
-                'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])'
-            ).first
-            if await loc.is_visible(timeout=1000):
-                email_input = loc
+            display_name = name or "Kova Tester"
+            await name_input.focus()
+            await name_input.fill(display_name)
+            await name_input.evaluate(
+                "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+            )
         except Exception:
             pass
-
-    # 3. Locate password input
-    password_selector = (
-        'input[type="password"], '
-        'input[name="password" i], '
-        'input[autocomplete*="password" i], '
-        '#password, '
-        'input[placeholder*="password" i], '
-        'input[aria-label*="password" i]'
-    )
-    password_input = None
-    try:
-        loc = page.locator(password_selector).first
-        if await loc.is_visible(timeout=1500):
-            password_input = loc
-    except Exception:
-        pass
 
     if not email_input or not password_input:
         return False, "Could not find email or password input fields on the page."
