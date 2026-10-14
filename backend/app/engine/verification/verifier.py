@@ -200,6 +200,18 @@ def _heuristic_compile_expectation(
         return {"text_visible": "Explore"}
     if "dashboard" in text.lower():
         return {"text_visible": "Dashboard"}
+    if "settings" in text.lower():
+        return {"text_visible": "Settings"}
+    if "quiz" in text.lower():
+        return {"text_visible": "Quiz"}
+    if "study" in text.lower():
+        return {"text_visible": "Study"}
+
+    page_match = re.search(r"\b([A-Z][a-z]{2,20})\s+page\b", text)
+    if page_match:
+        cand = page_match.group(1).strip()
+        if cand.lower() not in _STRUCTURAL_CONTAINERS:
+            return {"text_visible": cand}
 
     return {}
 
@@ -270,6 +282,8 @@ async def compile_expectation(
                 if isinstance(compiled, CompiledExpectation)
                 else (compiled.get("condition", {}) if isinstance(compiled, dict) else {})
             )
+            # Filter condition strictly to known verification keys
+            condition = {k: v for k, v in condition.items() if k in KNOWN_CONDITION_KEYS}
             # Guard against hallucinated specific CSS selectors like h1.account-title when not grounded
             if isinstance(condition.get("element_visible"), dict) and "css" in condition["element_visible"]:
                 css_sel = condition["element_visible"]["css"]

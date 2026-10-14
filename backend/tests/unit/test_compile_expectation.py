@@ -92,3 +92,20 @@ async def test_compile_expectation_guards_hallucinated_account_and_css():
     assert cond.get("auth_verified") == {"auth_path": "/login"}
     assert not is_vacuous_condition(cond)
 
+
+@pytest.mark.asyncio
+async def test_compile_expectation_falls_back_when_ai_returns_non_verifier_keys():
+    # If the AI returns irrelevant keys like 'steps' instead of check keys, it must fall back to heuristic
+    provider = StubExpectationProvider({
+        "steps": ["open_settings", "verify_settings_page"],
+    })
+    cond = await compile_expectation(
+        "Open Settings",
+        "Verify the Settings page has loaded with content",
+        provider=provider,
+    )
+    # Must fall back to heuristic and not return vacuous .*
+    assert cond != {"url_matches": ".*"}
+    assert not is_vacuous_condition(cond)
+
+
