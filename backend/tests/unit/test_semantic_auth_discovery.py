@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from app.engine.ai.schemas import AuthEntranceSemanticResult, AuthFormSemanticResult
 from app.engine.browser.auth import (
     find_auth_entrance_semantically,
@@ -125,3 +125,25 @@ async def test_explorer_has_visible_auth_inputs_in_modal():
 
     has_inputs = await explorer._has_visible_auth_inputs(mock_page)
     assert has_inputs is True
+
+
+@pytest.mark.asyncio
+async def test_perform_login_switches_to_signup_view_when_requested_on_signin():
+    mock_page = MagicMock()
+    mock_page.url = "https://example.com/signin"
+    mock_page.frames = []
+
+    opened_signup = []
+
+    async def mock_open_auth(page, is_signup=False, provider=None):
+        if is_signup:
+            opened_signup.append(True)
+            mock_page.url = "https://example.com/signup"
+            return True
+        return False
+
+    with patch("app.engine.browser.auth.open_auth_view_if_needed", side_effect=mock_open_auth), \
+         patch("app.engine.browser.auth.find_auth_inputs_across_frames", return_value=(None, None, None, mock_page)):
+        await perform_login(mock_page, "new@example.com", "SecretPass1!", is_signup=True)
+        assert True in opened_signup
+

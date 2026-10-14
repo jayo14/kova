@@ -77,6 +77,11 @@ async def find_submit_button(page: Any, password_input: Any = None) -> Any:
         'button:has-text("Sign In")',
         'button:has-text("Log in")',
         'button:has-text("Log In")',
+        'button:has-text("Sign up")',
+        'button:has-text("Sign Up")',
+        'button:has-text("Create account")',
+        'button:has-text("Create Account")',
+        'button:has-text("Register")',
         'button:has-text("Continue")',
         'button:has-text("Submit")',
     ]
@@ -497,6 +502,17 @@ async def perform_login(
         return False, "Missing email or password credentials."
 
     initial_url = getattr(page, "url", "")
+    current_url_lower = initial_url.lower()
+
+    # If registration is requested, check if we are currently on a sign-in view
+    # (e.g. redirected to /signin or /login). If so, switch to signup view first.
+    if is_signup:
+        is_on_signin_path = any(p in current_url_lower for p in ["/signin", "/login", "/sign-in", "/log-in"])
+        if is_on_signin_path:
+            logger.info("is_signup requested on signin URL (%s), navigating to signup view", initial_url)
+            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider)
+            if opened:
+                logger.info("Successfully opened signup view, new URL: %s", getattr(page, "url", ""))
 
     # Locate inputs across page and any frames
     name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
@@ -506,6 +522,21 @@ async def perform_login(
         opened = await open_auth_view_if_needed(page, is_signup=is_signup, provider=provider)
         if opened:
             name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
+
+    # If registration is requested but inputs found belong to a login form (e.g. button says "Sign in"), switch view
+    if is_signup and (email_input or password_input):
+        submit_btn = await find_submit_button(active_scope or page)
+        submit_txt = ""
+        if submit_btn:
+            try:
+                submit_txt = (await submit_btn.inner_text(timeout=300) or "").strip().lower()
+            except Exception:
+                pass
+        if submit_txt and any(k in submit_txt for k in ["sign in", "log in", "login"]) and not any(k in submit_txt for k in ["sign up", "signup", "create", "register"]):
+            logger.info("Submit button '%s' indicates signin view but is_signup=True. Attempting switch to signup view.", submit_txt)
+            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider)
+            if opened:
+                name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
 
     # Semantic AI fallback if heuristic selectors failed to locate input fields
     if not email_input or not password_input:
@@ -669,8 +700,19 @@ async def perform_login(
             "password is wrong",
             "incorrect password",
         ]
+        cold_start_phrases = [
+            "waking up",
+            "cold start",
+            "render",
+            "first load",
+            "spinning up",
+            "please wait",
+            "connecting",
+            "starting server",
+        ]
 
-        for _ in range(30):  # up to 15 seconds
+        max_iterations = 60  # Default 30s
+        for iteration in range(90):  # Up to 45 seconds if cold-start detected
             await asyncio.sleep(0.5)
             curr = getattr(page, "url", "")
             if curr != initial_url and not is_auth_url(curr):
@@ -687,12 +729,14 @@ async def perform_login(
                 except Exception:
                     pass
 
-            # Check page body for error phrases
+            # Check page body for error phrases or cold-start notice
             try:
                 b_txt = (await page.inner_text("body", timeout=150) or "").lower()
                 for phrase in error_phrases:
                     if phrase in b_txt:
                         return False, f"Login rejected by application: {phrase.capitalize()}"
+                if any(csp in b_txt for csp in cold_start_phrases):
+                    max_iterations = 90
             except Exception:
                 pass
 
@@ -702,6 +746,9 @@ async def perform_login(
                     return True, "Authentication succeeded (login form dismissed)."
             except Exception:
                 pass
+
+            if iteration >= max_iterations:
+                break
 
         return False, f"Submitted credentials but page remained on auth URL: {initial_url}"
 
