@@ -343,7 +343,7 @@ class AgentReasoner:
         user_prompt = (
             f"Action: {flow_type}\n"
             f"Current URL: {current_url}\n"
-            f"Candidate Elements:\n{json.dumps(candidates[:30], indent=1)}"
+            f"Candidate Elements:\n{json.dumps(candidates[:60], indent=1)}"
         )
 
         try:
