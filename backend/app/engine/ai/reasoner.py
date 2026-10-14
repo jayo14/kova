@@ -291,9 +291,13 @@ class AgentReasoner:
             "inspecting analytics and activity metrics for a dashboard). Infer features from landing page headlines and text even if behind an auth gate.\n"
             "4. ACTION-ORIENTED TITLES: Use meaningful titles reflecting real user intent (e.g. 'Generate and Practice Interactive Quiz', "
             "'Upload Study Material and Review Summaries', 'Create and Practice Flashcards', 'Search and Explore Resource Library') rather than generic 'Open X'.\n"
-            "5. STEPS: Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
-            "6. VERIFIABILITY: The success condition must specify verifiable criteria grounded in observed UI (text_visible, element_visible, url_changed_to, etc.).\n"
-            "7. Output ONLY JSON matching the AIGeneratedJourneyList schema."
+            "5. INTERACTIVE BUTTONS & MODALS: Features in modern SPAs are often activated by clicking buttons (e.g. 'Create Quiz', 'New Study Set', 'Upload Material', "
+            "'Start Practice', tabs, modals, drawers) rather than navigating to a separate URL route. When a feature has an action button or control, synthesize steps "
+            "that click the button (`click` action targeting e.g. `button:has-text('Upload')` or `button:has-text('Create')`) and verify the resulting view, dialog, or content opens. "
+            "Do not restrict yourself to URL navigation only; test buttons and interactive UI actions directly.\n"
+            "6. STEPS: Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
+            "7. VERIFIABILITY: The success condition must specify verifiable criteria grounded in observed UI (text_visible, element_visible, url_changed_to, etc.).\n"
+            "8. Output ONLY JSON matching the AIGeneratedJourneyList schema."
         )
 
         user_prompt = (
