@@ -174,6 +174,9 @@ export function AuthChoiceDialog({
         setPassword={setPassword}
         useCustomCredentials={useCustomCredentials}
         setUseCustomCredentials={setUseCustomCredentials}
+        storedCredentials={storedCredentials}
+        loadingStoredCredentials={loadingStoredCredentials}
+        onUseExisting={handleUseExisting}
         onSubmit={handleCreateAccount}
         onBack={() => setSelectedChoice(null)}
       />
@@ -375,7 +378,7 @@ function ExistingCredentialsForm({
             type="button"
             disabled={!selectedId}
             onClick={() => onSelect(selectedId)}
-            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 cursor-pointer"
           >
             <MaterialIcon name="key" size={14} />
             <span>Sign in with Selected Credential</span>
@@ -396,6 +399,9 @@ function CreateAccountForm({
   setPassword,
   useCustomCredentials,
   setUseCustomCredentials,
+  storedCredentials,
+  loadingStoredCredentials,
+  onUseExisting,
   onSubmit,
   onBack,
 }: {
@@ -408,13 +414,19 @@ function CreateAccountForm({
   setPassword: (v: string) => void;
   useCustomCredentials: boolean;
   setUseCustomCredentials: (v: boolean) => void;
+  storedCredentials: Credential[];
+  loadingStoredCredentials?: boolean;
+  onUseExisting: (credentialId: string) => void;
   onSubmit: () => void;
   onBack: () => void;
 }) {
+  const [selectedStoredId, setSelectedStoredId] = useState("");
+  const activeStoredId = selectedStoredId || storedCredentials[0]?.id || "";
+
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center animate-in fade-in duration-300">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
-      <div className="relative w-full max-w-sm rounded-xl border border-border bg-card/95 p-6 shadow-lg backdrop-blur-sm">
+      <div className="relative w-full max-w-sm rounded-xl border border-border bg-card/95 p-6 shadow-lg backdrop-blur-sm max-h-[92vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <MaterialIcon name="person_add" size={16} className="text-primary" />
@@ -445,6 +457,87 @@ function CreateAccountForm({
         )}
 
         <div className="space-y-4">
+          {loadingStoredCredentials && storedCredentials.length === 0 && (
+            <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground animate-pulse">
+              <MaterialIcon name="sync" size={13} className="animate-spin text-primary" />
+              <span>Checking for saved project credentials...</span>
+            </div>
+          )}
+
+          {/* OPTION: Use existing credentials stored for this project */}
+          {storedCredentials.length > 0 && (
+            <div className="rounded-xl border border-primary/25 bg-primary/5 p-3.5 space-y-2.5 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <MaterialIcon name="key" size={15} className="text-primary" />
+                  <span className="text-caption font-semibold text-foreground">
+                    Use existing credentials
+                  </span>
+                </div>
+                <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] text-primary font-medium">
+                  {storedCredentials.length} stored
+                </span>
+              </div>
+
+              <p className="text-[11px] text-muted-foreground leading-normal">
+                Credentials are already saved for this project. Use them directly without creating a new account:
+              </p>
+
+              {storedCredentials.length === 1 ? (
+                <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-background border border-border/80">
+                  <div className="min-w-0 pr-1">
+                    <p className="text-caption font-medium text-foreground truncate">
+                      {storedCredentials[0].email}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground truncate">
+                      {storedCredentials[0].name || "Saved credential"}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => onUseExisting(storedCredentials[0].id)}
+                    className="shrink-0 rounded-lg bg-primary px-3 py-1.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center gap-1 shadow-xs cursor-pointer"
+                  >
+                    <span>Use credential</span>
+                    <MaterialIcon name="arrow_forward" size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <select
+                    value={activeStoredId}
+                    onChange={(e) => setSelectedStoredId(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2 text-caption text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  >
+                    {storedCredentials.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.email} ({c.name || "Credential"})
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => onUseExisting(activeStoredId)}
+                    className="w-full rounded-lg bg-primary px-3 py-2 text-caption font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <MaterialIcon name="key" size={14} />
+                    <span>Use selected credential</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {storedCredentials.length > 0 && (
+            <div className="relative my-2 flex items-center justify-center text-xs text-muted-foreground">
+              <div className="w-full border-t border-border/80" />
+              <span className="bg-card px-2.5 text-[10px] uppercase font-mono tracking-wider text-muted-foreground/70 shrink-0">
+                or create new account
+              </span>
+              <div className="w-full border-t border-border/80" />
+            </div>
+          )}
+
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
