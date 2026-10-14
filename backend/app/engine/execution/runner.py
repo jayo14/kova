@@ -451,16 +451,18 @@ class FlowRunner:
                 # Step-level auth barrier gate: heal immediately if redirected to an auth barrier
                 from app.engine.browser.auth import is_auth_url, is_auth_page
                 current_p_url = getattr(browser.page, "url", "")
-                step_target_url = (step.get("url") or (step.get("target") or {}).get("url")) if isinstance(step, dict) else None
+                step_target_url = self._extract_step_target_url(step, base_url=ctx.target_url or current_p_url)
                 step_is_intended_auth = (
                     (step_target_url and is_auth_url(step_target_url))
-                    or (isinstance(step, dict) and any(ak in str(step.get("type", "")).lower() for ak in ["auth", "login", "signup"]))
+                    or (isinstance(step, dict) and any(ak in str(step.get("type", "") or step.get("action", "")).lower() for ak in ["auth", "login", "signup"]))
                 )
                 if not step_is_intended_auth and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url)):
-                    healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or current_p_url, event_recorder)
-                    if healed and step_target_url and not is_auth_url(browser.page.url):
+                    healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or ctx.target_url or current_p_url, event_recorder)
+                    dest_to_nav = step_target_url or ctx.target_url
+                    if healed and dest_to_nav and not is_auth_url(browser.page.url):
                         try:
-                            await browser.navigate(step_target_url)
+                            logger.info("Navigating to destination after step auth barrier healing: %s", dest_to_nav)
+                            await browser.navigate(dest_to_nav)
                             await asyncio.sleep(1.0)
                         except Exception as re_nav_err:
                             logger.debug("Re-navigation after auth barrier healing failed: %s", re_nav_err)
@@ -573,9 +575,9 @@ class FlowRunner:
                     )
                     if healed:
                         from urllib.parse import urljoin
-                        re_target = target_url or detected_expected_dest
-                        if detected_expected_dest and detected_expected_dest.startswith("/"):
-                            re_target = urljoin(current_page_url, detected_expected_dest)
+                        re_target = detected_expected_dest or target_url
+                        if re_target and re_target.startswith("/"):
+                            re_target = urljoin(current_page_url, re_target)
 
                         if re_target and browser.page.url != re_target:
                             logger.info("Login succeeded, navigating to target destination: %s", re_target)
@@ -1656,6 +1658,40 @@ class FlowRunner:
             result["credential_field"] = step["credential_field"]
 
         return result
+
+    @staticmethod
+    def _extract_step_target_url(step: dict | str | None, base_url: str = "") -> str | None:
+        """Extract a valid target navigation URL from various step formats."""
+        if not step:
+            return None
+        if isinstance(step, str):
+            match = re.search(r"https?://\S+", step)
+            if match:
+                return match.group(0)
+            return None
+        if not isinstance(step, dict):
+            return None
+
+        raw_target = step.get("target")
+        target_dict = raw_target if isinstance(raw_target, dict) else {}
+        target_str = raw_target if isinstance(raw_target, str) else ""
+
+        candidate = (
+            step.get("url")
+            or step.get("value")
+            or (target_dict.get("url") or target_dict.get("value"))
+            or (target_str if (target_str.startswith("http://") or target_str.startswith("https://") or target_str.startswith("/")) else None)
+        )
+        if candidate and isinstance(candidate, str):
+            candidate_clean = candidate.strip()
+            if candidate_clean.startswith("http://") or candidate_clean.startswith("https://"):
+                return candidate_clean
+            if candidate_clean.startswith("/") and base_url:
+                from urllib.parse import urljoin
+                return urljoin(base_url, candidate_clean)
+            if candidate_clean.startswith("/"):
+                return candidate_clean
+        return None
 
     @staticmethod
     def _infer_action_type(text: str) -> str:
