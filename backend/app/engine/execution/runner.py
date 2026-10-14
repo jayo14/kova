@@ -970,6 +970,34 @@ class FlowRunner:
                 logger.info("On-the-fly test account registration succeeded as %s", auto_email)
                 from app.engine.credentials.models import Credential as EngineCredential
                 ctx.credentials.add(EngineCredential(id=f"auto-{random_suffix}", email=auto_email, password=auto_pass))
+                ctx.credentials.add(EngineCredential(id="default", email=auto_email, password=auto_pass))
+                ctx.credentials.add(EngineCredential(id="login", email=auto_email, password=auto_pass))
+
+                # Persist to project credentials table if DB is accessible
+                try:
+                    from app.infrastructure.database.session import async_session_factory
+                    from app.modules.executions.repository import ExecutionRepository
+                    from app.modules.flows.repository import FlowRepository
+                    from app.modules.credentials.repository import CredentialRepository
+                    import uuid
+                    async with async_session_factory() as cred_db:
+                        exec_repo = ExecutionRepository(cred_db)
+                        exec_row = await exec_repo.get_by_id(uuid.UUID(ctx.execution_id))
+                        if exec_row and exec_row.flow_id:
+                            flow_repo = FlowRepository(cred_db)
+                            flow_row = await flow_repo.get_by_id(exec_row.flow_id)
+                            if flow_row and flow_row.project_id:
+                                cred_repo = CredentialRepository(cred_db)
+                                await cred_repo.create(
+                                    project_id=flow_row.project_id,
+                                    name=f"auto-healed-{random_suffix}",
+                                    email=auto_email,
+                                    password=auto_pass,
+                                )
+                                await cred_db.commit()
+                except Exception as db_save_err:
+                    logger.debug("Could not persist auto-healed credential to project: %s", db_save_err)
+
                 ctx.record_event("ai_assisted", {
                     "healing_type": "auth_account_created",
                     "original_auth_url": current_page_url,
