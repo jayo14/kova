@@ -1868,7 +1868,7 @@ class ExplorationEngine:
                         page_summary=page_text,
                         max_journeys=max_missions - mission_count,
                     ),
-                    timeout=8.0,
+                    timeout=25.0,
                 )
                 if ai_journeys_result and ai_journeys_result.journeys:
                     self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
@@ -1904,8 +1904,11 @@ class ExplorationEngine:
                         first_non_auth = next((m for m in missions if m.category != "auth"), missions[0])
                         first_non_auth.recommended = True
                     mission_count = len(missions)
+            except asyncio.TimeoutError:
+                logger.warning("AI journey synthesis timed out after 25s, falling back to heuristics")
             except Exception as e:
-                logger.warning("AI journey synthesis failed, falling back to heuristics: %s", e)
+                err_msg = str(e) or type(e).__name__
+                logger.warning("AI journey synthesis failed, falling back to heuristics: %s", err_msg)
 
         # Step 3c: Heuristic route-based journeys (if AI did not produce missions)
         if len(missions) <= (1 if self.goal else 0):
