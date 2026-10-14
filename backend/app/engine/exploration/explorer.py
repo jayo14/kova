@@ -1786,26 +1786,38 @@ class ExplorationEngine:
         mission_count = 0
         max_missions = 6
 
-        # Step 3a: Attempt AI-powered journey synthesis
+        # Step 3a: Goal-directed mission (highest priority when explicitly requested by user)
+        if self.goal and mission_count < max_missions:
+            goal_mission = self._build_goal_mission(
+                self.goal, current_url, title, persona_name, interactive_elements
+            )
+            if goal_mission:
+                missions.append(goal_mission)
+                mission_count += 1
+
+        # Step 3b: Attempt AI-powered journey synthesis for feature discovery
         ai_provider = get_ai_provider()
         ai_reasoner = AgentReasoner(ai_provider) if ai_provider else None
 
-        if ai_reasoner and (route_map or interactive_elements):
+        if ai_reasoner and route_map and mission_count < max_missions:
             try:
                 page_text = " ".join([el.get("name", "") for el in interactive_elements[:15]])
-                ai_journeys_result = await ai_reasoner.synthesize_journeys(
-                    base_url=current_url,
-                    title=title,
-                    goal=self.goal,
-                    persona=persona_name,
-                    routes=route_map,
-                    interactive_elements=interactive_elements,
-                    page_summary=page_text,
-                    max_journeys=max_missions,
+                ai_journeys_result = await asyncio.wait_for(
+                    ai_reasoner.synthesize_journeys(
+                        base_url=current_url,
+                        title=title,
+                        goal=self.goal,
+                        persona=persona_name,
+                        routes=route_map,
+                        interactive_elements=interactive_elements,
+                        page_summary=page_text,
+                        max_journeys=max_missions - mission_count,
+                    ),
+                    timeout=8.0,
                 )
                 if ai_journeys_result and ai_journeys_result.journeys:
                     self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
-                    has_recommended = False
+                    has_recommended = any(m.recommended for m in missions)
                     for j in ai_journeys_result.journeys:
                         is_rec = j.recommended and not has_recommended
                         # Never recommend an auth journey if there are other feature journeys
@@ -1840,16 +1852,8 @@ class ExplorationEngine:
             except Exception as e:
                 logger.warning("AI journey synthesis failed, falling back to heuristics: %s", e)
 
-        # Step 3b: Heuristic route-based journeys (if AI did not produce missions)
-        if not missions:
-            # Goal-directed mission (highest priority)
-            if self.goal and mission_count < max_missions:
-                goal_mission = self._build_goal_mission(
-                    self.goal, current_url, title, persona_name, interactive_elements
-                )
-                if goal_mission:
-                    missions.append(goal_mission)
-                    mission_count += 1
+        # Step 3c: Heuristic route-based journeys (if AI did not produce missions)
+        if len(missions) <= (1 if self.goal else 0):
 
             # Feature journeys (dashboard, workspace, settings, CRUD) - top priority
             for route in feature_routes[:3]:
@@ -2186,22 +2190,18 @@ class ExplorationEngine:
                     f"A signup route ({signup_path}) and login route ({login_path}) were detected. "
                     "Add a project credential or configure the temp-mail service to run this chained mission."
                 ),
-                objective=f"Verify that {persona} can view signup and login interfaces",
+                objective=f"Verify that {persona} can sign up, log in, and view account page",
                 persona=persona,
                 category="auth",
                 journey=[
                     f"Navigate to {signup_path}",
-                    "Review registration requirements",
+                    "Sign up with credentials",
                     f"Navigate to {login_path}",
-                    "Verify login page is accessible",
+                    "Log in with user credentials",
+                    "Verify account page is displayed",
                 ],
-                steps=[
-                    {"type": "navigate", "url": signup_url},
-                    {"type": "observe", "target": {"description": "Review registration page requirements"}},
-                ],
-                successCondition={
-                    "url_matches": re.escape(signup_path.rstrip("/")).replace("\\/", "/") or signup_path,
-                },
+                steps=[],
+                successCondition=None,
                 confidence=0.5,
                 recommended=False,
                 route_analysis={"signup": signup_route, "login": login_route},

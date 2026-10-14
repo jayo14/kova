@@ -169,10 +169,13 @@ def _heuristic_compile_expectation(
     return {}
 
 
+_DEFAULT_PROVIDER = object()
+
+
 async def compile_expectation(
     objective: str,
     expected_outcome: str,
-    provider: Any = None,
+    provider: Any = _DEFAULT_PROVIDER,
     page_context: dict | None = None,
 ) -> dict:
     """Compile natural-language expectation/objective into a deterministic verification condition.
@@ -182,7 +185,7 @@ async def compile_expectation(
     If it cannot compile a non-vacuous condition, returns a vacuous condition
     so the runner/verifier marks the execution UNVERIFIED, never PASSED.
     """
-    if provider is None:
+    if provider is _DEFAULT_PROVIDER:
         try:
             from app.engine.ai.provider import get_ai_provider
             provider = get_ai_provider()
