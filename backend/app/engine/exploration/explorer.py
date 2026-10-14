@@ -1982,16 +1982,17 @@ class ExplorationEngine:
                     missions.append(auth_mission)
                     mission_count += 1
 
-        # Fallback: element-based missions if route analysis yielded nothing
-        if not missions and interactive_elements:
-            # Check for contact form controls on current page
+        # Complement with element-based missions if route analysis yielded few candidates
+        if len(missions) < 4 and interactive_elements:
+            # Check for contact form controls on current page if not already present
+            has_form_mission = any(m.category == "form" for m in missions)
             has_contact = any(
                 "contact" in el.get("name", "").lower()
                 or "message" in el.get("name", "").lower()
                 or el.get("type") == "textarea"
                 for el in interactive_elements
             )
-            if has_contact and mission_count < max_missions:
+            if not has_form_mission and has_contact and mission_count < max_missions:
                 fake_route = {
                     "path": urlparse(current_url).path or "/contact",
                     "url": current_url,
@@ -2007,15 +2008,21 @@ class ExplorationEngine:
                     missions.append(form_mission)
                     mission_count += 1
 
-            for el in interactive_elements[:4]:
+            existing_names = {m.name.lower() for m in missions}
+            for el in interactive_elements:
                 if mission_count >= max_missions:
                     break
+                el_name = el.get("name", "").strip()
+                if not el_name or any(el_name.lower() in en or en in el_name.lower() for en in existing_names):
+                    continue
+                has_rec = any(m.recommended for m in missions)
                 mission = self._build_element_mission(
                     el, current_url, title, persona_name,
-                    recommended=(mission_count == 0 and not self.goal)
+                    recommended=(not has_rec and not self.goal)
                 )
                 if mission:
                     missions.append(mission)
+                    existing_names.add(mission.name.lower())
                     mission_count += 1
 
         # Ensure at least one high-value candidate is recommended if none currently is
