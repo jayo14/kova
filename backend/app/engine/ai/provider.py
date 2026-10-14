@@ -158,8 +158,8 @@ class OpenAICompatibleProvider(AIProvider):
 
             if resp.status_code >= 400:
                 resp_text = resp.text[:250] if resp.text else ""
-                # If error is due to response_format not supported, retry without response_format
-                if any(kw in resp_text.lower() for kw in ("response_format", "json_object", "json mode", "not supported")):
+                # If error is due to response_format not supported or JSON mode validation failure, retry without response_format
+                if any(kw in resp_text.lower() for kw in ("response_format", "json_object", "json mode", "not supported", "json_validate_failed", "failed to generate json")):
                     try:
                         payload_no_rf = dict(payload)
                         payload_no_rf.pop("response_format", None)
