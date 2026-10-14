@@ -158,6 +158,28 @@ class OpenAICompatibleProvider(AIProvider):
 
             if resp.status_code >= 400:
                 resp_text = resp.text[:250] if resp.text else ""
+                # If error is due to response_format not supported, retry without response_format
+                if any(kw in resp_text.lower() for kw in ("response_format", "json_object", "json mode", "not supported")):
+                    try:
+                        payload_no_rf = dict(payload)
+                        payload_no_rf.pop("response_format", None)
+                        async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as retry_client:
+                            resp = await retry_client.post(
+                                f"{self._base_url}/chat/completions",
+                                headers=headers,
+                                json=payload_no_rf,
+                            )
+                        if resp.status_code < 400:
+                            body = resp.json()
+                            choice = body["choices"][0]
+                            message = choice.get("message", {})
+                            content = message.get("content") or ""
+                            if not content.strip():
+                                content = message.get("reasoning") or message.get("thought") or ""
+                            return self._parse_structured(content, schema)
+                    except Exception:
+                        pass
+
                 err_msg = f"HTTP {resp.status_code}: {resp_text}"
                 logger.warning("Model '%s' failed on '%s' (%s).", model, self.name, err_msg)
                 errors.append(f"{model}: {err_msg}")
@@ -171,6 +193,22 @@ class OpenAICompatibleProvider(AIProvider):
                 # Some reasoning models put content in reasoning or thoughts if content is null/empty
                 if not content.strip():
                     content = message.get("reasoning") or message.get("thought") or ""
+                # If content is still empty, retry once without response_format
+                if not content.strip():
+                    try:
+                        payload_no_rf = dict(payload)
+                        payload_no_rf.pop("response_format", None)
+                        async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as retry_client:
+                            retry_resp = await retry_client.post(
+                                f"{self._base_url}/chat/completions",
+                                headers=headers,
+                                json=payload_no_rf,
+                            )
+                        if retry_resp.status_code < 400:
+                            retry_body = retry_resp.json()
+                            content = retry_body["choices"][0].get("message", {}).get("content") or ""
+                    except Exception:
+                        pass
             except (KeyError, IndexError, ValueError) as e:
                 err_msg = f"Malformed AI response envelope: {e}"
                 logger.warning("Model '%s' envelope malformed on '%s': %s", model, self.name, err_msg)
