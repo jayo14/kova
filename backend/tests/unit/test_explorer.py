@@ -246,3 +246,39 @@ async def test_explorer_protected_feature_routes_are_discovered(monkeypatch):
     assert rec is not None
     assert "Settings" not in rec.name
 
+
+@pytest.mark.asyncio
+async def test_explorer_element_journeys_complement_few_routes(monkeypatch):
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://app.example.com",
+    )
+    class DummyPage:
+        url = "https://app.example.com"
+
+    # Only 1 route found (e.g. settings)
+    mock_routes = [
+        {"path": "/settings", "url": "https://app.example.com/settings", "accessible": True, "category": "feature", "elements_count": 3, "text": "Settings", "title": "Settings"},
+    ]
+    monkeypatch.setattr(explorer, "_analyze_routes", lambda page, url: asyncio.sleep(0, result=mock_routes))
+
+    observation = {
+        "title": "Quiza AI",
+        "elements": [
+            {"type": "link", "name": "Settings"},
+            {"type": "button", "name": "Create Quiz"},
+            {"type": "button", "name": "Generate Flashcards"},
+            {"type": "button", "name": "Practice Exam"},
+        ],
+    }
+    discoveries, missions = await explorer._discover_workflows(DummyPage(), observation, "Student")
+
+    mission_names = [m.name for m in missions]
+    # Interactive elements should be included as journeys when route count is low
+    assert any("Create Quiz" in name for name in mission_names)
+    assert any("Generate Flashcards" in name for name in mission_names)
+    # The recommended mission should NOT be settings, it should be one of the features
+    rec = next((m for m in missions if m.recommended), None)
+    assert rec is not None
+    assert "Settings" not in rec.name
+
