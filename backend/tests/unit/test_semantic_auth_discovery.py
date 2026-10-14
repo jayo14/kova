@@ -105,7 +105,7 @@ async def test_find_auth_inputs_semantically_layout_and_at_placeholder():
 
 @pytest.mark.asyncio
 async def test_explorer_has_visible_auth_inputs_in_modal():
-    explorer = ExplorationEngine()
+    explorer = ExplorationEngine(exploration_id="test-id", url="https://example.com")
     mock_page = MagicMock()
     mock_page.url = "https://example.com"
     mock_page.frames = []
