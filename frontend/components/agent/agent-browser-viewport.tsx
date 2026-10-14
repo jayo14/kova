@@ -21,12 +21,14 @@ export interface AgentBrowserViewportProps {
   credentialRequest?: CredentialRequest | null;
   authMode?: AuthMode;
   onCredentialSubmit?: (email: string, password: string, save?: boolean) => void;
-  onAuthChoice?: (choice: AuthChoice, details?: { email: string; password: string }) => void;
+  onAuthChoice?: (choice: AuthChoice, details?: { email?: string; password?: string; credentialId?: string }) => void;
   credentialError?: string | null;
   credentialLoading?: boolean;
   onUrlChange?: (url: string, path: string) => void;
   onThumbnailClick?: (index: number) => void;
   className?: string;
+  projectId?: string | null;
+  sessionId?: string | null;
 }
 
 /**
@@ -54,6 +56,8 @@ export function AgentBrowserViewport({
   credentialLoading,
   onThumbnailClick,
   className,
+  projectId,
+  sessionId,
 }: AgentBrowserViewportProps) {
   const [isSnapshotExpanded, setIsSnapshotExpanded] = useState(false);
 
@@ -186,12 +190,16 @@ export function AgentBrowserViewport({
           <AuthChoiceDialog
             hostname={hostname}
             reason={credentialRequest?.reason}
+            projectId={projectId}
+            sessionId={sessionId}
             onChoice={onAuthChoice ? (choice, details) => onAuthChoice(choice, details) : () => {}}
             error={credentialError}
             loading={state === "authenticating" || credentialLoading}
             loadingMessage={
               authMode === "creating_account"
                 ? "Creating test account & setting up workspace..."
+                : authMode === "use_existing"
+                ? "Signing in with stored credentials..."
                 : "Authenticating with provided credentials..."
             }
           />
