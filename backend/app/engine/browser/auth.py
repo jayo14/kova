@@ -180,7 +180,99 @@ async def find_auth_inputs_across_frames(page: Any) -> tuple[Any | None, Any | N
     return None, None, None, page
 
 
-async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
+async def find_auth_entrance_semantically(
+    page: Any,
+    provider: Any = None,
+    is_signup: bool = False,
+) -> bool:
+    """Inspects the page for interactive entrance elements and uses AI or heuristics to open auth."""
+    extract_entrance_script = """
+    () => {
+        const candidates = [];
+        const elements = Array.from(document.querySelectorAll('a, button, [role="button"], input[type="button"], input[type="submit"]'));
+        let idx = 0;
+        for (const el of elements) {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            if (rect.width <= 0 || rect.height <= 0) continue;
+
+            const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+            if (!text && !el.getAttribute('href')) continue;
+
+            el.setAttribute('data-kova-entrance-candidate', String(idx));
+            candidates.push({
+                index: idx,
+                tagName: el.tagName.toLowerCase(),
+                text: text.slice(0, 80),
+                href: el.getAttribute('href') || '',
+                role: el.getAttribute('role') || '',
+                ariaLabel: el.getAttribute('aria-label') || '',
+            });
+            idx++;
+            if (candidates.length >= 60) break;
+        }
+        return candidates;
+    }
+    """
+    try:
+        candidates = await page.evaluate(extract_entrance_script)
+        if not candidates:
+            return False
+
+        ai_prov = provider
+        if ai_prov is None:
+            try:
+                from app.engine.ai.provider import get_ai_provider
+                ai_prov = get_ai_provider()
+            except Exception:
+                ai_prov = None
+
+        chosen_idx = None
+        if ai_prov:
+            try:
+                from app.engine.ai.reasoner import AgentReasoner
+                reasoner = AgentReasoner(ai_prov)
+                current_url = getattr(page, "url", "")
+                result = await reasoner.identify_auth_entrance(current_url, candidates, is_signup=is_signup)
+                if result and result.entrance_index is not None:
+                    chosen_idx = result.entrance_index
+            except Exception as ex:
+                logger.debug("AI auth entrance error: %s", ex)
+
+        if chosen_idx is None:
+            keywords = (
+                ["sign up", "signup", "create account", "register", "get started", "start free", "join", "start learning", "try for free"]
+                if is_signup else
+                ["sign in", "signin", "log in", "login", "my account", "enter", "portal"]
+            )
+            for c in candidates:
+                blob = f"{c['text']} {c['href']} {c['ariaLabel']}".lower()
+                if any(kw in blob for kw in keywords):
+                    chosen_idx = c["index"]
+                    break
+
+        if chosen_idx is not None:
+            cand = next((c for c in candidates if c["index"] == chosen_idx), None)
+            if cand and cand.get("href") and cand["href"].startswith("/"):
+                parsed = urlparse(getattr(page, "url", ""))
+                target = f"{parsed.scheme}://{parsed.netloc}{cand['href']}"
+                await page.goto(target, wait_until="domcontentloaded", timeout=5000)
+                await asyncio.sleep(1.0)
+                return True
+
+            target_loc = page.locator(f'[data-kova-entrance-candidate="{chosen_idx}"]').first
+            if await target_loc.is_visible(timeout=1000):
+                await target_loc.click(timeout=2000)
+                await asyncio.sleep(1.0)
+                return True
+    except Exception as e:
+        logger.debug("find_auth_entrance_semantically error: %s", e)
+
+    return False
+
+
+async def open_auth_view_if_needed(page: Any, is_signup: bool = False, provider: Any = None) -> bool:
     """Attempts to reveal or navigate to login/signup modal or page if inputs are missing."""
     if is_signup:
         button_selectors = [
@@ -192,11 +284,13 @@ async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
             'a:has-text("Get Started")', 'button:has-text("Get Started")',
             'a:has-text("Start Learning")', 'button:has-text("Start Learning")',
             'a:has-text("Start learning")', 'button:has-text("Start learning")',
+            'a:has-text("Start Free")', 'button:has-text("Start Free")',
+            'a:has-text("Try for Free")', 'button:has-text("Try for Free")',
             'a:has-text("Register")', 'button:has-text("Register")',
             'a:has-text("Join")', 'button:has-text("Join")',
             'a[href*="signup" i]', 'a[href*="register" i]', 'a[href*="create-account" i]',
         ]
-        fallback_paths = ["/auth/signup", "/signup", "/sign-up", "/register"]
+        fallback_paths = ["/auth/signup", "/signup", "/sign-up", "/register", "/auth/register"]
     else:
         button_selectors = [
             'a:has-text("Sign in")', 'button:has-text("Sign in")',
@@ -236,7 +330,8 @@ async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
             except Exception:
                 continue
 
-    return False
+    # 3. AI / semantic entrance element fallback
+    return await find_auth_entrance_semantically(page, provider=provider, is_signup=is_signup)
 
 
 async def find_auth_inputs_semantically(
@@ -273,8 +368,19 @@ async def find_auth_inputs_semantically(
                 const lbl = document.querySelector(`label[for="${el.id}"]`);
                 if (lbl) labelText = lbl.innerText.trim();
             }
+            if (!labelText && el.getAttribute('aria-labelledby')) {
+                const albl = document.getElementById(el.getAttribute('aria-labelledby'));
+                if (albl) labelText = albl.innerText.trim();
+            }
             if (!labelText && el.closest('label')) {
                 labelText = el.closest('label').innerText.trim();
+            }
+            if (!labelText) {
+                const parent = el.closest('.form-item, .form-group, .field, fieldset, [class*="input" i], [class*="field" i], div');
+                if (parent) {
+                    const plbl = parent.querySelector('label, [class*="label" i], span, p');
+                    if (plbl && plbl !== el) labelText = plbl.innerText.trim();
+                }
             }
             if (!labelText && el.previousElementSibling && ['LABEL', 'SPAN', 'P'].includes(el.previousElementSibling.tagName)) {
                 labelText = el.previousElementSibling.innerText.trim();
@@ -337,9 +443,9 @@ async def find_auth_inputs_semantically(
                     if c["tagName"] == "button" and c.get("type") != "submit":
                         continue
                     text_blob = f"{c['type']} {c['name']} {c['id']} {c['placeholder']} {c['ariaLabel']} {c['labelText']}".lower()
-                    if pwd_idx is None and ("password" in text_blob or "pass" in text_blob or c["type"] == "password"):
+                    if pwd_idx is None and ("password" in text_blob or "pass" in text_blob or c["type"] == "password" or "pin" in text_blob or "secret" in text_blob):
                         pwd_idx = idx
-                    elif email_idx is None and any(k in text_blob for k in ["email", "user", "identifier", "login", "phone", "account"]):
+                    elif email_idx is None and (any(k in text_blob for k in ["email", "user", "identifier", "login", "phone", "account"]) or "@" in c.get("placeholder", "")):
                         email_idx = idx
                     elif name_idx is None and is_signup and any(k in text_blob for k in ["fullname", "full_name", "first name", "name"]):
                         name_idx = idx
@@ -397,7 +503,7 @@ async def perform_login(
 
     # If inputs are not found on current page, attempt to open auth modal or navigate to auth route
     if not email_input or not password_input:
-        opened = await open_auth_view_if_needed(page, is_signup=is_signup)
+        opened = await open_auth_view_if_needed(page, is_signup=is_signup, provider=provider)
         if opened:
             name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
 
@@ -443,8 +549,21 @@ async def perform_login(
         except Exception:
             pass
 
-    if not email_input or not password_input:
+    if not email_input and not password_input:
         return False, "Could not find email or password input fields on the page."
+    if not email_input:
+        return False, "Could not find email input field on the page."
+    if not password_input:
+        current_url = getattr(page, "url", "").lower()
+        if not is_auth_url(current_url) or current_url != initial_url.lower():
+            return True, ""
+        try:
+            body_text = (await page.inner_text("body", timeout=1000) or "").lower()
+            if any(term in body_text for term in ["check your email", "magic link", "verification link", "verification email", "we sent a link"]):
+                return True, "Verification email or magic link dispatched."
+        except Exception:
+            pass
+        return False, "Could not find password input field on the page."
 
     try:
         # Focus and fill email

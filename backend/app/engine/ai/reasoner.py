@@ -22,6 +22,7 @@ from app.engine.ai.schemas import (
     ActionProposal,
     AIGeneratedJourney,
     AIGeneratedJourneyList,
+    AuthEntranceSemanticResult,
     AuthFormSemanticResult,
     GoalInterpretation,
     JourneyPlan,
@@ -355,6 +356,40 @@ class AgentReasoner:
             return None
         except Exception as e:
             logger.warning("Unexpected error during semantic auth identification: %s", e)
+            return None
+
+    async def identify_auth_entrance(
+        self,
+        current_url: str,
+        candidates: list[dict],
+        is_signup: bool = False,
+    ) -> AuthEntranceSemanticResult | None:
+        """Semantically identify the button or link that opens the login or signup page/modal."""
+        if not self.provider or not candidates:
+            return None
+
+        flow_type = "Sign up / Register / Create Account" if is_signup else "Sign in / Log in"
+        system = (
+            "You are an expert browser automation element identifier. "
+            f"Given candidate interactive elements on a web page, identify the element index that opens or navigates to the {flow_type} view or modal.\n"
+            "Return JSON matching AuthEntranceSemanticResult: {entrance_index: integer or null, confidence: float, reasoning: string}."
+        )
+
+        user_prompt = (
+            f"Target flow: {flow_type}\n"
+            f"Current URL: {current_url}\n"
+            f"Candidate Interactive Elements:\n{json.dumps(candidates[:60], indent=1)}"
+        )
+
+        try:
+            return await self.provider.generate_structured(
+                system, user_prompt, AuthEntranceSemanticResult
+            )
+        except AIProviderError as e:
+            logger.warning("AI provider failed to semantically identify auth entrance: %s", e)
+            return None
+        except Exception as e:
+            logger.warning("Unexpected error during semantic auth entrance identification: %s", e)
             return None
 
     # ── Phase 7/8: Next-action proposal (the agent loop's brain) ────
