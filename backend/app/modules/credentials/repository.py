@@ -55,7 +55,7 @@ class CredentialRepository:
         result = await self.db.execute(
             select(Credential)
             .where(Credential.project_id == project_id)
-            .order_by(Credential.created_at.desc())
+            .order_by(Credential.created_at.desc(), Credential.id.desc())
             .offset(skip)
             .limit(limit)
         )
