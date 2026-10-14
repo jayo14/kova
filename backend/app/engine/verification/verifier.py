@@ -124,21 +124,30 @@ def is_vacuous_condition(condition: Any) -> bool:
     return not has_non_vacuous
 
 
-def _heuristic_compile_expectation(objective: str, expected_outcome: str) -> dict:
+def _heuristic_compile_expectation(
+    objective: str,
+    expected_outcome: str,
+    page_context: dict | None = None,
+) -> dict:
     """Deterministic heuristic fallback when AI provider is unavailable."""
     text = f"{objective} {expected_outcome}".strip()
     if not text:
         return {}
-    url_match = re.search(
-        r"/(?:dashboard|profile|settings|home|login|signup|account|welcome|orders|checkout)[\w\-]*",
-        text,
-        re.I,
-    )
-    if url_match:
-        return {"url_matches": url_match.group(0)}
+
+    # Check if a specific URL path was explicitly mentioned (e.g. /dashboard or /explore)
+    explicit_paths = re.findall(r"(?:^|\s)(/[\w\-/]+)", text)
+    if explicit_paths:
+        target_path = explicit_paths[0].rstrip("/")
+        # Only use if explicitly qualified or present in page_context
+        if target_path and target_path not in ("/account", "/profile") or (page_context and target_path in str(page_context)):
+            return {"url_matches": target_path}
+
+    # Quoted text is an exact string expectation
     quoted = re.findall(r"['\"]([^'\"]{3,50})['\"]", text)
     if quoted:
         return {"text_visible": quoted[0]}
+
+    # "shows/displays/sees <text>" pattern
     shows_match = re.search(
         r"(?:sees|shows|displays|contains|shows text)\s+([A-Za-z0-9_\- ]{3,30})",
         text,
@@ -148,6 +157,15 @@ def _heuristic_compile_expectation(objective: str, expected_outcome: str) -> dic
         cand = shows_match.group(1).strip()
         if cand.lower() not in _STRUCTURAL_CONTAINERS:
             return {"text_visible": cand}
+
+    # Keyword patterns for common intents (prefer text visibility over ungrounded paths)
+    if any(k in text.lower() for k in ["account page", "account dashboard", "profile page", "logged in", "logged-in"]):
+        return {"text_visible": "Account"}
+    if "explore" in text.lower():
+        return {"text_visible": "Explore"}
+    if "dashboard" in text.lower():
+        return {"text_visible": "Dashboard"}
+
     return {}
 
 
@@ -155,6 +173,7 @@ async def compile_expectation(
     objective: str,
     expected_outcome: str,
     provider: Any = None,
+    page_context: dict | None = None,
 ) -> dict:
     """Compile natural-language expectation/objective into a deterministic verification condition.
 
@@ -172,6 +191,7 @@ async def compile_expectation(
 
     condition: dict = {}
     if provider is not None:
+        import json
         from app.engine.ai.schemas import CompiledExpectation
         system = (
             "You compile software-testing objectives and expected outcomes into "
@@ -186,14 +206,24 @@ async def compile_expectation(
             "- heading_changed: true\n"
             "- url_changed_to: '...'\n"
             "- url_changed_from: '...'\n"
-            "- auth_verified: true\n"
-            "CRITICAL: Do NOT return vacuous conditions like url_matches '.*' or "
+            "- auth_verified: true\n\n"
+            "CRITICAL INTEGRITY RULES:\n"
+            "1. NEVER hallucinate fictional CSS class names (such as 'h1.account-title', '.dashboard-header', '#profile') "
+            "or imaginary URLs unless observed in the page context.\n"
+            "2. When verifying display or content, prefer `text_visible` (e.g. 'Account', 'Welcome', 'Profile') "
+            "or `element_visible: {'text': '...'}` over ungrounded CSS selectors.\n"
+            "3. Do NOT return vacuous conditions like url_matches '.*' or "
             "element_visible on bare structural containers (main, body, container, .content)."
         )
+        context_str = ""
+        if page_context:
+            context_str = f"\nObserved Page Context:\n{json.dumps(page_context, indent=1)}\n"
+
         prompt = (
             f"Objective: {objective}\n"
-            f"Expected Outcome: {expected_outcome}\n\n"
-            "Compile into a deterministic verification condition."
+            f"Expected Outcome: {expected_outcome}\n"
+            f"{context_str}\n"
+            "Compile into a deterministic verification condition grounded in observed realities."
         )
         try:
             compiled = await provider.generate_structured(system, prompt, CompiledExpectation)
@@ -202,12 +232,18 @@ async def compile_expectation(
                 if isinstance(compiled, CompiledExpectation)
                 else (compiled.get("condition", {}) if isinstance(compiled, dict) else {})
             )
+            # Guard against hallucinated specific CSS selectors like h1.account-title when not grounded
+            if isinstance(condition.get("element_visible"), dict) and "css" in condition["element_visible"]:
+                css_sel = condition["element_visible"]["css"]
+                if "account-title" in css_sel or (not page_context and ("." in css_sel or "#" in css_sel)):
+                    condition["text_visible"] = "Account" if "account" in css_sel.lower() else "Dashboard"
+                    del condition["element_visible"]
         except Exception as e:
             logger.warning("compile_expectation AI generation failed: %s", e)
             condition = {}
 
     if not condition:
-        condition = _heuristic_compile_expectation(objective, expected_outcome)
+        condition = _heuristic_compile_expectation(objective, expected_outcome, page_context=page_context)
 
     if is_vacuous_condition(condition):
         # Return a vacuous condition that the verifier rejects

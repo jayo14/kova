@@ -197,7 +197,11 @@ class FlowRunner:
 
         if not success_condition and (objective or expected_outcome):
             from app.engine.verification.verifier import compile_expectation
-            success_condition = await compile_expectation(objective or "", expected_outcome or "")
+            success_condition = await compile_expectation(
+                objective or "",
+                expected_outcome or "",
+                page_context={"target_url": target_url},
+            )
 
         ctx = ExecutionContext(
             execution_id=str(execution_id),
@@ -428,6 +432,20 @@ class FlowRunner:
             ctx.transition(ExecutionState.VERIFYING)
             ctx.record_event(EventTypes.VERIFICATION_STARTED, {"condition": success_condition})
             await self._emit_events(ctx, event_recorder)
+
+            if not success_condition and (objective or expected_outcome) and browser.page:
+                try:
+                    from app.engine.verification.verifier import compile_expectation
+                    live_url = getattr(browser.page, "url", "")
+                    live_title = await browser.page.title() if browser.page else ""
+                    live_text = await browser.page.evaluate("() => document.body ? document.body.innerText.slice(0, 500) : ''")
+                    success_condition = await compile_expectation(
+                        objective or "",
+                        expected_outcome or "",
+                        page_context={"url": live_url, "title": live_title, "text": live_text},
+                    )
+                except Exception as ex:
+                    logger.debug("Live compile expectation failed: %s", ex)
 
             if success_condition:
                 verification = await verifier.verify(success_condition)
