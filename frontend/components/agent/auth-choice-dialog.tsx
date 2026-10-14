@@ -1,15 +1,23 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
+import type { Credential } from "@/lib/types";
+import { getExplorationCredentials } from "@/lib/api/exploration";
+import { getCredentials } from "@/lib/api/credentials";
 
-export type AuthChoice = "create_account" | "manual_login";
+export type AuthChoice = "create_account" | "manual_login" | "use_existing";
 
 export interface AuthChoiceDialogProps {
   hostname: string;
   reason?: string;
-  onChoice: (choice: AuthChoice, details?: { email: string; password: string }) => void;
+  projectId?: string | null;
+  sessionId?: string | null;
+  onChoice: (
+    choice: AuthChoice,
+    details?: { email?: string; password?: string; credentialId?: string }
+  ) => void;
   error?: string | null;
   loading?: boolean;
   loadingMessage?: string;
@@ -18,6 +26,8 @@ export interface AuthChoiceDialogProps {
 export function AuthChoiceDialog({
   hostname,
   reason,
+  projectId,
+  sessionId,
   onChoice,
   error,
   loading = false,
@@ -27,6 +37,71 @@ export function AuthChoiceDialog({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [useCustomCredentials, setUseCustomCredentials] = useState(false);
+  const [storedCredentials, setStoredCredentials] = useState<Credential[]>([]);
+  const [loadingStoredCredentials, setLoadingStoredCredentials] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStored() {
+      setLoadingStoredCredentials(true);
+      try {
+        let creds: Credential[] = [];
+
+        // 1. Try exploration session credentials
+        if (sessionId) {
+          try {
+            creds = await getExplorationCredentials(sessionId);
+          } catch {
+            // fallback
+          }
+        }
+
+        // 2. Try project-scoped credentials
+        if (creds.length === 0 && projectId) {
+          try {
+            creds = await getCredentials(projectId);
+          } catch {
+            // fallback
+          }
+        }
+
+        // 3. Fallback: query all credentials matching project or hostname
+        if (creds.length === 0) {
+          try {
+            const all = await getCredentials();
+            creds = all.filter((c) => {
+              if (projectId && c.projectId === projectId) return true;
+              if (
+                c.projectName &&
+                hostname &&
+                c.projectName.toLowerCase().includes(hostname.toLowerCase())
+              ) {
+                return true;
+              }
+              return false;
+            });
+          } catch {
+            // ignore
+          }
+        }
+
+        if (!cancelled) {
+          setStoredCredentials(creds);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingStoredCredentials(false);
+        }
+      }
+    }
+
+    loadStored();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, projectId, hostname]);
 
   const handleCreateAccount = () => {
     if (useCustomCredentials && email.trim() && password) {
@@ -36,8 +111,9 @@ export function AuthChoiceDialog({
     }
   };
 
-  const handleManualLogin = () => {
-    onChoice("manual_login");
+  const handleUseExisting = (credentialId: string) => {
+    const cred = storedCredentials.find((c) => c.id === credentialId);
+    onChoice("use_existing", { credentialId, email: cred?.email });
   };
 
   if (loading) {
@@ -50,14 +126,27 @@ export function AuthChoiceDialog({
               <MaterialIcon name="progress_activity" size={24} className="text-primary animate-spin" />
             </div>
             <p className="text-body-sm font-medium text-foreground mb-1">
-              {loadingMessage || "Creating account..."}
+              {loadingMessage || "Authenticating..."}
             </p>
             <p className="text-caption text-muted-foreground">
-              Kova is setting up your test account on {hostname}
+              Kova is setting up your session on {hostname}
             </p>
           </div>
         </div>
       </div>
+    );
+  }
+
+  if (selectedChoice === "use_existing") {
+    return (
+      <ExistingCredentialsForm
+        hostname={hostname}
+        reason={reason}
+        error={error}
+        storedCredentials={storedCredentials}
+        onSelect={handleUseExisting}
+        onBack={() => setSelectedChoice(null)}
+      />
     );
   }
 
@@ -122,6 +211,38 @@ export function AuthChoiceDialog({
         )}
 
         <div className="space-y-3">
+          {/* Stored Credentials Direct Option */}
+          {storedCredentials.length > 0 && (
+            <button
+              onClick={() => {
+                if (storedCredentials.length === 1) {
+                  handleUseExisting(storedCredentials[0].id);
+                } else {
+                  setSelectedChoice("use_existing");
+                }
+              }}
+              className="w-full flex items-center gap-3 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3.5 text-left transition-all hover:bg-primary/10 hover:border-primary/50 group"
+            >
+              <div className="h-10 w-10 rounded-lg bg-primary/15 flex items-center justify-center shrink-0 group-hover:bg-primary/20 transition-colors">
+                <MaterialIcon name="key" size={20} className="text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <p className="text-body-sm font-medium text-foreground">Use Existing Credentials</p>
+                  <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] text-primary font-medium">
+                    {storedCredentials.length} saved
+                  </span>
+                </div>
+                <p className="text-caption text-muted-foreground truncate">
+                  {storedCredentials.length === 1
+                    ? storedCredentials[0].email
+                    : `Use stored credentials for this project`}
+                </p>
+              </div>
+              <MaterialIcon name="chevron_right" size={16} className="text-primary/60 shrink-0" />
+            </button>
+          )}
+
           <button
             onClick={() => setSelectedChoice("create_account")}
             className="w-full flex items-center gap-3 rounded-xl border border-border bg-card/50 px-4 py-3.5 text-left transition-all hover:bg-card hover:border-primary/30 group"
@@ -159,6 +280,106 @@ export function AuthChoiceDialog({
           <p className="text-[11px] text-muted-foreground/60 font-mono">
             Credentials are stored securely for this project
           </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExistingCredentialsForm({
+  hostname,
+  reason,
+  error,
+  storedCredentials,
+  onSelect,
+  onBack,
+}: {
+  hostname: string;
+  reason?: string;
+  error?: string | null;
+  storedCredentials: Credential[];
+  onSelect: (credentialId: string) => void;
+  onBack: () => void;
+}) {
+  const [selectedId, setSelectedId] = useState(
+    storedCredentials[0]?.id || ""
+  );
+
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center animate-in fade-in duration-300">
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" />
+      <div className="relative w-full max-w-sm rounded-xl border border-border bg-card/95 p-6 shadow-lg backdrop-blur-sm">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <MaterialIcon name="key" size={16} className="text-primary" />
+            <span className="text-body-sm font-semibold text-foreground">
+              Use Existing Credentials
+            </span>
+          </div>
+          <button
+            onClick={onBack}
+            className="text-caption text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          >
+            Back
+          </button>
+        </div>
+
+        <p className="text-caption text-muted-foreground mb-4">
+          Select stored credentials for <span className="font-medium text-foreground">{hostname}</span> to continue exploring.
+          {reason && reason !== "Login" && reason !== "login" && (
+            <span className="block mt-1 text-muted-foreground/80">{reason}</span>
+          )}
+        </p>
+
+        {error && (
+          <div className="flex items-start gap-2 rounded-lg bg-destructive/5 border border-destructive/20 px-3 py-2 mb-4">
+            <MaterialIcon name="error" size={14} className="text-destructive shrink-0 mt-0.5" />
+            <p className="text-caption text-destructive">{error}</p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+            {storedCredentials.map((cred) => (
+              <label
+                key={cred.id}
+                onClick={() => setSelectedId(cred.id)}
+                className={cn(
+                  "flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer",
+                  selectedId === cred.id
+                    ? "border-primary bg-primary/5 shadow-xs"
+                    : "border-border bg-card/60 hover:bg-card hover:border-border/80"
+                )}
+              >
+                <input
+                  type="radio"
+                  name="credential-selection"
+                  value={cred.id}
+                  checked={selectedId === cred.id}
+                  onChange={() => setSelectedId(cred.id)}
+                  className="mt-0.5 text-primary focus:ring-primary/20"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-caption font-medium text-foreground truncate">
+                    {cred.email}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {cred.name || "Test Account"}
+                  </p>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <button
+            type="button"
+            disabled={!selectedId}
+            onClick={() => onSelect(selectedId)}
+            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+          >
+            <MaterialIcon name="key" size={14} />
+            <span>Sign in with Selected Credential</span>
+          </button>
         </div>
       </div>
     </div>
@@ -203,7 +424,7 @@ function CreateAccountForm({
           </div>
           <button
             onClick={onBack}
-            className="text-caption text-muted-foreground hover:text-foreground transition-colors"
+            className="text-caption text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           >
             Back
           </button>
@@ -224,12 +445,12 @@ function CreateAccountForm({
         )}
 
         <div className="space-y-4">
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={useCustomCredentials}
               onChange={(e) => setUseCustomCredentials(e.target.checked)}
-              className="rounded border-border"
+              className="rounded border-border text-primary focus:ring-primary/20"
             />
             <span className="text-caption text-foreground">Use custom credentials</span>
           </label>
@@ -272,10 +493,10 @@ function CreateAccountForm({
 
           <button
             onClick={onSubmit}
-            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2"
+            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
           >
             <MaterialIcon name="person_add" size={14} />
-            Create Account
+            <span>Create Account</span>
           </button>
         </div>
       </div>
@@ -319,7 +540,7 @@ function ManualLoginForm({
           </div>
           <button
             onClick={onBack}
-            className="text-caption text-muted-foreground hover:text-foreground transition-colors"
+            className="text-caption text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           >
             Back
           </button>
@@ -367,7 +588,7 @@ function ManualLoginForm({
           <button
             type="submit"
             disabled={!email.trim() || !password}
-            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+            className="w-full rounded-lg bg-primary px-3 py-2.5 text-caption font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2 cursor-pointer shadow-xs"
           >
             <span>Continue</span>
             <MaterialIcon name="arrow_forward" size={14} />
