@@ -1908,7 +1908,11 @@ class ExplorationEngine:
 
         if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
-                page_text = " ".join([el.get("name", "") for el in interactive_elements[:30] if el.get("name")])
+                page_text = (
+                    (observation.get("text") or "")[:1200]
+                    + " "
+                    + " ".join([el.get("name", "") for el in interactive_elements[:30] if el.get("name")])
+                ).strip()
                 ai_journeys_result = await asyncio.wait_for(
                     ai_reasoner.synthesize_journeys(
                         base_url=current_url,
@@ -2086,20 +2090,25 @@ class ExplorationEngine:
             fav = next(
                 (
                     m for m in missions
-                    if m.category != "auth"
-                    and not any(sk in m.name.lower() for sk in ["setting", "profile", "account", "preference"])
+                    if m.category not in ("auth", "settings")
+                    and not any(sk in m.name.lower() for sk in ["setting", "profile", "account", "preference", "sign up", "log in", "auth"])
                 ),
-                missions[0],
+                None,
             )
-            fav.recommended = True
+            if fav:
+                fav.recommended = True
+            else:
+                non_auth = next((m for m in missions if m.category != "auth"), None)
+                if non_auth:
+                    non_auth.recommended = True
 
-        # Sort: recommended first, then by priority category (features/dashboards before auth)
+        # Sort: recommended non-auth first, then by priority category (features/dashboards before auth)
         category_order = {
             "feature": 0, "dashboard": 1, "content": 2, "workflow": 3,
             "crud": 4, "form": 5, "auth": 6, "navigation": 7
         }
         missions.sort(key=lambda m: (
-            0 if m.recommended else 1,
+            0 if (m.recommended and m.category != "auth") else 1,
             category_order.get(m.category or "navigation", 9)
         ))
 
@@ -2425,7 +2434,7 @@ class ExplorationEngine:
             ],
             steps=steps,
             successCondition=success_condition,
-            confidence=0.85,
+            confidence=0.40,
             recommended=False,
             route_analysis={"signup": signup_route, "login": login_route},
             estimated_time_seconds=30,
