@@ -1851,63 +1851,65 @@ class ExplorationEngine:
                     missions.append(goal_mission)
                     mission_count += 1
 
-        # Chained auth journey (if both signup and login exist)
-        if signup_routes and login_routes and mission_count < max_missions:
-            chained_auth_mission = await self._build_chained_auth_mission(
-                signup_routes[0],
-                login_routes[0],
-                current_url,
-                title,
-                persona_name,
-                credential_id=self.credential_id,
-            )
-            if chained_auth_mission:
-                missions.append(chained_auth_mission)
-                mission_count += 1
+            # Feature journeys (dashboard, workspace, settings, CRUD) - top priority
+            for route in feature_routes[:3]:
+                if mission_count >= max_missions:
+                    break
+                is_first = (mission_count == 0 and not self.goal)
+                feature_mission = self._build_feature_mission(
+                    route, current_url, title, persona_name, recommended=is_first
+                )
+                if feature_mission:
+                    missions.append(feature_mission)
+                    mission_count += 1
 
-        # Auth journey (if auth routes exist and not already covered by chained auth)
-        if auth_routes and not (signup_routes and login_routes) and mission_count < max_missions:
-            auth_route = auth_routes[0]
-            auth_mission = self._build_auth_mission(
-                auth_route, current_url, title, persona_name,
-                credential_id=self.credential_id,
-            )
-            if auth_mission:
-                missions.append(auth_mission)
-                mission_count += 1
+            # Content journeys (explore, search, catalog, library)
+            for route in content_routes[:2]:
+                if mission_count >= max_missions:
+                    break
+                is_first = (mission_count == 0 and not self.goal)
+                content_mission = self._build_content_mission(
+                    route, current_url, title, persona_name, recommended=is_first
+                )
+                if content_mission:
+                    missions.append(content_mission)
+                    mission_count += 1
 
-        # Standalone form journeys (contact, feedback, etc.)
-        for route in form_routes[:2]:
-            if mission_count >= max_missions:
-                break
-            form_mission = self._build_standalone_form_mission(
-                route, current_url, title, persona_name
-            )
-            if form_mission:
-                missions.append(form_mission)
-                mission_count += 1
+            # Standalone form journeys (contact, feedback, etc.)
+            for route in form_routes[:2]:
+                if mission_count >= max_missions:
+                    break
+                form_mission = self._build_standalone_form_mission(
+                    route, current_url, title, persona_name
+                )
+                if form_mission:
+                    missions.append(form_mission)
+                    mission_count += 1
 
-        # Feature journeys (dashboard, settings, etc.)
-        for route in feature_routes[:2]:
-            if mission_count >= max_missions:
-                break
-            feature_mission = self._build_feature_mission(
-                route, current_url, title, persona_name
-            )
-            if feature_mission:
-                missions.append(feature_mission)
-                mission_count += 1
+            # Chained auth journey (secondary setup flow, never prioritized over features)
+            if signup_routes and login_routes and mission_count < max_missions:
+                chained_auth_mission = await self._build_chained_auth_mission(
+                    signup_routes[0],
+                    login_routes[0],
+                    current_url,
+                    title,
+                    persona_name,
+                    credential_id=self.credential_id,
+                )
+                if chained_auth_mission:
+                    missions.append(chained_auth_mission)
+                    mission_count += 1
 
-        # Content journeys (explore, search, library, etc.)
-        for route in content_routes[:2]:
-            if mission_count >= max_missions:
-                break
-            content_mission = self._build_content_mission(
-                route, current_url, title, persona_name
-            )
-            if content_mission:
-                missions.append(content_mission)
-                mission_count += 1
+            # Auth journey (secondary setup flow)
+            if auth_routes and not (signup_routes and login_routes) and mission_count < max_missions:
+                auth_route = auth_routes[0]
+                auth_mission = self._build_auth_mission(
+                    auth_route, current_url, title, persona_name,
+                    credential_id=self.credential_id,
+                )
+                if auth_mission:
+                    missions.append(auth_mission)
+                    mission_count += 1
 
         # Fallback: element-based missions if route analysis yielded nothing
         if not missions and interactive_elements:
@@ -1945,8 +1947,11 @@ class ExplorationEngine:
                     missions.append(mission)
                     mission_count += 1
 
-        # Sort: recommended first, then by category
-        category_order = {"auth": 0, "form": 1, "feature": 2, "content": 3, "navigation": 4}
+        # Sort: recommended first, then by priority category (features/dashboards before auth)
+        category_order = {
+            "feature": 0, "dashboard": 1, "content": 2, "workflow": 3,
+            "crud": 4, "form": 5, "auth": 6, "navigation": 7
+        }
         missions.sort(key=lambda m: (
             0 if m.recommended else 1,
             category_order.get(m.category or "navigation", 9)
@@ -2136,7 +2141,7 @@ class ExplorationEngine:
             steps=steps,
             successCondition=success_condition,
             confidence=0.88,
-            recommended=True,
+            recommended=False,
             route_analysis=auth_route,
             estimated_time_seconds=20,
         )
@@ -2181,20 +2186,24 @@ class ExplorationEngine:
                     f"A signup route ({signup_path}) and login route ({login_path}) were detected. "
                     "Add a project credential or configure the temp-mail service to run this chained mission."
                 ),
-                objective=f"Verify that {persona} can sign up, log in, and view account page",
+                objective=f"Verify that {persona} can view signup and login interfaces",
                 persona=persona,
                 category="auth",
                 journey=[
                     f"Navigate to {signup_path}",
-                    "Sign up with credentials",
+                    "Review registration requirements",
                     f"Navigate to {login_path}",
-                    "Log in with user credentials",
-                    "Verify account page is displayed",
+                    "Verify login page is accessible",
                 ],
-                steps=[],
-                successCondition=None,
+                steps=[
+                    {"type": "navigate", "url": signup_url},
+                    {"type": "observe", "target": {"description": "Review registration page requirements"}},
+                ],
+                successCondition={
+                    "url_matches": re.escape(signup_path.rstrip("/")).replace("\\/", "/") or signup_path,
+                },
                 confidence=0.5,
-                recommended=True,
+                recommended=False,
                 route_analysis={"signup": signup_route, "login": login_route},
                 estimated_time_seconds=30,
             )
@@ -2275,7 +2284,7 @@ class ExplorationEngine:
             steps=steps,
             successCondition=success_condition,
             confidence=0.85,
-            recommended=True,
+            recommended=False,
             route_analysis={"signup": signup_route, "login": login_route},
             estimated_time_seconds=30,
         )
@@ -2338,7 +2347,7 @@ class ExplorationEngine:
         )
 
     def _build_feature_mission(
-        self, route: dict, base_url: str, title: str, persona: str
+        self, route: dict, base_url: str, title: str, persona: str, recommended: bool = False
     ) -> DiscoveredMission | None:
         """Build a navigation journey that proves the destination was reached.
 
@@ -2378,13 +2387,13 @@ class ExplorationEngine:
                 "element_count": {"selector": "a[href], button", "min": 1},
             },
             confidence=0.72,
-            recommended=False,
+            recommended=recommended,
             route_analysis=route,
             estimated_time_seconds=12,
         )
 
     def _build_content_mission(
-        self, route: dict, base_url: str, title: str, persona: str
+        self, route: dict, base_url: str, title: str, persona: str, recommended: bool = False
     ) -> DiscoveredMission | None:
         """Build a content-browsing journey that proves content was exposed.
 
@@ -2421,7 +2430,7 @@ class ExplorationEngine:
                 "element_count": {"selector": "a[href]", "min": 1},
             },
             confidence=0.70,
-            recommended=False,
+            recommended=recommended,
             route_analysis=route,
             estimated_time_seconds=12,
         )
