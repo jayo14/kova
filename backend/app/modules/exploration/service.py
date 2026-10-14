@@ -178,8 +178,39 @@ class ExplorationService:
         if not session:
             return None
 
+        email = data.email
+        password = data.password
+
+        if data.credential_id:
+            from app.modules.credentials.repository import CredentialRepository
+            from app.modules.credentials.crypto import decrypt_credential
+
+            cred_repo = CredentialRepository(self.db)
+            cred = await cred_repo.get_by_id(data.credential_id)
+            if not cred:
+                raise ValueError("Selected credential not found.")
+
+            # Verify ownership: check that credential's project belongs to user
+            project = await self.project_repo.get_by_id_and_user(cred.project_id, user_id)
+            if not project:
+                raise ValueError("Unauthorized access to credential.")
+
+            email = cred.email
+            raw_pass = cred.password
+            if raw_pass and raw_pass.startswith("gAAAAA"):
+                try:
+                    password = decrypt_credential(raw_pass)
+                except Exception as ex:
+                    logger.warning("Failed to decrypt stored credential password: %s", ex)
+                    password = raw_pass
+            else:
+                password = raw_pass
+
+        if not email or not password:
+            raise ValueError("Email and password are required.")
+
         # Optionally save credential for the project
-        if data.save and session.project_id:
+        if data.save and session.project_id and not data.credential_id:
             try:
                 cred_service = CredentialService(self.db)
                 cred_name = f"explore-cred-{uuid.uuid4().hex[:6]}"
@@ -187,8 +218,8 @@ class ExplorationService:
                     project_id=session.project_id,
                     data=CredentialCreate(
                         name=cred_name,
-                        email=data.email,
-                        password=data.password,
+                        email=email,
+                        password=password,
                     ),
                 )
             except Exception as e:
@@ -210,7 +241,7 @@ class ExplorationService:
                 user_id=user_id,
                 url=session.url,
                 goal=session.goal,
-                credential={"email": data.email, "password": data.password},
+                credential={"email": email, "password": password},
                 selected_role=session.selected_role,
                 project_id=session.project_id,
             ),
