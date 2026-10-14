@@ -1366,7 +1366,7 @@ class ExplorationEngine:
         prioritized = self._prioritize_routes(route_map)
 
         # Step 4: Probe top routes via API request (no navigation, parallel)
-        targets = prioritized[:10]
+        targets = prioritized[:16]
         if targets:
             results = await asyncio.gather(
                 *(self._probe_route(page, route) for route in targets),
@@ -1477,27 +1477,56 @@ class ExplorationEngine:
         return links
 
     def _prioritize_routes(self, routes: list[dict]) -> list[dict]:
-        """Prioritize routes by keyword importance."""
-        # Priority keywords: auth > dashboard > settings > feature > content
+        """Prioritize routes by feature importance, elevating core workflows over auth."""
         priority_map = {
-            "auth": 0,
-            "dashboard": 1,
+            # Highest priority: Dashboards and core application workspaces
+            "dashboard": 0,
+            "workspace": 0,
+            "app": 0,
+            "portal": 0,
+            # Core feature actions and CRUD workflows
+            "create": 1,
+            "new": 1,
+            "edit": 1,
+            "manage": 1,
+            "study": 1,
+            "set": 1,
+            "quiz": 1,
+            "course": 1,
+            "document": 1,
+            "note": 1,
+            "project": 1,
+            "upload": 1,
+            # Settings and configurations
             "settings": 2,
             "profile": 2,
-            "admin": 3,
-            "create": 3,
-            "contact": 3,
-            "form": 3,
-            "search": 4,
-            "explore": 4,
+            "admin": 2,
+            # Content discovery and library
+            "explore": 3,
+            "library": 3,
+            "search": 3,
+            "browse": 3,
+            "collection": 3,
+            # Standalone forms
+            "contact": 4,
+            "feedback": 4,
+            "form": 4,
+            # Auth routes (checked for boundary detection, but de-emphasized vs real features)
+            "auth": 5,
+            "login": 5,
+            "signin": 5,
+            "signup": 5,
+            "register": 5,
         }
 
         def get_priority(route: dict) -> int:
             path_lower = route["path"].lower()
+            text_lower = (route.get("text") or "").lower()
+            combined = f"{path_lower} {text_lower}"
             for kw, priority in priority_map.items():
-                if kw in path_lower:
+                if kw in combined:
                     return priority
-            return 5  # Default low priority
+            return 6  # Default low priority for generic links
 
         return sorted(routes, key=get_priority)
 
