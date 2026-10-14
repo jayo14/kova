@@ -59,8 +59,9 @@ class ExplorationCreate(BaseModel):
 
 
 class ExplorationCredentialSubmit(BaseModel):
-    email: str
-    password: str
+    email: str | None = None
+    password: str | None = None
+    credential_id: uuid.UUID | None = None
     save: bool = False
 
 
