@@ -510,7 +510,11 @@ export async function syncSessionState(
 
     // Emit payload data BEFORE state change so state machine has data when transitioning
     if (session.credential_request && normalizedState === "auth_required") {
-      onEvent({ type: "auth_required", request: session.credential_request });
+      const authReq = {
+        ...session.credential_request,
+        ...(session.project_id && { projectId: session.project_id, project_id: session.project_id }),
+      };
+      onEvent({ type: "auth_required", request: authReq as CredentialRequest });
     }
     if (session.question && normalizedState === "asking") {
       onEvent({ type: "question", question: session.question as AgentQuestionItem });
@@ -535,11 +539,16 @@ export async function syncSessionState(
   }
 }
 
-// Current active exploration session ID tracker
+// Current active exploration session and project ID trackers
 let currentSessionId: string | null = null;
+let currentProjectId: string | null = null;
 
 export function getCurrentSessionId(): string | null {
   return currentSessionId;
+}
+
+export function getCurrentProjectId(): string | null {
+  return currentProjectId;
 }
 
 export async function startExploration(
@@ -555,6 +564,9 @@ export async function startExploration(
   try {
     const session = await createExplorationSession(url, intent, token);
     currentSessionId = session.id;
+    if (session.project_id) {
+      currentProjectId = session.project_id;
+    }
 
     // Safety net: periodically sync session state — runs independently of SSE
     let emptyReadyPollCount = 0;
