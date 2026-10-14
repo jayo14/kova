@@ -1612,24 +1612,39 @@ class ExplorationEngine:
         path_lower = path.lower()
         title_lower = (title or "").lower()
 
-        # Auth routes
-        auth_keywords = ["login", "signin", "signup", "register", "auth", "account"]
-        if any(kw in path_lower or kw in title_lower for kw in auth_keywords):
+        # Auth routes — strictly identified by actual path endpoint, not redirected title
+        auth_path_patterns = [
+            r"/sign-?in\b", r"/log-?in\b", r"/sign-?up\b", r"/register\b",
+            r"/auth\b", r"/session\b", r"/account/login\b", r"/accounts/login\b",
+            r"/user/login\b", r"/app/login\b",
+        ]
+        if any(re.search(pat, path_lower) for pat in auth_path_patterns):
             return "auth"
 
         # Standalone form routes (contact, feedback, support, inquiry, etc.)
-        form_keywords = ["contact", "feedback", "support", "inquiry", "message"]
-        if any(kw in path_lower or kw in title_lower for kw in form_keywords):
+        form_keywords = ["contact", "feedback", "support", "inquiry", "message", "help/contact"]
+        if any(kw in path_lower for kw in form_keywords) or (title and any(kw in title_lower for kw in form_keywords)):
             return "form"
 
-        # Feature routes (dashboard, settings, profile, etc.)
-        feature_keywords = ["dashboard", "settings", "profile", "account", "admin", "manage", "create", "new", "edit"]
-        if any(kw in path_lower or kw in title_lower for kw in feature_keywords):
+        # Feature routes (dashboard, workspace, quiz, study, creation, tools, settings, etc.)
+        feature_keywords = [
+            "quiz", "study", "exam", "test", "flashcard", "card", "deck",
+            "course", "learn", "practice", "review", "question",
+            "dashboard", "workspace", "app", "portal", "console",
+            "create", "new", "edit", "manage", "builder", "generator", "generate",
+            "project", "document", "note", "upload", "file", "analytics",
+            "settings", "profile", "account", "preference", "admin",
+        ]
+        if any(kw in path_lower for kw in feature_keywords) or (title and any(kw in title_lower for kw in feature_keywords)):
             return "feature"
 
-        # Content routes (browse, search, explore, etc.)
-        content_keywords = ["explore", "search", "browse", "library", "collections", "tags", "categories"]
-        if any(kw in path_lower or kw in title_lower for kw in content_keywords):
+        # Content routes (browse, search, explore, library, resources, etc.)
+        content_keywords = [
+            "explore", "search", "browse", "library", "catalog", "collection",
+            "material", "resource", "community", "public", "topic", "subject",
+            "tag", "category", "feed", "discover",
+        ]
+        if any(kw in path_lower for kw in content_keywords) or (title and any(kw in title_lower for kw in content_keywords)):
             return "content"
 
         return "navigation"
