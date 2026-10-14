@@ -2462,6 +2462,23 @@ class ExplorationEngine:
         if is_settings_like:
             recommended = False
 
+        path_lower = path.lower()
+        if any(k in path_lower for k in ["quiz", "exam", "test"]):
+            mission_title = f"Practice and review {feature_name}"
+            objective = f"Verify that {persona} can access {feature_name} and interact with quiz workflows"
+        elif any(k in path_lower for k in ["study", "flashcard", "deck", "material", "course"]):
+            mission_title = f"Explore {feature_name} study resources"
+            objective = f"Verify that {persona} can view and study {feature_name}"
+        elif any(k in path_lower for k in ["dashboard", "workspace", "portal", "console", "analytics"]):
+            mission_title = f"Review {feature_name} overview and activity"
+            objective = f"Confirm {feature_name} renders key metrics and interactive workflows"
+        elif any(k in path_lower for k in ["create", "generate", "generator", "new"]):
+            mission_title = f"Create new {feature_name}"
+            objective = f"Verify that {persona} can access the {feature_name} creation workflow"
+        else:
+            mission_title = f"Explore {feature_name}"
+            objective = f"Reach the {feature_name} page and confirm it renders interactive content"
+
         steps = [
             {"type": "navigate", "url": route["url"]},
             {"type": "wait", "value": "2000"},
@@ -2469,13 +2486,13 @@ class ExplorationEngine:
 
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
-            name=f"Open {feature_name}",
-            title=f"Open {feature_name}",
+            name=mission_title,
+            title=mission_title,
             description=(
                 f"Navigate to the {feature_name} page and verify the destination "
                 f"actually loads with real content."
             ),
-            objective=f"Reach the {feature_name} page and confirm it renders",
+            objective=objective,
             persona=persona,
             category="feature",
             journey=[
@@ -2507,6 +2524,13 @@ class ExplorationEngine:
         """
         path = route["path"]
         content_name = route["text"] or path.split("/")[-1].replace("-", " ").title()
+        path_lower = path.lower()
+        if any(k in path_lower for k in ["explore", "discover"]):
+            content_title = f"Explore and discover {content_name}"
+        elif any(k in path_lower for k in ["library", "catalog", "collection"]):
+            content_title = f"Browse {content_name} library"
+        else:
+            content_title = f"Browse {content_name}"
 
         steps = [
             {"type": "navigate", "url": route["url"]},
@@ -2515,8 +2539,8 @@ class ExplorationEngine:
 
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
-            name=f"Browse {content_name}",
-            title=f"Browse {content_name}",
+            name=content_title,
+            title=content_title,
             description=(
                 f"Open {content_name} and verify that it exposes real content "
                 f"(links or resources) rather than an empty page."
