@@ -646,37 +646,62 @@ async def perform_login(
         if not submitted:
             return False, "Could not submit login form (no active submit button found)."
 
-        # Wait for navigation or state change
-        for _ in range(12):  # up to 6 seconds
+        # Wait for navigation, error banner, or form dismissal (up to 15 seconds for cold-start backends)
+        error_locators = [
+            '[role="alert"]',
+            '.error-message',
+            '.alert-error',
+            '.toast',
+            '[role="status"]',
+            '.text-destructive',
+            '.text-red-500',
+            '*:has-text("Incorrect email or password")',
+            '*:has-text("Invalid credentials")',
+            '*:has-text("incorrect password")',
+            '*:has-text("User not found")',
+        ]
+        error_phrases = [
+            "incorrect email or password",
+            "invalid email or password",
+            "invalid credentials",
+            "user not found",
+            "account does not exist",
+            "password is wrong",
+            "incorrect password",
+        ]
+
+        for _ in range(30):  # up to 15 seconds
             await asyncio.sleep(0.5)
             curr = getattr(page, "url", "")
             if curr != initial_url and not is_auth_url(curr):
                 return True, f"Authentication succeeded, redirected to {curr}"
 
-        # Check if auth error message is visible
-        error_locators = [
-            '[role="alert"]',
-            '.error-message',
-            '.alert-error',
-            'p:has-text("Invalid credentials")',
-            'p:has-text("incorrect password")',
-            'p:has-text("User not found")',
-        ]
-        for el_sel in error_locators:
+            # Check if explicit error locator is visible
+            for el_sel in error_locators:
+                try:
+                    err_el = page.locator(el_sel).first
+                    if await err_el.is_visible(timeout=150):
+                        err_txt = await err_el.inner_text(timeout=150)
+                        if err_txt and len(err_txt.strip()) > 3:
+                            return False, f"Login rejected by application: {err_txt.strip()}"
+                except Exception:
+                    pass
+
+            # Check page body for error phrases
             try:
-                err_el = page.locator(el_sel).first
-                if await err_el.is_visible(timeout=300):
-                    err_txt = await err_el.inner_text(timeout=300)
-                    return False, f"Login rejected by application: {err_txt.strip()}"
+                b_txt = (await page.inner_text("body", timeout=150) or "").lower()
+                for phrase in error_phrases:
+                    if phrase in b_txt:
+                        return False, f"Login rejected by application: {phrase.capitalize()}"
             except Exception:
                 pass
 
-        # If URL hasn't changed, check if password input has disappeared (SPA state change)
-        try:
-            if await page.locator('input[type="password"]').count() == 0:
-                return True, "Authentication succeeded (login form dismissed)."
-        except Exception:
-            pass
+            # Check if password input has disappeared (SPA state change / modal dismiss)
+            try:
+                if await page.locator('input[type="password"]').count() == 0:
+                    return True, "Authentication succeeded (login form dismissed)."
+            except Exception:
+                pass
 
         return False, f"Submitted credentials but page remained on auth URL: {initial_url}"
 
