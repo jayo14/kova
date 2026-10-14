@@ -83,6 +83,43 @@ async def get_exploration(
     return session
 
 
+from app.modules.credentials.schemas import CredentialRead
+from app.modules.credentials.service import CredentialService
+from app.modules.projects.repository import ProjectRepository
+
+
+@router.get("/{session_id}/credentials", response_model=list[CredentialRead])
+async def list_exploration_credentials(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """List available credentials stored for the project associated with this exploration session."""
+    session = await _get_authorized_session(session_id, user.id, db)
+    service = CredentialService(db)
+    if session.project_id:
+        creds = await service.list_credentials(session.project_id)
+        if creds:
+            return creds
+
+    # Fallback: check if other projects by the user for the same host have credentials
+    if session.url:
+        import re
+        from urllib.parse import urlparse
+        parsed = urlparse(session.url)
+        clean_host = re.sub(r"^www\d*\.", "", (parsed.hostname or "").lower())
+        proj_repo = ProjectRepository(db)
+        user_projects = await proj_repo.list_by_user(user.id, limit=50)
+        for p in user_projects:
+            p_host = re.sub(r"^www\d*\.", "", (urlparse(p.base_url).hostname or "").lower())
+            if p_host == clean_host:
+                creds = await service.list_credentials(p.id)
+                if creds:
+                    return creds
+
+    return []
+
+
 @router.post("/{session_id}/credentials", response_model=ExplorationRead)
 async def submit_exploration_credentials(
     session_id: str,
@@ -93,8 +130,11 @@ async def submit_exploration_credentials(
     """Submit credentials for an exploration session blocked by authentication."""
     await _get_authorized_session(session_id, user.id, db)
     service = ExplorationService(db)
-    updated = await service.submit_credentials(uuid.UUID(session_id), user.id, data)
-    return updated
+    try:
+        updated = await service.submit_credentials(uuid.UUID(session_id), user.id, data)
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/{session_id}/create-account", response_model=ExplorationRead)
