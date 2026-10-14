@@ -101,3 +101,22 @@ def test_ai_settings_enabled_when_at_least_one_key():
     creds = settings.get_provider_credentials("gemini")
     assert creds is not None
     assert creds["api_key"] == "test-gemini-key"
+
+
+def test_parse_structured_with_markdown_fences_and_thinking():
+    provider = OpenAICompatibleProvider(model="test-model", api_key="test-key")
+
+    # With think tags and markdown fence
+    raw_output = "<think>The user wants a summary of the page</think>\n```json\n{\"summary\": \"Clean result\"}\n```"
+    result = provider._parse_structured(raw_output, DummyOutput)
+    assert result.summary == "Clean result"
+
+    # Conversational wrapper around JSON object
+    raw_conversational = "Here is the response requested:\n{\"summary\": \"Conversational\"}\nHope this helps!"
+    result = provider._parse_structured(raw_conversational, DummyOutput)
+    assert result.summary == "Conversational"
+
+    # Direct JSON string
+    result = provider._parse_structured('{"summary": "Direct"}', DummyOutput)
+    assert result.summary == "Direct"
+

@@ -9,6 +9,7 @@ any failure (invalid JSON, schema mismatch, network, timeout).
 
 import json
 import logging
+import re
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
@@ -164,7 +165,12 @@ class OpenAICompatibleProvider(AIProvider):
 
             try:
                 body = resp.json()
-                content = body["choices"][0]["message"]["content"]
+                choice = body["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content") or ""
+                # Some reasoning models put content in reasoning or thoughts if content is null/empty
+                if not content.strip():
+                    content = message.get("reasoning") or message.get("thought") or ""
             except (KeyError, IndexError, ValueError) as e:
                 err_msg = f"Malformed AI response envelope: {e}"
                 logger.warning("Model '%s' envelope malformed on '%s': %s", model, self.name, err_msg)
@@ -185,22 +191,62 @@ class OpenAICompatibleProvider(AIProvider):
         )
 
     def _parse_structured(self, content: str, schema: type[T]) -> T:
-        """Parse model text into a validated schema instance. Fail-closed."""
+        """Parse model text into a validated schema instance. Fail-closed but resilient."""
         text = (content or "").strip()
-        # Tolerate markdown fences around the JSON object
-        if text.startswith("```"):
-            text = text.strip("`")
-            if text.startswith("json"):
-                text = text[4:]
-            text = text.strip()
+        if not text:
+            raise AIProviderError("AI returned empty content", provider=self.name)
+
+        # Strip <think>...</think> reasoning blocks if present
+        if "<think>" in text:
+            text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
+
+        # 1. Try markdown code fences anywhere in text: ```json ... ``` or ``` ... ```
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+        if fence_match:
+            cand = fence_match.group(1).strip()
+            try:
+                data = json.loads(cand)
+                return schema.model_validate(data)
+            except Exception:
+                pass
+
+        # 2. Try direct parse
         try:
             data = json.loads(text)
-        except json.JSONDecodeError as e:
-            raise AIProviderError(
-                f"AI returned invalid JSON: {e}", provider=self.name
-            ) from e
-        try:
             return schema.model_validate(data)
+        except Exception:
+            pass
+
+        # 3. Try to locate outermost JSON object or array
+        brace_start = text.find("{")
+        brace_end = text.rfind("}")
+        if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
+            cand = text[brace_start : brace_end + 1].strip()
+            try:
+                data = json.loads(cand)
+                return schema.model_validate(data)
+            except Exception:
+                pass
+
+        bracket_start = text.find("[")
+        bracket_end = text.rfind("]")
+        if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
+            cand = text[bracket_start : bracket_end + 1].strip()
+            try:
+                data = json.loads(cand)
+                return schema.model_validate(data)
+            except Exception:
+                pass
+
+        # If all extraction attempts failed, raise descriptive error
+        try:
+            data = json.loads(text)
+            return schema.model_validate(data)
+        except json.JSONDecodeError as e:
+            preview = text[:150] + ("..." if len(text) > 150 else "")
+            raise AIProviderError(
+                f"AI returned invalid JSON: {e} (output: {preview!r})", provider=self.name
+            ) from e
         except ValidationError as e:
             raise AIProviderError(
                 f"AI output failed schema validation: {e.error_count()} error(s): "
