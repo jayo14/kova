@@ -154,3 +154,39 @@ class CompiledExpectation(BaseModel):
                 }, **kwargs)
         return super().model_validate(obj, **kwargs)
 
+
+class AIGeneratedJourney(BaseModel):
+    """An intelligent, purpose-driven user journey synthesized by AI."""
+
+    name: str = Field(description="Action-oriented journey name, e.g. 'Create and customize a study set'")
+    title: str = Field(description="Short human-friendly title, e.g. 'Create Study Set'")
+    description: str = Field(description="Clear explanation of the feature and what this journey validates")
+    objective: str = Field(description="Verification objective proving the feature operates correctly")
+    persona: str = Field(default="User", description="Persona executing this workflow")
+    category: Literal["feature", "dashboard", "content", "settings", "workflow", "crud", "auth"] = "feature"
+    journey: list[str] = Field(
+        default_factory=list,
+        description="Numbered or sequential high-level user actions",
+    )
+    steps: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Executable browser steps: navigate, click, fill/type, select, wait",
+    )
+    success_condition: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Verification condition (text_visible, element_visible, url_changed_to, etc.)",
+    )
+    confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    recommended: bool = Field(default=False, description="True for the primary core product workflow")
+    estimated_time_seconds: int = Field(default=25, ge=5, le=120)
+
+
+class AIGeneratedJourneyList(BaseModel):
+    """Collection of intelligent product journeys with editorial recommendation."""
+
+    journeys: list[AIGeneratedJourney] = Field(default_factory=list)
+    recommendation_reason: str = Field(
+        default="",
+        description="Editorial explanation of why the recommended journeys were selected",
+    )
+
