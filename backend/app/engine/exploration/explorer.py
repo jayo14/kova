@@ -1459,39 +1459,50 @@ class ExplorationEngine:
         return sitemap_routes
 
     async def _extract_page_links(self, page, base_parsed) -> list[dict]:
-        """Extract all internal links from current page DOM."""
+        """Extract all internal links and SPA navigation anchors from current page DOM."""
         links = []
 
-        # Collect from a[href], nav, buttons with href
+        extract_js = """
+        () => {
+            const results = [];
+            const selector = 'a[href], [role="link"][data-href], [role="link"][href], button[data-href], button[data-to], [role="menuitem"][data-href]';
+            const nodes = document.querySelectorAll(selector);
+            for (const n of nodes) {
+                const href = n.getAttribute('href') || n.getAttribute('data-href') || n.getAttribute('data-to') || '';
+                const text = (n.innerText || n.getAttribute('aria-label') || n.getAttribute('title') || '').trim();
+                if (!href || href === '#' || href.startsWith('javascript:')) continue;
+                results.push({href, text});
+            }
+            return results;
+        }
+        """
         try:
-            raw_links = await page.eval_on_selector_all(
-                "a[href], nav a[href], footer a[href]",
-                """nodes => nodes.map(n => {
-                    const href = n.getAttribute('href');
-                    const text = n.innerText.trim();
-                    return {href, text};
-                }).filter(l => l.href && !l.href.startsWith('#') && !l.href.startsWith('javascript:'))"""
-            )
+            raw_links = await page.evaluate(extract_js)
         except Exception:
             raw_links = []
 
         seen = set()
         for link in raw_links:
-            if isinstance(link, str):
-                href, text = link, link
-            elif isinstance(link, dict):
-                href = link.get("href") or link.get("href".lower()) or ""
-                text = link.get("text", "")
+            if isinstance(link, dict):
+                href = link.get("href") or ""
+                text = link.get("text") or ""
             else:
                 continue
-            if not href:
+
+            if not href or href == "/":
                 continue
-            if href.startswith("/"):
+
+            # Support hash-based SPA sections (e.g. /#explore, #quizzes)
+            if href.startswith("/#") or (href.startswith("#") and len(href) > 2):
+                clean_hash = href if href.startswith("/") else f"/{href}"
+                path = clean_hash
+                full_url = f"{base_parsed.scheme}://{base_parsed.netloc}{clean_hash}"
+            elif href.startswith("/"):
                 path = href
                 full_url = f"{base_parsed.scheme}://{base_parsed.netloc}{href}"
             elif base_parsed.netloc in href:
                 parsed = urlparse(href)
-                path = parsed.path
+                path = parsed.path + (f"#{parsed.fragment}" if parsed.fragment else "")
                 full_url = href
             else:
                 continue
