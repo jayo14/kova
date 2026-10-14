@@ -66,21 +66,21 @@ export function AuthChoiceDialog({
           }
         }
 
-        // 3. Fallback: query all credentials matching project or hostname
+        // 3. Fallback: query all credentials matching project or hostname, or all user credentials
         if (creds.length === 0) {
           try {
             const all = await getCredentials();
-            creds = all.filter((c) => {
+            const hostNorm = hostname.toLowerCase().replace(/^(?:https?:\/\/)?(?:www\d*\.)?/, "").split("/")[0].split(":")[0];
+            const hostStem = hostNorm.split(".")[0];
+
+            const matched = all.filter((c) => {
               if (projectId && c.projectId === projectId) return true;
-              if (
-                c.projectName &&
-                hostname &&
-                c.projectName.toLowerCase().includes(hostname.toLowerCase())
-              ) {
-                return true;
-              }
+              const pName = (c.projectName || "").toLowerCase();
+              if (pName && hostStem && (pName.includes(hostStem) || hostStem.includes(pName))) return true;
+              if (pName && hostNorm && (pName.includes(hostNorm) || hostNorm.includes(pName))) return true;
               return false;
             });
+            creds = matched.length > 0 ? matched : all;
           } catch {
             // ignore
           }
@@ -465,7 +465,7 @@ function CreateAccountForm({
           )}
 
           {/* OPTION: Use existing credentials stored for this project */}
-          {storedCredentials.length > 0 && (
+          {storedCredentials.length > 0 ? (
             <div className="rounded-xl border border-primary/25 bg-primary/5 p-3.5 space-y-2.5 animate-in fade-in duration-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
@@ -526,17 +526,37 @@ function CreateAccountForm({
                 </div>
               )}
             </div>
-          )}
-
-          {storedCredentials.length > 0 && (
-            <div className="relative my-2 flex items-center justify-center text-xs text-muted-foreground">
-              <div className="w-full border-t border-border/80" />
-              <span className="bg-card px-2.5 text-[10px] uppercase font-mono tracking-wider text-muted-foreground/70 shrink-0">
-                or create new account
-              </span>
-              <div className="w-full border-t border-border/80" />
+          ) : (
+            <div className="rounded-xl border border-border/80 bg-muted/20 p-3 space-y-2 animate-in fade-in duration-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <MaterialIcon name="key" size={15} className="text-muted-foreground" />
+                  <span className="text-caption font-medium text-foreground">
+                    Have an existing account?
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-normal">
+                Skip registration and log in directly using your existing credentials:
+              </p>
+              <button
+                type="button"
+                onClick={onBack}
+                className="w-full rounded-lg border border-border bg-background px-3 py-1.5 text-caption font-medium text-foreground hover:bg-muted/50 transition-colors flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <MaterialIcon name="login" size={13} className="text-primary" />
+                <span>Switch to Existing Credentials / Login</span>
+              </button>
             </div>
           )}
+
+          <div className="relative my-2 flex items-center justify-center text-xs text-muted-foreground">
+            <div className="w-full border-t border-border/80" />
+            <span className="bg-card px-2.5 text-[10px] uppercase font-mono tracking-wider text-muted-foreground/70 shrink-0">
+              or create new account
+            </span>
+            <div className="w-full border-t border-border/80" />
+          </div>
 
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
