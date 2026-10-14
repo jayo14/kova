@@ -1726,7 +1726,7 @@ class FlowRunner:
                 self._capture_failure_evidence_inner(
                     ctx, browser, error_message, error_code, event_recorder, execution_id
                 ),
-                timeout=8.0,
+                timeout=20.0,
             )
         except asyncio.TimeoutError:
             logger.warning("Failure evidence capture timed out for %s", execution_id)
@@ -1758,7 +1758,7 @@ class FlowRunner:
 
                 # Screenshot of failure state
                 try:
-                    screenshot_bytes = await browser.page.screenshot(type="png")
+                    screenshot_bytes = await browser.page.screenshot(type="png", timeout=5000)
                     if screenshot_bytes:
                         await evidence_service.capture_screenshot(
                             execution_id=execution_id,
