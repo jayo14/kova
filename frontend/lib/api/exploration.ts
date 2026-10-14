@@ -11,8 +11,10 @@ import type {
   AgentQuestionItem,
   ExploreState,
   CredentialRequest,
+  Credential,
 } from "@/lib/types";
 import { api, getApiBaseUrl, getBrowserSessionToken } from "./client";
+import { backendToCredential, type BackendCredential } from "./credentials";
 
 export interface BackendExplorationSession {
   id: string;
@@ -118,18 +120,50 @@ export async function getExplorationSession(
   );
 }
 
+export interface SubmitExplorationCredentialsOptions {
+  email?: string;
+  password?: string;
+  credentialId?: string;
+  save?: boolean;
+}
+
 export async function submitExplorationCredentials(
   sessionId: string,
-  email: string,
-  password: string,
+  emailOrOptions?: string | SubmitExplorationCredentialsOptions,
+  password?: string,
   save = false,
   token?: string
 ): Promise<BackendExplorationSession> {
+  const body: Record<string, unknown> = { save };
+  if (typeof emailOrOptions === "object" && emailOrOptions !== null) {
+    if (emailOrOptions.email) body.email = emailOrOptions.email;
+    if (emailOrOptions.password) body.password = emailOrOptions.password;
+    if (emailOrOptions.credentialId) body.credential_id = emailOrOptions.credentialId;
+    if (emailOrOptions.save !== undefined) body.save = emailOrOptions.save;
+  } else {
+    if (emailOrOptions) body.email = emailOrOptions;
+    if (password) body.password = password;
+  }
   return await api.post<BackendExplorationSession>(
     `/api/v1/exploration/${encodeURIComponent(sessionId)}/credentials`,
-    { email, password, save },
+    body,
     token
   );
+}
+
+export async function getExplorationCredentials(
+  sessionId: string,
+  token?: string
+): Promise<Credential[]> {
+  try {
+    const raw = await api.get<BackendCredential[]>(
+      `/api/v1/exploration/${encodeURIComponent(sessionId)}/credentials`,
+      token
+    );
+    return raw.map((c) => backendToCredential(c));
+  } catch {
+    return [];
+  }
 }
 
 export async function submitExplorationAnswer(
