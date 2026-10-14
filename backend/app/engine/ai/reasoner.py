@@ -20,6 +20,8 @@ from app.engine.ai.observation import build_semantic_observation
 from app.engine.ai.provider import AIProvider, AIProviderError
 from app.engine.ai.schemas import (
     ActionProposal,
+    AIGeneratedJourney,
+    AIGeneratedJourneyList,
     GoalInterpretation,
     JourneyPlan,
     ProposedStep,
@@ -229,6 +231,82 @@ class AgentReasoner:
             evidence_requirements=["screenshots at each milestone"],
             reasoning="deterministic skeleton plan (AI unavailable); refined per-turn",
         )
+
+    # ── Intelligent Exploration Journey Synthesis ───────────────────
+
+    async def synthesize_journeys(
+        self,
+        base_url: str,
+        title: str,
+        goal: str | None,
+        persona: str,
+        routes: list[dict],
+        interactive_elements: list[dict],
+        page_summary: str = "",
+        max_journeys: int = 5,
+    ) -> AIGeneratedJourneyList | None:
+        """Synthesize intelligent, purposeful user journeys that test real features of the app."""
+        if not self.provider:
+            return None
+
+        # Compact representation of available routes (prioritizing feature, dashboard, and content)
+        compact_routes = [
+            {
+                "path": r.get("path"),
+                "title": r.get("title") or r.get("text"),
+                "category": r.get("category"),
+                "elements_count": r.get("elements_count", 0),
+            }
+            for r in routes[:15]
+            if r.get("path")
+        ]
+
+        # Compact representation of interactive elements (buttons, links, inputs)
+        compact_elements = [
+            {
+                "name": el.get("name"),
+                "type": el.get("type"),
+                "role": el.get("role"),
+            }
+            for el in interactive_elements[:25]
+            if el.get("name")
+        ]
+
+        system = (
+            "You are an expert QA and product automation architect. Your mission is to discover "
+            "and synthesize HIGH-VALUE, PURPOSEFUL user journeys that thoroughly test the core features, "
+            "dashboards, workflows, and interactive capabilities of the web application.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Authentication/Signup is NOT the primary journey of a product. Do NOT recommend 'Sign up and log in' "
+            "as the top or recommended journey. Auth is merely a prerequisite gate.\n"
+            "2. The RECOMMENDED journey MUST be a core product workflow (e.g., creating a resource, configuring a dashboard, "
+            "completing an interactive flow, searching and reviewing content).\n"
+            "3. Each journey must have a clear, realistic purpose and test actual features of the app.\n"
+            "4. Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
+            "5. The success condition must specify verifiable criteria (text_visible, element_visible, url_changed_to, etc.).\n"
+            "6. Output ONLY JSON matching the AIGeneratedJourneyList schema."
+        )
+
+        user_prompt = (
+            f"Application URL: {base_url}\n"
+            f"Page Title: {title}\n"
+            f"Primary Persona: {persona}\n"
+            f"User Goal: {goal or 'Thoroughly test core application features'}\n"
+            f"Page Text/Summary: {page_summary[:400]}\n\n"
+            f"Discovered Routes:\n{json.dumps(compact_routes, indent=1)}\n\n"
+            f"Observed Controls/Elements:\n{json.dumps(compact_elements, indent=1)}\n\n"
+            f"Generate up to {max_journeys} intelligent, high-value user journeys that test real features. "
+            "Designate exactly ONE primary core feature workflow as recommended=True with high confidence. "
+            "Include an editorial recommendation_reason explaining what the primary journey verifies."
+        )
+
+        try:
+            return await self.provider.generate_structured(
+                system, user_prompt, AIGeneratedJourneyList
+            )
+        except AIProviderError as e:
+            logger.warning("AI journey synthesis failed: %s", e)
+            return None
 
     # ── Phase 7/8: Next-action proposal (the agent loop's brain) ────
 
