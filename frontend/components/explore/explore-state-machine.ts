@@ -37,7 +37,7 @@ export interface ExploreMachineState {
   currentPath: string | null;
 }
 
-export type AuthMode = "choice" | "create_account" | "manual_login" | "creating_account";
+export type AuthMode = "choice" | "create_account" | "manual_login" | "creating_account" | "use_existing";
 
 export type ExploreAction =
   | { type: "START"; url: string; intent?: string }
