@@ -227,3 +227,14 @@ class AuthFormSemanticResult(BaseModel):
     reasoning: str = ""
 
 
+class AuthEntranceSemanticResult(BaseModel):
+    """Semantic identification of the navigation button/link to enter login or signup."""
+
+    entrance_index: int | None = Field(
+        default=None,
+        description="Index of candidate link or button that navigates to or opens the signup/login modal or page",
+    )
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    reasoning: str = ""
+
+

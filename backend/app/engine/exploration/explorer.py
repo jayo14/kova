@@ -950,8 +950,22 @@ class ExplorationEngine:
             except Exception:
                 pass
 
-        if not email_input or not password_input:
+        if not email_input and not password_input:
             return False, "Could not find email or password input fields on the page."
+        if not email_input:
+            return False, "Could not find email or username input field on the page."
+        if not password_input:
+            # Check if email-only submission succeeded or sent verification
+            current_url = getattr(page, "url", "").lower()
+            if any(kw in current_url for kw in ["/dashboard", "/app", "/home", "/welcome", "/verify"]):
+                return True, ""
+            try:
+                body_text = (await page.inner_text("body", timeout=1000) or "").lower()
+                if any(term in body_text for term in ["check your email", "magic link", "verification link", "verification email", "we sent a link"]):
+                    return True, "Verification email or magic link dispatched."
+            except Exception:
+                pass
+            return False, "Could not find password input field on the page."
 
         try:
             # Focus, fill, and dispatch synthetic change events for React/SPA controlled inputs
@@ -1165,8 +1179,21 @@ class ExplorationEngine:
                 any_pwd = scope.locator('input[type="password"], input[name*="pass" i]').first
                 if await any_pwd.is_visible(timeout=600):
                     return True
+                dialog_inputs = scope.locator('dialog input:not([type="hidden"]), [role="dialog"] input:not([type="hidden"]), form input:not([type="hidden"])').first
+                if await dialog_inputs.is_visible(timeout=400):
+                    return True
             except Exception:
                 continue
+
+        current_url = getattr(page, "url", "").lower()
+        if any(kw in current_url for kw in ["/login", "/signin", "/signup", "/register", "/auth/"]):
+            for scope in frames:
+                try:
+                    any_input = scope.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"])').first
+                    if await any_input.is_visible(timeout=500):
+                        return True
+                except Exception:
+                    continue
         return False
 
     async def _ensure_on_auth_form(self, page, is_signup: bool = False) -> bool:
@@ -1192,6 +1219,7 @@ class ExplorationEngine:
         if is_signup:
             selectors = [
                 'a:has-text("Sign up")', 'button:has-text("Sign up")',
+                'a:has-text("Sign Up")', 'button:has-text("Sign Up")',
                 'a:has-text("Create account")', 'button:has-text("Create account")',
                 'a:has-text("Create Account")', 'button:has-text("Create Account")',
                 'a:has-text("Get started")', 'button:has-text("Get started")',
@@ -1258,6 +1286,17 @@ class ExplorationEngine:
                             return True
                 except Exception:
                     continue
+
+        # 4. AI / semantic entrance element fallback
+        try:
+            from app.engine.browser.auth import find_auth_entrance_semantically
+            opened = await find_auth_entrance_semantically(page, provider=get_ai_provider(), is_signup=is_signup)
+            if opened:
+                await asyncio.sleep(1.0)
+                if await self._has_visible_auth_inputs(page):
+                    return True
+        except Exception as e:
+            logger.debug("Semantic auth entrance fallback error: %s", e)
 
         return False
 
