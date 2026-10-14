@@ -148,3 +148,74 @@ async def test_exploration_missions_persistence_and_recovery(client, db_session)
     assert body["candidate_missions"][0]["name"] == "Explore Get started"
     assert body["candidate_missions"][0]["steps"][1]["target"] == "button:has-text('Get started')"
 
+
+@pytest.mark.asyncio
+async def test_exploration_list_and_use_existing_credentials(client, db_session, monkeypatch):
+    from app.modules.exploration.service import ExplorationService
+    from app.modules.projects.repository import ProjectRepository
+    from app.modules.credentials.service import CredentialService
+    from app.modules.credentials.schemas import CredentialCreate
+    from app.modules.users.models import User
+    from sqlalchemy import select
+
+    user = (await db_session.execute(select(User))).scalar_one()
+
+    # 1. Create a project and add a stored credential to it
+    proj_repo = ProjectRepository(db_session)
+    project = await proj_repo.create(
+        user_id=user.id,
+        name="Test Platform",
+        base_url="https://app.testplatform.io",
+        description="Test project",
+    )
+
+    cred_service = CredentialService(db_session)
+    stored_cred = await cred_service.create_credential(
+        project_id=project.id,
+        data=CredentialCreate(
+            name="Existing Stored Account",
+            email="existing-user@testplatform.io",
+            password="StoredSecretPassword123!",
+        ),
+    )
+    await db_session.commit()
+
+    # Mock exploration flow execution
+    executed_creds = {}
+
+    async def mock_execute(self, session_id, user_id, url, credential=None, **kwargs):
+        executed_creds["credential"] = credential
+
+    monkeypatch.setattr(ExplorationService, "_execute_exploration_flow", mock_execute)
+
+    # 2. Start an exploration session for the same domain
+    start_res = await client.post(
+        "/api/v1/exploration/",
+        json={"url": "https://app.testplatform.io/login"},
+    )
+    assert start_res.status_code == 201
+    session_id = start_res.json()["id"]
+
+    # 3. Test GET /api/v1/exploration/{session_id}/credentials
+    creds_res = await client.get(f"/api/v1/exploration/{session_id}/credentials")
+    assert creds_res.status_code == 200
+    creds_list = creds_res.json()
+    assert len(creds_list) == 1
+    assert creds_list[0]["id"] == str(stored_cred.id)
+    assert creds_list[0]["email"] == "existing-user@testplatform.io"
+    assert creds_list[0]["name"] == "Existing Stored Account"
+    assert "password" not in creds_list[0]  # passwords never returned in read responses
+
+    # 4. Submit credentials using credential_id directly (without manual email/password input)
+    submit_res = await client.post(
+        f"/api/v1/exploration/{session_id}/credentials",
+        json={"credential_id": str(stored_cred.id)},
+    )
+    assert submit_res.status_code == 200
+    assert submit_res.json()["status"] == "AUTHENTICATING"
+
+    # Verify that the background flow received the decrypted credentials
+    assert executed_creds.get("credential") is not None
+    assert executed_creds["credential"]["email"] == "existing-user@testplatform.io"
+    assert executed_creds["credential"]["password"] == "StoredSecretPassword123!"
+
