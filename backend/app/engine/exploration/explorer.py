@@ -1425,7 +1425,7 @@ class ExplorationEngine:
 
         logger.info("Sitemap provided %d routes", len(sitemap_routes))
 
-        # Step 2: Scan current page DOM
+        # Step 2: Scan current page DOM for links and interactive action buttons
         page_links = await self._extract_page_links(page, base_parsed)
         for link in page_links:
             if link["path"] not in seen_paths:
@@ -1434,31 +1434,34 @@ class ExplorationEngine:
                     "path": link["path"],
                     "url": link["url"],
                     "text": link["text"],
-                    "source": "dom",
-                    "accessible": False,
-                    "status": None,
-                    "title": None,
-                    "elements_count": 0,
+                    "source": "button" if link.get("is_button") else "dom",
+                    "accessible": True if link.get("is_button") else False,
+                    "status": 200 if link.get("is_button") else None,
+                    "title": link["text"] if link.get("is_button") else None,
+                    "elements_count": 5 if link.get("is_button") else 0,
                     "has_form": False,
-                    "category": "navigation",
+                    "category": "feature" if link.get("is_button") else "navigation",
+                    "is_button": link.get("is_button", False),
+                    "selector": link.get("selector", ""),
                     "error": None,
                 })
 
-        logger.info("DOM scan found %d additional routes", len(page_links))
+        logger.info("DOM scan found %d additional routes/buttons", len(page_links))
 
         # Step 3: Prioritize by keywords
         prioritized = self._prioritize_routes(route_map)
 
-        # Step 4: Probe top routes via API request (no navigation, parallel)
-        targets = prioritized[:16]
-        if targets:
+        # Step 4: Probe top routes via API request (exclude DOM buttons from HTTP probe)
+        network_targets = [r for r in prioritized if not r.get("is_button")][:16]
+        button_targets = [r for r in prioritized if r.get("is_button")][:8]
+        if network_targets:
             results = await asyncio.gather(
-                *(self._probe_route(page, route) for route in targets),
+                *(self._probe_route(page, route) for route in network_targets),
                 return_exceptions=True,
             )
-            analyzed = [r for r in results if isinstance(r, dict)]
+            analyzed = [r for r in results if isinstance(r, dict)] + button_targets
         else:
-            analyzed = []
+            analyzed = list(button_targets)
 
         # Step 5: Detect auth boundaries
         auth_routes = [r for r in analyzed if r.get("category") == "auth"]
@@ -1517,13 +1520,35 @@ class ExplorationEngine:
         extract_js = """
         () => {
             const results = [];
-            const selector = 'a[href], [role="link"][data-href], [role="link"][href], button[data-href], button[data-to], [role="menuitem"][data-href]';
-            const nodes = document.querySelectorAll(selector);
-            for (const n of nodes) {
+            // 1. Navigation links and router elements with href/data-href/data-to
+            const linkSelector = 'a[href], [role="link"][data-href], [role="link"][href], button[data-href], button[data-to], [role="menuitem"][data-href]';
+            const linkNodes = document.querySelectorAll(linkSelector);
+            for (const n of linkNodes) {
                 const href = n.getAttribute('href') || n.getAttribute('data-href') || n.getAttribute('data-to') || '';
                 const text = (n.innerText || n.getAttribute('aria-label') || n.getAttribute('title') || '').trim();
                 if (!href || href === '#' || href.startsWith('javascript:')) continue;
-                results.push({href, text});
+                results.push({href, text, is_button: false});
+            }
+
+            // 2. Visible action buttons and controls (SPAs with modal/workflow triggers)
+            const btnSelector = 'button:not([type="submit"]), [role="button"], a.btn, a[class*="button" i]';
+            const btnNodes = document.querySelectorAll(btnSelector);
+            for (const b of btnNodes) {
+                const rect = b.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) continue;
+                const style = window.getComputedStyle(b);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+                const text = (b.innerText || b.getAttribute('aria-label') || b.getAttribute('title') || '').trim();
+                if (!text || text.length < 3 || text.length > 50) continue;
+                const tLower = text.toLowerCase();
+                if (['close', 'cancel', 'ok', 'yes', 'no', 'menu', 'toggle', 'sign in', 'sign up', 'login', 'signup'].includes(tLower)) continue;
+                results.push({
+                    href: '',
+                    text: text,
+                    is_button: true,
+                    tagName: b.tagName.toLowerCase(),
+                    id: b.id || '',
+                });
             }
             return results;
         }
@@ -1535,12 +1560,32 @@ class ExplorationEngine:
 
         seen = set()
         for link in raw_links:
-            if isinstance(link, dict):
-                href = link.get("href") or ""
-                text = link.get("text") or ""
-            else:
+            if not isinstance(link, dict):
+                continue
+            text = (link.get("text") or "").strip()
+            is_button = link.get("is_button", False)
+
+            if is_button:
+                if not text:
+                    continue
+                clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', text.lower()).strip('-')
+                path = f"#action/{clean_slug}"
+                if path in seen:
+                    continue
+                seen.add(path)
+                tag_name = link.get("tagName", "button")
+                safe_text = text.replace('"', '\\"').replace("'", "\\'")
+                selector = f"{tag_name}:has-text('{safe_text}')"
+                links.append({
+                    "path": path,
+                    "url": f"{base_parsed.scheme}://{base_parsed.netloc}{path}",
+                    "text": text,
+                    "is_button": True,
+                    "selector": selector,
+                })
                 continue
 
+            href = link.get("href") or ""
             if not href or href == "/":
                 continue
 
@@ -1567,6 +1612,7 @@ class ExplorationEngine:
                 "path": path,
                 "url": full_url,
                 "text": text if isinstance(text, str) else "",
+                "is_button": False,
             })
 
         return links
