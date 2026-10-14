@@ -36,6 +36,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlparse
 
 from playwright.async_api import Page
 
@@ -66,6 +67,40 @@ KNOWN_CONDITION_KEYS = frozenset({
 # Structural containers that are valid diagnostics but cannot, alone, prove a
 # user outcome (§16 of the readiness spec: INVALID AS SUCCESS PROOF).
 _STRUCTURAL_CONTAINERS = frozenset({"main", "content", "container", "page", "body", "app", "root", "wrapper"})
+
+
+def _normalize_url_for_matching(u: str) -> str:
+    """Normalize a URL or URL pattern for resilient matching.
+
+    Strips trailing slashes, drops 'www.' prefix, drops scheme (http://, https://),
+    and standard default ports (:80, :443) so that e.g.:
+    - 'https://summastudy.com.ng' matches 'https://www.summastudy.com.ng/'
+    - 'http://example.com:80/dash/' matches 'https://example.com/dash'
+    """
+    if not u or not isinstance(u, str):
+        return ""
+    u_str = u.strip()
+    try:
+        # If no scheme present but it contains a dot before any slash, parse with //
+        if "://" not in u_str and not u_str.startswith("/"):
+            slash_idx = u_str.find("/")
+            domain_part = u_str[:slash_idx] if slash_idx != -1 else u_str
+            if "." in domain_part:
+                u_str = "//" + u_str
+
+        parsed = urlparse(u_str)
+        if parsed.netloc:
+            netloc = parsed.netloc.lower()
+            if netloc.startswith("www."):
+                netloc = netloc[4:]
+            if netloc.endswith(":80") or netloc.endswith(":443"):
+                netloc = netloc.rsplit(":", 1)[0]
+            path = parsed.path.rstrip("/")
+            query = f"?{parsed.query}" if parsed.query else ""
+            return f"{netloc}{path}{query}"
+        return u_str.rstrip("/")
+    except Exception:
+        return u_str.rstrip("/")
 
 
 def _is_vacuous_url_pattern(pattern: str) -> bool:
@@ -594,7 +629,7 @@ class Verifier:
         try:
             current_url = self.page.url
 
-            # Try exact match first
+            # 1. Try raw exact match
             if current_url == pattern:
                 return VerificationCheck(
                     type="url_matches",
@@ -603,7 +638,18 @@ class Verifier:
                     actual=current_url,
                 )
 
-            # Try contains
+            # 2. Try normalized exact match (handles www., trailing slash, protocol differences)
+            norm_curr = _normalize_url_for_matching(current_url)
+            norm_pat = _normalize_url_for_matching(pattern)
+            if norm_curr and norm_pat and norm_curr == norm_pat:
+                return VerificationCheck(
+                    type="url_matches",
+                    passed=True,
+                    expected=pattern,
+                    actual=current_url,
+                )
+
+            # 3. Try raw contains
             if pattern in current_url:
                 return VerificationCheck(
                     type="url_matches",
@@ -612,9 +658,30 @@ class Verifier:
                     actual=current_url,
                 )
 
-            # Try regex
+            # 4. Try normalized contains
+            if norm_pat and norm_curr and norm_pat in norm_curr:
+                return VerificationCheck(
+                    type="url_matches",
+                    passed=True,
+                    expected=pattern,
+                    actual=current_url,
+                )
+
+            # 5. Try regex on raw URL
             try:
                 if re.search(pattern, current_url):
+                    return VerificationCheck(
+                        type="url_matches",
+                        passed=True,
+                        expected=pattern,
+                        actual=current_url,
+                    )
+            except re.error:
+                pass
+
+            # 6. Try regex on normalized URL
+            try:
+                if norm_curr and re.search(pattern, norm_curr):
                     return VerificationCheck(
                         type="url_matches",
                         passed=True,
@@ -629,6 +696,7 @@ class Verifier:
                 passed=False,
                 expected=pattern,
                 actual=current_url,
+                message=f"Current URL '{current_url}' does not match pattern '{pattern}'",
             )
 
         except Exception as e:
@@ -749,7 +817,7 @@ class Verifier:
         try:
             current_url = self.page.url
             checks_ok = True
-            if start and current_url == start:
+            if start and (current_url == start or (_normalize_url_for_matching(current_url) == _normalize_url_for_matching(start))):
                 return VerificationCheck(
                     type="url_changed_to",
                     passed=False,
@@ -854,7 +922,9 @@ class Verifier:
         try:
             current_url = self.page.url
             # URL should NOT contain the pattern
-            still_on_auth = pattern in current_url
+            norm_curr = _normalize_url_for_matching(current_url)
+            norm_pat = _normalize_url_for_matching(pattern)
+            still_on_auth = (pattern in current_url) or (bool(norm_pat) and norm_pat in norm_curr)
             return VerificationCheck(
                 type="url_changed_from",
                 passed=not still_on_auth,
