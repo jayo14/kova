@@ -1910,11 +1910,22 @@ class ExplorationEngine:
         # Step 3c: Heuristic route-based journeys (if AI did not produce missions)
         if len(missions) <= (1 if self.goal else 0):
 
-            # Feature journeys (dashboard, workspace, settings, CRUD) - top priority
-            for route in feature_routes[:3]:
+            # Feature journeys (genuine product workflows prioritized over settings/profile)
+            genuine_features = [
+                r for r in feature_routes
+                if not any(sk in r["path"].lower() for sk in ["settings", "profile", "account", "preference"])
+            ]
+            utility_features = [
+                r for r in feature_routes
+                if any(sk in r["path"].lower() for sk in ["settings", "profile", "account", "preference"])
+            ]
+            ordered_features = genuine_features + utility_features
+
+            for route in ordered_features[:4]:
                 if mission_count >= max_missions:
                     break
-                is_first = (mission_count == 0 and not self.goal)
+                is_settings = any(sk in route["path"].lower() for sk in ["settings", "profile", "account", "preference"])
+                is_first = (mission_count == 0 and not self.goal and not is_settings)
                 feature_mission = self._build_feature_mission(
                     route, current_url, title, persona_name, recommended=is_first
                 )
@@ -1926,7 +1937,8 @@ class ExplorationEngine:
             for route in content_routes[:2]:
                 if mission_count >= max_missions:
                     break
-                is_first = (mission_count == 0 and not self.goal)
+                has_rec = any(m.recommended for m in missions)
+                is_first = (not has_rec and not self.goal)
                 content_mission = self._build_content_mission(
                     route, current_url, title, persona_name, recommended=is_first
                 )
@@ -2005,6 +2017,18 @@ class ExplorationEngine:
                 if mission:
                     missions.append(mission)
                     mission_count += 1
+
+        # Ensure at least one high-value candidate is recommended if none currently is
+        if not any(m.recommended for m in missions) and missions and not self.goal:
+            fav = next(
+                (
+                    m for m in missions
+                    if m.category != "auth"
+                    and not any(sk in m.name.lower() for sk in ["setting", "profile", "account", "preference"])
+                ),
+                missions[0],
+            )
+            fav.recommended = True
 
         # Sort: recommended first, then by priority category (features/dashboards before auth)
         category_order = {
@@ -2411,6 +2435,9 @@ class ExplorationEngine:
         """
         path = route["path"]
         feature_name = route["text"] or path.split("/")[-1].replace("-", " ").title()
+        is_settings_like = any(sk in path.lower() for sk in ["settings", "profile", "account", "preference"])
+        if is_settings_like:
+            recommended = False
 
         steps = [
             {"type": "navigate", "url": route["url"]},
