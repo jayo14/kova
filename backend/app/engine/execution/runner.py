@@ -447,6 +447,24 @@ class FlowRunner:
                 except Exception:
                     pass
                 await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
+
+                # Step-level auth barrier gate: heal immediately if redirected to an auth barrier
+                from app.engine.browser.auth import is_auth_url, is_auth_page
+                current_p_url = getattr(browser.page, "url", "")
+                step_target_url = (step.get("url") or (step.get("target") or {}).get("url")) if isinstance(step, dict) else None
+                step_is_intended_auth = (
+                    (step_target_url and is_auth_url(step_target_url))
+                    or (isinstance(step, dict) and any(ak in str(step.get("type", "")).lower() for ak in ["auth", "login", "signup"]))
+                )
+                if not step_is_intended_auth and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url)):
+                    healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or current_p_url, event_recorder)
+                    if healed and step_target_url and not is_auth_url(browser.page.url):
+                        try:
+                            await browser.navigate(step_target_url)
+                            await asyncio.sleep(1.0)
+                        except Exception as re_nav_err:
+                            logger.debug("Re-navigation after auth barrier healing failed: %s", re_nav_err)
+
                 step_check = await self._verify_step_postcondition(ctx, browser, verifier, step, i, event_recorder)
                 if step_check is not None and not step_check.passed:
                     failed_checks = [check for check in step_check.checks if not check.passed]
@@ -550,63 +568,25 @@ class FlowRunner:
                     auth_detected = True
 
                 if auth_detected:
-                    # Collect all distinct test credentials in the execution credential store
-                    available_creds = []
-                    seen_cred_keys = set()
-                    for cid in ctx.credentials.list_ids():
-                        c = ctx.credentials.get(cid)
-                        if c and c.email and c.get_password():
-                            ckey = (c.email.strip().lower(), c.get_password())
-                            if ckey not in seen_cred_keys:
-                                seen_cred_keys.add(ckey)
-                                available_creds.append(c)
+                    healed = await self._heal_auth_barrier(
+                        ctx, browser, current_page_url, detected_expected_dest or target_url, event_recorder
+                    )
+                    if healed:
+                        from urllib.parse import urljoin
+                        re_target = target_url or detected_expected_dest
+                        if detected_expected_dest and detected_expected_dest.startswith("/"):
+                            re_target = urljoin(current_page_url, detected_expected_dest)
 
-                    for cred_to_use in available_creds:
-                        logger.info(
-                            "Auth barrier detected on %s (expected %s). Attempting AI self-healing authentication as %s",
-                            current_page_url, detected_expected_dest, cred_to_use.email,
-                        )
-                        ctx.record_event(EventTypes.RECOVERY_STARTED, {
-                            "strategy": "auth_barrier_healing",
-                            "message": f"Target page requires authentication (redirected to {current_page_url}). Logging in using project credentials.",
-                            "email": cred_to_use.email,
-                            "expected_destination": detected_expected_dest or target_url,
-                        })
-                        await self._emit_events(ctx, event_recorder)
+                        if re_target and browser.page.url != re_target:
+                            logger.info("Login succeeded, navigating to target destination: %s", re_target)
+                            await browser.navigate(re_target)
+                            await asyncio.sleep(1.0)
 
-                        login_ok, login_msg = await perform_login(
-                            browser.page,
-                            email=cred_to_use.email,
-                            password=cred_to_use.get_password(),
-                        )
-
-                        if login_ok:
-                            from urllib.parse import urljoin
-                            re_target = target_url or detected_expected_dest
-                            if detected_expected_dest and detected_expected_dest.startswith("/"):
-                                re_target = urljoin(current_page_url, detected_expected_dest)
-
-                            if re_target:
-                                logger.info("Login succeeded, navigating to target destination: %s", re_target)
-                                await browser.navigate(re_target)
-                                await asyncio.sleep(1.0)
-
-                            # Re-verify success condition after authenticating
-                            re_verification = await verifier.verify(success_condition)
-                            if re_verification.passed:
-                                logger.info("Verification passed after AI authentication healing!")
-                                verification = re_verification
-                                ctx.record_event("ai_assisted", {
-                                    "healing_type": "auth_barrier_healed",
-                                    "original_auth_url": current_page_url,
-                                    "destination": browser.page.url,
-                                    "authenticated_as": cred_to_use.email,
-                                    "message": f"Detected auth wall on {detected_expected_dest or 'target'}. Authenticated with test credentials and successfully verified objective.",
-                                })
-                                await self._emit_events(ctx, event_recorder)
-                                break
-                        else:
-                            logger.info("Login as %s did not succeed: %s. Trying subsequent credentials if available.", cred_to_use.email, login_msg)
+                        # Re-verify success condition after authenticating
+                        re_verification = await verifier.verify(success_condition)
+                        if re_verification.passed:
+                            logger.info("Verification passed after AI authentication healing!")
+                            verification = re_verification
 
             if verification.passed:
                 ctx.record_event(EventTypes.VERIFICATION_PASSED, verification.to_dict())
@@ -908,10 +888,101 @@ class FlowRunner:
                 title = (await nav_page.title()) or ""
         except Exception:
             pass
+    async def _heal_auth_barrier(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        current_page_url: str,
+        expected_destination: str | None,
+        event_recorder: Callable | None,
+    ) -> bool:
+        """Authenticate against an auth barrier using available test credentials or on-the-fly registration."""
+        from app.engine.browser.auth import perform_login, is_auth_url, is_auth_page
+        import secrets
+
+        # Collect distinct credentials
+        available_creds = []
+        seen_cred_keys = set()
+        for cid in ctx.credentials.list_ids():
+            c = ctx.credentials.get(cid)
+            if c and c.email and c.get_password():
+                ckey = (c.email.strip().lower(), c.get_password())
+                if ckey not in seen_cred_keys:
+                    seen_cred_keys.add(ckey)
+                    available_creds.append(c)
+
+        for cred_to_use in available_creds:
+            logger.info(
+                "Auth barrier detected on %s (expected %s). Attempting AI self-healing authentication as %s",
+                current_page_url, expected_destination, cred_to_use.email,
+            )
+            ctx.record_event(EventTypes.RECOVERY_STARTED, {
+                "strategy": "auth_barrier_healing",
+                "message": f"Target page requires authentication (redirected to {current_page_url}). Logging in using project credentials.",
+                "email": cred_to_use.email,
+                "expected_destination": expected_destination or ctx.target_url,
+            })
+            await self._emit_events(ctx, event_recorder)
+
+            login_ok, login_msg = await perform_login(
+                browser.page,
+                email=cred_to_use.email,
+                password=cred_to_use.get_password(),
+            )
+
+            if login_ok:
+                logger.info("Authentication succeeded as %s", cred_to_use.email)
+                ctx.record_event("ai_assisted", {
+                    "healing_type": "auth_barrier_healed",
+                    "original_auth_url": current_page_url,
+                    "destination": browser.page.url,
+                    "authenticated_as": cred_to_use.email,
+                    "message": f"Detected auth wall on {expected_destination or 'target'}. Authenticated with test credentials.",
+                })
+                await self._emit_events(ctx, event_recorder)
+                return True
+            else:
+                logger.info("Login as %s did not succeed: %s. Trying subsequent credentials if available.", cred_to_use.email, login_msg)
+
+        # On-the-fly registration fallback if all existing credentials failed or none configured
         try:
-            await publish_state(execution_id, "navigating", url, title, loading=True)
-        except Exception:
-            pass
+            logger.info("Attempting automatic test account registration fallback on %s", current_page_url)
+            random_suffix = secrets.token_hex(4)
+            auto_email = f"kova-tester-{random_suffix}@example.com"
+            auto_pass = f"KovaPass!{random_suffix}"
+
+            ctx.record_event(EventTypes.RECOVERY_STARTED, {
+                "strategy": "auth_auto_registration",
+                "message": f"Attempting on-the-fly test account registration on {current_page_url}.",
+                "email": auto_email,
+                "expected_destination": expected_destination or ctx.target_url,
+            })
+            await self._emit_events(ctx, event_recorder)
+
+            signup_ok, signup_msg = await perform_login(
+                browser.page,
+                email=auto_email,
+                password=auto_pass,
+                name="Kova Tester",
+                is_signup=True,
+            )
+            if signup_ok:
+                logger.info("On-the-fly test account registration succeeded as %s", auto_email)
+                from app.engine.credentials.models import Credential as EngineCredential
+                ctx.credentials.add(EngineCredential(id=f"auto-{random_suffix}", email=auto_email, password=auto_pass))
+                ctx.record_event("ai_assisted", {
+                    "healing_type": "auth_account_created",
+                    "original_auth_url": current_page_url,
+                    "destination": browser.page.url,
+                    "authenticated_as": auto_email,
+                    "message": "Created new test account on the fly to bypass auth wall.",
+                })
+                await self._emit_events(ctx, event_recorder)
+                return True
+        except Exception as reg_err:
+            logger.debug("On-the-fly registration attempt failed: %s", reg_err)
+
+        return False
 
     async def _capture_live_snapshot(
         self,
