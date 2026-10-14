@@ -675,6 +675,40 @@ export async function submitCredential(
   }
 }
 
+export async function submitExistingCredential(
+  credentialId: string,
+  onEvent: (event: ExplorationEvent) => void,
+  signal?: AbortSignal,
+  token?: string
+): Promise<void> {
+  if (!currentSessionId) {
+    throw new Error("No active exploration session");
+  }
+
+  onEvent({ type: "state_change", state: "authenticating" });
+
+  try {
+    const updated = await submitExplorationCredentials(
+      currentSessionId,
+      { credentialId },
+      undefined,
+      false,
+      token
+    );
+    if (updated?.status) {
+      onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
+    }
+    if (activeStreamSessionId !== currentSessionId) {
+      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Could not sign in with stored credential.";
+    onEvent({ type: "error", message });
+    onEvent({ type: "state_change", state: "auth_required" });
+    throw err;
+  }
+}
+
 export async function answerQuestion(
   questionId: string,
   answer: string,
