@@ -256,9 +256,10 @@ class AgentReasoner:
                 "path": r.get("path"),
                 "title": r.get("title") or r.get("text"),
                 "category": r.get("category"),
+                "requires_auth": r.get("requires_auth", False),
                 "elements_count": r.get("elements_count", 0),
             }
-            for r in routes[:15]
+            for r in routes[:20]
             if r.get("path")
         ]
 
@@ -269,7 +270,7 @@ class AgentReasoner:
                 "type": el.get("type"),
                 "role": el.get("role"),
             }
-            for el in interactive_elements[:25]
+            for el in interactive_elements[:30]
             if el.get("name")
         ]
 
@@ -278,14 +279,18 @@ class AgentReasoner:
             "and synthesize HIGH-VALUE, PURPOSEFUL user journeys that thoroughly test the core features, "
             "dashboards, workflows, and interactive capabilities of the web application.\n\n"
             "CRITICAL RULES:\n"
-            "1. Authentication/Signup is NOT the primary journey of a product. Do NOT recommend 'Sign up and log in' "
-            "as the top or recommended journey. Auth is merely a prerequisite gate.\n"
-            "2. The RECOMMENDED journey MUST be a core product workflow (e.g., creating a resource, configuring a dashboard, "
-            "completing an interactive flow, searching and reviewing content).\n"
-            "3. Each journey must have a clear, realistic purpose and test actual features of the app.\n"
-            "4. Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
-            "5. The success condition must specify verifiable criteria (text_visible, element_visible, url_changed_to, etc.).\n"
-            "6. Output ONLY JSON matching the AIGeneratedJourneyList schema."
+            "1. AUTH IS NOT THE PRODUCT: Authentication/Signup is NEVER the primary journey. Do NOT recommend 'Sign up and log in' "
+            "as the top or recommended journey. Auth is merely a prerequisite gate that is handled automatically when accessing protected features.\n"
+            "2. UTILITY IS NOT CORE: Settings, user profile, account details, or terms are utility areas and must NEVER be the recommended journey "
+            "unless the user explicitly requested it in their goal.\n"
+            "3. PURPOSEFUL FEATURE WORKFLOWS: The RECOMMENDED journey MUST test the application's core value proposition (e.g., generating or taking quizzes "
+            "for a study platform; creating a board or document for a productivity tool; exploring and searching items for a catalog or store; "
+            "inspecting analytics and activity metrics for a dashboard).\n"
+            "4. ACTION-ORIENTED TITLES: Use meaningful titles reflecting real user intent (e.g. 'Generate and Practice Interactive Quiz', "
+            "'Review Learning Analytics and Progress', 'Create New Study Flashcards', 'Search and Explore Resource Library') rather than generic 'Open X'.\n"
+            "5. STEPS: Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
+            "6. VERIFIABILITY: The success condition must specify verifiable criteria grounded in observed UI (text_visible, element_visible, url_changed_to, etc.).\n"
+            "7. Output ONLY JSON matching the AIGeneratedJourneyList schema."
         )
 
         user_prompt = (
