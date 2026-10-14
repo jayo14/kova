@@ -12,6 +12,17 @@ DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/ko
 
 
 def _create_engine_safely(url: str) -> AsyncEngine:
+    connect_args = {}
+    if "asyncpg" in url or "postgresql" in url:
+        connect_args = {
+            "server_settings": {
+                "tcp_keepalives_idle": "60",
+                "tcp_keepalives_interval": "10",
+                "tcp_keepalives_count": "5",
+            },
+            "command_timeout": 60,
+        }
+
     try:
         return create_async_engine(
             url,
@@ -20,7 +31,8 @@ def _create_engine_safely(url: str) -> AsyncEngine:
             pool_size=10,
             max_overflow=20,
             pool_timeout=30,
-            pool_recycle=1800,
+            pool_recycle=300,
+            connect_args=connect_args,
         )
     except Exception as e:
         logger.error(
@@ -36,7 +48,8 @@ def _create_engine_safely(url: str) -> AsyncEngine:
             pool_size=10,
             max_overflow=20,
             pool_timeout=30,
-            pool_recycle=1800,
+            pool_recycle=300,
+            connect_args=connect_args,
         )
 
 
