@@ -235,3 +235,94 @@ async def test_runner_heals_auth_barrier_during_post_verification():
         assert res["success"] is True
         assert attempted_logins == ["user@example.com"]
 
+
+def test_extract_step_target_url():
+    """Verify _extract_step_target_url correctly extracts target URLs from diverse step formats."""
+    runner = FlowRunner()
+    base = "https://example.com"
+
+    # From 'value'
+    assert runner._extract_step_target_url({"action": "navigate", "value": "https://example.com/upload"}, base) == "https://example.com/upload"
+    assert runner._extract_step_target_url({"type": "navigate", "value": "/upload"}, base) == "https://example.com/upload"
+
+    # From 'url'
+    assert runner._extract_step_target_url({"url": "https://example.com/quizzes"}, base) == "https://example.com/quizzes"
+
+    # From target dict
+    assert runner._extract_step_target_url({"target": {"url": "https://example.com/settings"}}, base) == "https://example.com/settings"
+    assert runner._extract_step_target_url({"target": {"value": "/profile"}}, base) == "https://example.com/profile"
+
+    # From target string
+    assert runner._extract_step_target_url({"target": "https://example.com/test"}, base) == "https://example.com/test"
+    assert runner._extract_step_target_url({"target": "/docs"}, base) == "https://example.com/docs"
+
+    # Non-url steps
+    assert runner._extract_step_target_url({"type": "click", "target": "button.submit"}, base) is None
+    assert runner._extract_step_target_url(None) is None
+
+
+@pytest.mark.asyncio
+async def test_runner_heals_and_renavigates_to_step_value():
+    """Verify that when a step with value='/upload' is redirected to signin, Kova heals and navigates to /upload."""
+    runner = FlowRunner()
+    exec_id = uuid.uuid4()
+
+    cred_store = CredentialStore()
+    cred_store.add(EngineCredential(id="cred-1", email="user@example.com", password="SecretPass123!"))
+
+    mock_browser = AsyncMock()
+    mock_browser.page = AsyncMock()
+    mock_browser.page.url = "https://example.com/signin"
+    mock_browser.page.title.return_value = "Sign In"
+    mock_browser.network_errors = []
+    mock_browser.observe.return_value = {
+        "url": "https://example.com/signin",
+        "title": "Sign In",
+        "interactive_elements": [],
+    }
+
+    navigated_urls = []
+
+    async def mock_navigate(url):
+        navigated_urls.append(url)
+        mock_browser.page.url = url
+
+    mock_browser.navigate.side_effect = mock_navigate
+
+    mock_action_executor = AsyncMock()
+
+    async def mock_action_execute(action, execution_id=None):
+        if action.get("value") == "https://example.com/upload":
+            mock_browser.page.url = "https://example.com/signin"
+        return {"success": True}
+
+    mock_action_executor.execute.side_effect = mock_action_execute
+
+    mock_verifier = AsyncMock()
+    mock_verifier.verify.return_value = VerificationResult(passed=True, checks=[])
+
+    async def mock_perform_login(page, email, password, name=None, is_signup=False):
+        page.url = "https://example.com/"
+        return True, "Login successful"
+
+    with patch("app.engine.execution.runner.BrowserSession", return_value=mock_browser), \
+         patch("app.engine.execution.runner.ActionExecutor", return_value=mock_action_executor), \
+         patch("app.engine.execution.runner.Verifier", return_value=mock_verifier), \
+         patch("app.engine.browser.auth.perform_login", side_effect=mock_perform_login), \
+         patch.object(runner, "_capture_evidence", new=AsyncMock(return_value=True)), \
+         patch.object(runner, "_frame_producer", new=AsyncMock()), \
+         patch.object(runner, "_capture_live_snapshot", new=AsyncMock(return_value={})):
+
+        res = await runner.execute(
+            execution_id=exec_id,
+            flow_steps=[{"action": "navigate", "value": "https://example.com/upload"}],
+            success_condition={"url_matches": ".*"},
+            credential_store=cred_store,
+            target_url="https://example.com",
+        )
+
+        assert res["success"] is True
+        # Verify that browser navigated to https://example.com/upload after login healing
+        assert "https://example.com/upload" in navigated_urls
+
+
