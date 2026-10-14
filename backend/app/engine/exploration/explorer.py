@@ -797,7 +797,15 @@ class ExplorationEngine:
         email = credential.get("email", "")
         password = credential.get("password", "")
 
-        # 1. Locate name input (required by many signup/registration forms)
+        # Check all frames (top-level page plus any auth iframes)
+        frames = [page]
+        try:
+            for f in getattr(page, "frames", []):
+                if f not in frames:
+                    frames.append(f)
+        except Exception:
+            pass
+
         name_selector = (
             'input[name="name" i], '
             'input[name*="full_name" i], '
@@ -808,69 +816,111 @@ class ExplorationEngine:
             'input[aria-label*="name" i], '
             'input[id*="name" i]:not([id*="user" i])'
         )
-        try:
-            name_loc = page.locator(name_selector).first
-            if await name_loc.is_visible(timeout=1000):
-                display_name = credential.get("name") or "Kova Tester"
-                await name_loc.focus()
-                await name_loc.fill(display_name)
-                try:
-                    await name_loc.evaluate(
-                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-                    )
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-        # 2. Rapidly locate email/username input using unified selector
         email_selector = (
             'input[type="email"], '
             'input[name="email" i], '
             'input[name="username" i], '
+            'input[name="identifier" i], '
+            'input[name="login" i], '
+            'input[name="user" i], '
             'input[autocomplete="email" i], '
             'input[autocomplete="username" i], '
-            '#email, #username, '
+            '#email, #username, #identifier, '
             'input[placeholder*="email" i], '
             'input[placeholder*="username" i], '
+            'input[placeholder*="phone" i], '
             'input[aria-label*="email" i], '
-            'input[aria-label*="username" i]'
+            'input[aria-label*="username" i], '
+            'input[data-testid*="email" i], '
+            'input[data-testid*="username" i]'
         )
-        email_input = None
-        try:
-            loc = page.locator(email_selector).first
-            if await loc.is_visible(timeout=1500):
-                email_input = loc
-        except Exception:
-            pass
-
-        if not email_input:
-            # Fallback: look for first text-like input before password
-            try:
-                loc = page.locator(
-                    'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])'
-                ).first
-                if await loc.is_visible(timeout=1000):
-                    email_input = loc
-            except Exception:
-                pass
-
-        # Rapidly locate password input using unified selector
+        fallback_email_selector = (
+            'input:not([type="password"]):not([type="hidden"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"])'
+        )
         password_selector = (
             'input[type="password"], '
             'input[name="password" i], '
+            'input[name="pass" i], '
+            'input[name*="password" i], '
             'input[autocomplete*="password" i], '
-            '#password, '
+            '#password, #pass, '
             'input[placeholder*="password" i], '
-            'input[aria-label*="password" i]'
+            'input[aria-label*="password" i], '
+            'input[data-testid*="password" i]'
         )
-        password_input = None
-        try:
-            loc = page.locator(password_selector).first
-            if await loc.is_visible(timeout=1500):
-                password_input = loc
-        except Exception:
-            pass
+
+        async def _find_inputs():
+            found_name, found_email, found_pwd, found_scope = None, None, None, page
+            for scope in frames:
+                try:
+                    loc = scope.locator(email_selector).first
+                    if await loc.is_visible(timeout=600):
+                        found_email = loc
+                        found_scope = scope
+                except Exception:
+                    pass
+
+                try:
+                    loc = scope.locator(password_selector).first
+                    if await loc.is_visible(timeout=600):
+                        found_pwd = loc
+                        found_scope = scope
+                except Exception:
+                    pass
+
+                if not found_email:
+                    try:
+                        loc = scope.locator(fallback_email_selector).first
+                        if await loc.is_visible(timeout=400):
+                            found_email = loc
+                            found_scope = scope
+                    except Exception:
+                        pass
+
+                if found_email or found_pwd:
+                    try:
+                        loc = scope.locator(name_selector).first
+                        if await loc.is_visible(timeout=300):
+                            found_name = loc
+                    except Exception:
+                        pass
+                    break
+            return found_name, found_email, found_pwd, found_scope
+
+        name_input, email_input, password_input, active_scope = await _find_inputs()
+
+        # If inputs not found, attempt navigation or modal trigger
+        if not email_input or not password_input:
+            navigated = await self._ensure_on_auth_form(page, is_signup=is_signup)
+            if navigated:
+                name_input, email_input, password_input, active_scope = await _find_inputs()
+
+        # Multi-step authentication: email entered on step 1, password appears on step 2
+        if email_input and not password_input:
+            try:
+                await email_input.focus()
+                await email_input.fill(email)
+                await email_input.evaluate(
+                    "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                )
+                submit_btn = await self._find_submit_button(page, email_input)
+                if submit_btn:
+                    await submit_btn.click(timeout=2000)
+                    await asyncio.sleep(1.0)
+                    name_input, email_input, password_input, active_scope = await _find_inputs()
+            except Exception as ex:
+                logger.debug("Multi-step email submit attempt: %s", ex)
+
+        if name_input:
+            try:
+                display_name = credential.get("name") or "Kova Tester"
+                await name_input.focus()
+                await name_input.fill(display_name)
+                await name_input.evaluate(
+                    "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                )
+            except Exception:
+                pass
 
         if not email_input or not password_input:
             return False, "Could not find email or password input fields on the page."
