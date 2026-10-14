@@ -210,3 +210,39 @@ async def test_explorer_standalone_form_mission(monkeypatch):
     assert form_mission.successCondition == {"text_visible": "Thank"}
     assert any(s.get("type") == "click" and "submit" in s.get("target", "").lower() for s in form_mission.steps)
 
+
+@pytest.mark.asyncio
+async def test_explorer_protected_feature_routes_are_discovered(monkeypatch):
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://quiza.example.com",
+    )
+    class DummyPage:
+        url = "https://quiza.example.com"
+
+    mock_routes = [
+        # Protected feature routes (e.g. redirected or 401 unauthenticated)
+        {"path": "/quizzes", "url": "https://quiza.example.com/quizzes", "accessible": False, "requires_auth": True, "category": "feature", "elements_count": 5, "text": "Quizzes", "title": "My Quizzes"},
+        {"path": "/dashboard", "url": "https://quiza.example.com/dashboard", "accessible": False, "requires_auth": True, "category": "feature", "elements_count": 10, "text": "Dashboard", "title": "Dashboard"},
+        {"path": "/settings", "url": "https://quiza.example.com/settings", "accessible": True, "category": "feature", "elements_count": 3, "text": "Settings", "title": "Settings"},
+    ]
+    monkeypatch.setattr(explorer, "_analyze_routes", lambda page, url: asyncio.sleep(0, result=mock_routes))
+
+    observation = {
+        "title": "Quiza AI",
+        "elements": [
+            {"type": "link", "name": "Quizzes"},
+            {"type": "link", "name": "Dashboard"},
+            {"type": "link", "name": "Settings"},
+        ],
+    }
+    discoveries, missions = await explorer._discover_workflows(DummyPage(), observation, "Student")
+
+    mission_names = [m.name for m in missions]
+    assert any("Quizzes" in name for name in mission_names)
+    assert any("Dashboard" in name for name in mission_names)
+    # Recommended mission should be a genuine core feature, NOT settings!
+    rec = next((m for m in missions if m.recommended), None)
+    assert rec is not None
+    assert "Settings" not in rec.name
+

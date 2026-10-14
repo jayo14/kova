@@ -1603,9 +1603,10 @@ class ExplorationEngine:
 
             final_url = getattr(response, "url", route["url"])
             from app.engine.browser.auth import is_auth_url
-            if is_auth_url(final_url) and not is_auth_url(route["url"]):
+            if (is_auth_url(final_url) and not is_auth_url(route["url"])) or response.status in (401, 403):
                 route_info["requires_auth"] = True
-                route_info["auth_redirect_url"] = final_url
+                if is_auth_url(final_url):
+                    route_info["auth_redirect_url"] = final_url
 
             if route_info["accessible"]:
                 try:
@@ -1743,32 +1744,43 @@ class ExplorationEngine:
         # Phase 1: Route analysis
         route_map = await self._analyze_routes(page, current_url)
         accessible_routes = [r for r in route_map if r["accessible"]]
-        auth_routes = [r for r in accessible_routes if r["category"] == "auth"]
+        auth_routes = [r for r in route_map if r["category"] == "auth"]
         form_routes = [
-            r for r in accessible_routes
-            if r["category"] == "form"
-            or (
-                r.get("has_form")
-                and any(
-                    kw in r["path"].lower() or kw in (r.get("title") or "").lower()
-                    for kw in ["contact", "feedback", "support", "inquiry", "message"]
+            r for r in route_map
+            if (r.get("accessible") or r.get("requires_auth"))
+            and (
+                r["category"] == "form"
+                or (
+                    r.get("has_form")
+                    and any(
+                        kw in r["path"].lower() or kw in (r.get("title") or "").lower()
+                        for kw in ["contact", "feedback", "support", "inquiry", "message"]
+                    )
                 )
             )
         ]
-        feature_routes = [r for r in accessible_routes if r["category"] == "feature"]
-        content_routes = [r for r in accessible_routes if r["category"] == "content"]
-        blocked_routes = [r for r in route_map if not r["accessible"]]
+        feature_routes = [
+            r for r in route_map
+            if (r.get("accessible") or r.get("requires_auth")) and r.get("category") == "feature"
+        ]
+        content_routes = [
+            r for r in route_map
+            if (r.get("accessible") or r.get("requires_auth")) and r.get("category") == "content"
+        ]
+        blocked_routes = [r for r in route_map if not r["accessible"] and not r.get("requires_auth")]
 
         signup_routes = [
-            r for r in accessible_routes
-            if any(
+            r for r in route_map
+            if (r.get("accessible") or r.get("requires_auth"))
+            and any(
                 kw in r["path"].lower() or kw in (r.get("title") or "").lower()
                 for kw in ["signup", "sign-up", "register", "create-account", "join"]
             )
         ]
         login_routes = [
-            r for r in accessible_routes
-            if any(
+            r for r in route_map
+            if (r.get("accessible") or r.get("requires_auth"))
+            and any(
                 kw in r["path"].lower() or kw in (r.get("title") or "").lower()
                 for kw in ["login", "log-in", "signin", "sign-in"]
             )
