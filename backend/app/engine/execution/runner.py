@@ -550,15 +550,18 @@ class FlowRunner:
                     auth_detected = True
 
                 if auth_detected:
-                    # Look for test credentials in the execution credential store
-                    cred_to_use = None
+                    # Collect all distinct test credentials in the execution credential store
+                    available_creds = []
+                    seen_cred_keys = set()
                     for cid in ctx.credentials.list_ids():
                         c = ctx.credentials.get(cid)
                         if c and c.email and c.get_password():
-                            cred_to_use = c
-                            break
+                            ckey = (c.email.strip().lower(), c.get_password())
+                            if ckey not in seen_cred_keys:
+                                seen_cred_keys.add(ckey)
+                                available_creds.append(c)
 
-                    if cred_to_use:
+                    for cred_to_use in available_creds:
                         logger.info(
                             "Auth barrier detected on %s (expected %s). Attempting AI self-healing authentication as %s",
                             current_page_url, detected_expected_dest, cred_to_use.email,
@@ -601,6 +604,9 @@ class FlowRunner:
                                     "message": f"Detected auth wall on {detected_expected_dest or 'target'}. Authenticated with test credentials and successfully verified objective.",
                                 })
                                 await self._emit_events(ctx, event_recorder)
+                                break
+                        else:
+                            logger.info("Login as %s did not succeed: %s. Trying subsequent credentials if available.", cred_to_use.email, login_msg)
 
             if verification.passed:
                 ctx.record_event(EventTypes.VERIFICATION_PASSED, verification.to_dict())
