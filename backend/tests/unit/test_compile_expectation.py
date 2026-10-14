@@ -73,3 +73,22 @@ async def test_compile_expectation_heuristic_fallback():
     vacuous_cond = await compile_expectation("Do something", "main container is there", provider=None)
     assert is_vacuous_condition(vacuous_cond)
 
+
+@pytest.mark.asyncio
+async def test_compile_expectation_guards_hallucinated_account_and_css():
+    # Hallucinated CSS selector and /account URL should be guarded
+    provider = StubExpectationProvider({
+        "element_visible": {"css": "h1.account-title"},
+        "url_matches": "/account",
+    })
+    cond = await compile_expectation(
+        "Verify that User can sign up, log in, and view account page",
+        "Account page is displayed",
+        provider=provider,
+    )
+    # CSS selector should be replaced with text_visible and url_matches guarded with auth_verified
+    assert "element_visible" not in cond
+    assert "account-title" not in str(cond)
+    assert cond.get("auth_verified") == {"auth_path": "/login"}
+    assert not is_vacuous_condition(cond)
+

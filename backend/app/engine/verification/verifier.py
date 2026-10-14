@@ -241,6 +241,20 @@ async def compile_expectation(
                 if "account-title" in css_sel or (not page_context and ("." in css_sel or "#" in css_sel)):
                     condition["text_visible"] = "Account" if "account" in css_sel.lower() else "Dashboard"
                     del condition["element_visible"]
+
+            # Guard against hallucinated /account or /profile URL paths when unobserved
+            url_match = condition.get("url_matches")
+            if isinstance(url_match, str):
+                normalized_path = url_match.rstrip("/").lower()
+                if normalized_path in ("/account", "/profile", "/user/account", "/my-account") and not (
+                    page_context and url_match in str(page_context)
+                ):
+                    del condition["url_matches"]
+                    if any(
+                        kw in f"{objective} {expected_outcome}".lower()
+                        for kw in ["sign in", "login", "log in", "signup", "sign up", "account", "logged"]
+                    ):
+                        condition["auth_verified"] = {"auth_path": "/login"}
         except Exception as e:
             logger.warning("compile_expectation AI generation failed: %s", e)
             condition = {}
