@@ -2849,8 +2849,19 @@ class ExplorationEngine:
         }
 
     def _generate_recommendation(self, missions: list[DiscoveredMission]) -> str:
+        if getattr(self, "_ai_recommendation_reason", None):
+            return self._ai_recommendation_reason
         if self.goal:
             return f"I mapped this workflow specifically around your requested goal: '{self.goal}'."
+
+        recommended_missions = [m for m in missions if m.recommended]
+        if recommended_missions:
+            rec = recommended_missions[0]
+            feature_name = rec.title or rec.name
+            return (
+                f"I discovered {len(missions)} journeys and recommend '{feature_name}' "
+                f"to validate core application features and user workflows."
+            )
         if len(missions) >= 2:
             return f"I found {len(missions)} user journeys. The recommended journeys cover the primary user workflow."
         return "I found 1 primary user journey to get started."
