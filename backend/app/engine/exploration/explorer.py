@@ -417,40 +417,27 @@ class ExplorationEngine:
 
             # 4. Handle authentication if credentials provided
             if credential:
-                # If create_account is True, try to find and use signup page first
-                if create_account:
-                    await self._emit("progress", {
-                        "id": "exp-signup",
-                        "message": "Attempting to create account on signup page",
-                        "status": "active",
-                    })
+                auth_mode_label = "Creating account" if create_account else "Authenticating"
+                await self._emit("progress", {
+                    "id": "exp-auth-nav",
+                    "message": f"Locating {'registration' if create_account else 'sign-in'} view",
+                    "status": "active",
+                })
 
-                    # Look for signup link on the page
-                    signup_url = await self._find_signup_link(page)
-                    if signup_url:
-                        await self._emit("progress", {
-                            "id": "exp-signup",
-                            "message": f"Found signup page: {signup_url}",
-                            "status": "active",
-                        })
-                        # Navigate to signup page
-                        try:
-                            await page.goto(signup_url, wait_until="domcontentloaded")
-                            await asyncio.sleep(2)
-                        except Exception as e:
-                            logger.warning("Failed to navigate to signup page: %s", e)
-                    else:
-                        await self._emit("progress", {
-                            "id": "exp-signup",
-                            "message": "No signup link found, attempting login form as fallback",
-                            "status": "completed",
-                        })
+                # Ensure browser is positioned on the authentication form (navigating or opening modal if needed)
+                navigated_auth = await self._ensure_on_auth_form(page, is_signup=create_account)
+                if navigated_auth:
+                    await self._emit("progress", {
+                        "id": "exp-auth-nav",
+                        "message": f"Found {'registration' if create_account else 'sign-in'} view on {page.url}",
+                        "status": "completed",
+                    })
 
                 await self._emit("state_change", {"status": "AUTHENTICATING"})
                 await self._emit("authenticating", {})
                 await self._emit("progress", {
                     "id": "exp-auth-progress",
-                    "message": f"{'Creating account' if create_account else 'Authenticating'} as {credential.get('email')}",
+                    "message": f"{auth_mode_label} as {credential.get('email')}",
                     "status": "active",
                 })
 
@@ -1052,6 +1039,132 @@ class ExplorationEngine:
         except Exception as e:
             logger.warning("Error during login execution: %s", e)
             return False, f"Login execution error: {e}"
+
+    async def _has_visible_auth_inputs(self, page) -> bool:
+        """Returns True if email/username or password inputs are visible in page or frames."""
+        frames = [page]
+        try:
+            frames.extend(getattr(page, "frames", []))
+        except Exception:
+            pass
+
+        email_selector = (
+            'input[type="email"], '
+            'input[name="email" i], '
+            'input[name="username" i], '
+            'input[name="identifier" i], '
+            'input[name="login" i], '
+            'input[autocomplete="email" i], '
+            'input[autocomplete="username" i], '
+            '#email, #username, #identifier, '
+            'input[placeholder*="email" i], '
+            'input[placeholder*="username" i]'
+        )
+        password_selector = (
+            'input[type="password"], '
+            'input[name="password" i], '
+            'input[name="pass" i], '
+            '#password, #pass, '
+            'input[placeholder*="password" i]'
+        )
+
+        for scope in frames:
+            try:
+                el_email = scope.locator(email_selector).first
+                el_pwd = scope.locator(password_selector).first
+                if await el_pwd.is_visible(timeout=400) or await el_email.is_visible(timeout=400):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    async def _ensure_on_auth_form(self, page, is_signup: bool = False) -> bool:
+        """Ensures the browser is on the login or signup page/form before credential injection."""
+        # 1. Check if auth inputs are already visible
+        if await self._has_visible_auth_inputs(page):
+            # If on signin form but signup requested (or vice versa), check for toggle/switch link
+            toggle_selector = (
+                'a:has-text("Sign up"), button:has-text("Sign up"), a:has-text("Create an account"), a:has-text("Register")'
+                if is_signup else
+                'a:has-text("Sign in"), button:has-text("Sign in"), a:has-text("Log in"), button:has-text("Log in")'
+            )
+            try:
+                toggle_btn = page.locator(toggle_selector).first
+                if await toggle_btn.is_visible(timeout=500):
+                    await toggle_btn.click(timeout=1500)
+                    await asyncio.sleep(1.0)
+            except Exception:
+                pass
+            return True
+
+        # 2. Look for entrance link or button on current page
+        if is_signup:
+            selectors = [
+                'a:has-text("Sign up")', 'button:has-text("Sign up")',
+                'a:has-text("Create account")', 'button:has-text("Create account")',
+                'a:has-text("Create Account")', 'button:has-text("Create Account")',
+                'a:has-text("Get started")', 'button:has-text("Get started")',
+                'a:has-text("Get Started")', 'button:has-text("Get Started")',
+                'a:has-text("Register")', 'button:has-text("Register")',
+                'a:has-text("Join")', 'button:has-text("Join")',
+                'a[href*="signup" i]', 'a[href*="register" i]', 'a[href*="create-account" i]',
+            ]
+            fallback_paths = ["/auth/signup", "/signup", "/sign-up", "/register", "/auth/register"]
+        else:
+            selectors = [
+                'a:has-text("Sign in")', 'button:has-text("Sign in")',
+                'a:has-text("Sign In")', 'button:has-text("Sign In")',
+                'a:has-text("Log in")', 'button:has-text("Log in")',
+                'a:has-text("Log In")', 'button:has-text("Log In")',
+                'a:has-text("Login")', 'button:has-text("Login")',
+                'a:has-text("Account")', 'button:has-text("Account")',
+                'a[href*="signin" i]', 'a[href*="login" i]', 'a[href*="sign-in" i]', 'a[href*="log-in" i]',
+            ]
+            fallback_paths = ["/auth/signin", "/auth/login", "/login", "/signin", "/sign-in"]
+
+        for sel in selectors:
+            try:
+                el = page.locator(sel).first
+                if await el.is_visible(timeout=600):
+                    href = await el.get_attribute("href")
+                    if href and href.startswith("/"):
+                        parsed = urlparse(page.url)
+                        target = f"{parsed.scheme}://{parsed.netloc}{href}"
+                        await page.goto(target, wait_until="domcontentloaded", timeout=5000)
+                        await asyncio.sleep(1.0)
+                        if await self._has_visible_auth_inputs(page):
+                            return True
+                    elif href and href.startswith("http"):
+                        await page.goto(href, wait_until="domcontentloaded", timeout=5000)
+                        await asyncio.sleep(1.0)
+                        if await self._has_visible_auth_inputs(page):
+                            return True
+                    else:
+                        await el.click(timeout=1500)
+                        await asyncio.sleep(1.0)
+                        if await self._has_visible_auth_inputs(page):
+                            return True
+            except Exception:
+                continue
+
+        # 3. Direct probe of standard paths on the host
+        current_url = getattr(page, "url", "")
+        if current_url:
+            parsed = urlparse(current_url)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            for p in fallback_paths:
+                try:
+                    cand_url = f"{base}{p}"
+                    resp = await page.request.get(cand_url, timeout=2000, fail_on_status_code=False)
+                    if 200 <= resp.status < 400:
+                        await page.goto(cand_url, wait_until="domcontentloaded", timeout=4000)
+                        await asyncio.sleep(1.0)
+                        if await self._has_visible_auth_inputs(page):
+                            return True
+                except Exception:
+                    continue
+
+        return False
 
     async def _find_signup_link(self, page) -> str | None:
         """Looks for a signup/register link on the current page and returns its URL."""
