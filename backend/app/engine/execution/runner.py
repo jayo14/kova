@@ -370,6 +370,40 @@ class FlowRunner:
                     "verification": prerequisite_result.to_dict() if preconditions else None,
                     "events": ctx.events, "observations": ctx.observations,
                 }
+
+            # If flow has no pre-baked steps but has an objective, dynamically plan actions
+            if not flow_steps and objective:
+                from app.engine.ai.settings import ai_settings
+                if ai_settings.ai_enabled:
+                    try:
+                        from app.engine.ai.provider import get_ai_provider
+                        from app.engine.ai.reasoner import AgentReasoner
+                        from app.engine.ai.memory import AgentMemory
+                        ai_provider = get_ai_provider()
+                        if ai_provider:
+                            reasoner = AgentReasoner(ai_provider)
+                            memory = AgentMemory(objective=objective)
+                            interpretation = await reasoner.interpret_goal(objective)
+                            current_url = getattr(browser.page, "url", "")
+                            live_title = await browser.page.title() if browser.page else ""
+                            obs = {"url": current_url, "title": live_title, "interactive_elements": []}
+                            plan = await reasoner.plan_journey(memory, interpretation, obs, False)
+                            if plan and plan.steps:
+                                flow_steps = [
+                                    {
+                                        "type": s.action,
+                                        "target": s.target,
+                                        "value": s.value,
+                                        "description": s.description,
+                                    }
+                                    for s in plan.steps
+                                ]
+                                if not success_condition and plan.success_condition:
+                                    success_condition = plan.success_condition
+                                logger.info("Planned %d dynamic steps for objective '%s'", len(flow_steps), objective)
+                    except Exception as plan_err:
+                        logger.warning("Dynamic journey planning failed: %s", plan_err)
+
             for i, step in enumerate(flow_steps):
                 # Cancellation gate — checked at every step boundary
                 if await is_cancel_requested(exec_id):
