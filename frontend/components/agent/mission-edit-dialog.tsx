@@ -39,16 +39,35 @@ function MissionEditForm({ mission, onSave, onCancel }: MissionEditFormProps) {
     e.preventDefault();
     if (!title.trim()) return;
 
-    // NOTE: successCondition is intentionally NOT editable here. It is a
-    // structured, machine-verifiable object produced by deterministic journey
-    // synthesis. Letting users overwrite it with free text would break the
-    // verification contract (unknown conditions must fail closed, not pass).
+    const trimmedObjective = objective.trim();
+    const isObjectiveEdited =
+      trimmedObjective !== (mission.objective || mission.description || "").trim();
+    const isTitleEdited = title.trim() !== (mission.title || "").trim();
+
+    // If the objective or title was modified by the user, clear stale pre-baked route steps
+    // and stale success condition so the AI agent plans actions and compiles expectations
+    // specifically for the user's updated objective!
+    const updatedSteps = isObjectiveEdited || isTitleEdited ? [] : mission.steps;
+    const updatedSuccessCondition =
+      isObjectiveEdited || isTitleEdited ? undefined : mission.successCondition;
+    const updatedJourney =
+      isObjectiveEdited || isTitleEdited
+        ? [
+            `Open application`,
+            `Attempt objective: ${trimmedObjective}`,
+            "Verify application outcome",
+          ]
+        : mission.journey;
+
     onSave({
       ...mission,
       title: title.trim(),
-      objective: objective.trim(),
-      description: objective.trim() || mission.description,
+      objective: trimmedObjective,
+      description: trimmedObjective || mission.description,
       persona: persona.trim(),
+      steps: updatedSteps,
+      successCondition: updatedSuccessCondition,
+      journey: updatedJourney,
     });
 
     onCancel();
