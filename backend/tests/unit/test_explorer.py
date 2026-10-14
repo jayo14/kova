@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import uuid
+from urllib.parse import urlparse
 from app.engine.exploration.explorer import ExplorationEngine
 from app.modules.exploration.models import ExplorationStatus
 
@@ -287,4 +288,54 @@ async def test_explorer_element_journeys_complement_few_routes(monkeypatch):
     rec = next((m for m in missions if m.recommended), None)
     assert rec is not None
     assert "Settings" not in rec.name
+
+
+@pytest.mark.asyncio
+async def test_explorer_extract_page_links_identifies_buttons():
+    explorer = ExplorationEngine(exploration_id=uuid.uuid4(), url="https://quiza.example.com")
+
+    class MockPage:
+        async def evaluate(self, script):
+            return [
+                {"href": "/quizzes", "text": "Quizzes", "is_button": False},
+                {"href": "", "text": "Create New Quiz", "is_button": True, "tagName": "button"},
+            ]
+
+    links = await explorer._extract_page_links(MockPage(), urlparse("https://quiza.example.com"))
+    button_links = [l for l in links if l.get("is_button")]
+    assert len(button_links) == 1
+    btn = button_links[0]
+    assert btn["text"] == "Create New Quiz"
+    assert btn["path"] == "#action/create-new-quiz"
+    assert btn["selector"] == "button:has-text('Create New Quiz')"
+
+
+def test_explorer_build_feature_mission_handles_button_actions():
+    explorer = ExplorationEngine(exploration_id=uuid.uuid4(), url="https://quiza.example.com")
+    button_route = {
+        "path": "#action/upload-material",
+        "url": "https://quiza.example.com#action/upload-material",
+        "text": "Upload Material",
+        "is_button": True,
+        "selector": "button:has-text('Upload Material')",
+    }
+
+    mission = explorer._build_feature_mission(
+        route=button_route,
+        base_url="https://quiza.example.com",
+        persona="Creator",
+        title="Quiza AI",
+    )
+
+    assert "Upload Material" in mission.name
+    # Verify click step is generated for action button instead of pure navigation
+    click_step = next((s for s in mission.steps if s.get("type") == "click"), None)
+    assert click_step is not None
+    assert click_step["target"]["css"] == "button:has-text('Upload Material')"
+    # Verify journey description instructs clicking the action button
+    assert any("Click the 'Upload Material' action button" in j for j in mission.journey)
+    # Verify success condition verifies interactive interface rather than URL match
+    assert "element_count" in mission.successCondition
+    assert "url_matches" not in mission.successCondition
+
 
