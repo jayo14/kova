@@ -2574,35 +2574,53 @@ class ExplorationEngine:
             mission_title = f"Explore {feature_name}"
             objective = f"Reach the {feature_name} page and confirm it renders interactive content"
 
-        steps = [
-            {"type": "navigate", "url": route["url"]},
-            {"type": "wait", "value": "2000"},
-        ]
+        if route.get("is_button") and route.get("selector"):
+            steps = [
+                {"type": "navigate", "url": base_url},
+                {"type": "wait", "value": "1000"},
+                {"type": "click", "target": {"css": route["selector"]}},
+                {"type": "wait", "value": "2000"},
+            ]
+            journey_desc = [
+                f"Open {title or 'the application'}",
+                f"Click the '{feature_name}' action button",
+                f"Verify the {feature_name} interactive interface is displayed",
+            ]
+            success_condition = {
+                "element_count": {
+                    "selector": "[role='dialog'], [role='region'], modal, .modal, form, input, textarea, h1, h2, h3, button",
+                    "min": 1,
+                },
+            }
+        else:
+            steps = [
+                {"type": "navigate", "url": route["url"]},
+                {"type": "wait", "value": "2000"},
+            ]
+            journey_desc = [
+                f"Open {title or 'the application'}",
+                f"Navigate to '{feature_name}' ({path})",
+                f"Verify the {feature_name} page has loaded with content",
+            ]
+            success_condition = {
+                "url_matches": re.escape(path.rstrip("/")).replace("\\/", "/") or path,
+                "element_count": {"selector": "a[href], button", "min": 1},
+            }
 
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
             name=mission_title,
             title=mission_title,
             description=(
-                f"Navigate to the {feature_name} page and verify the destination "
-                f"actually loads with real content."
+                f"Activate '{feature_name}' and verify the destination "
+                f"interface loads with interactive content."
             ),
             objective=objective,
             persona=persona,
             category="feature",
-            journey=[
-                f"Open {title or 'the application'}",
-                f"Navigate to '{feature_name}' ({path})",
-                f"Verify the {feature_name} page has loaded with content",
-            ],
+            journey=journey_desc,
             steps=steps,
-            # Prove destination: URL matches the route's final segment and the
-            # page exposes at least one interactive element. This is an honest,
-            # bounded navigation check — not "any page is success".
-            successCondition={
-                "url_matches": re.escape(path.rstrip("/")).replace("\\/", "/") or path,
-                "element_count": {"selector": "a[href], button", "min": 1},
-            },
+            successCondition=success_condition,
             confidence=0.72,
             recommended=recommended,
             route_analysis=route,
