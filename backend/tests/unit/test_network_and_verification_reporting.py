@@ -154,14 +154,14 @@ async def test_verification_failure_details_and_event_type():
     exec_id = uuid.uuid4()
 
     mock_browser = AsyncMock()
-    mock_browser.page.url = "https://example.com/login"
+    mock_browser.page.url = "https://example.com/catalog"
     mock_browser.network_errors = []
 
     mock_check = VerificationCheck(
         type="url_matches",
         passed=False,
         expected="/dashboard",
-        actual="/login",
+        actual="/catalog",
         message="URL does not match",
     )
     mock_verifier = AsyncMock()
@@ -182,7 +182,7 @@ async def test_verification_failure_details_and_event_type():
 
         assert res["success"] is False
         assert "expected: '/dashboard'" in res["error"]
-        assert "got: '/login'" in res["error"]
+        assert "got: '/catalog'" in res["error"]
 
         # Check emitted event was verification.failed
         failed_events = [e for e in res["events"] if e.get("type") == "verification.failed"]
