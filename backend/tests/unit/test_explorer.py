@@ -5,6 +5,12 @@ from app.engine.exploration.explorer import ExplorationEngine
 from app.modules.exploration.models import ExplorationStatus
 
 
+@pytest.fixture(autouse=True)
+def mock_explorer_ai_provider(monkeypatch):
+    """Ensure unit tests in test_explorer test deterministic behavior without external network calls."""
+    monkeypatch.setattr("app.engine.exploration.explorer.get_ai_provider", lambda: None)
+
+
 @pytest.mark.asyncio
 async def test_explorer_detect_roles():
     explorer = ExplorationEngine(
