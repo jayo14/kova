@@ -27,6 +27,8 @@ from app.modules.exploration.schemas import (
     DiscoveredMission,
     DiscoveryItem,
 )
+from app.engine.ai.provider import get_ai_provider
+from app.engine.ai.reasoner import AgentReasoner
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,7 @@ class ExplorationEngine:
         self._is_cancelled = False
         self._visited_urls: set[str] = set()
         self._bg_tasks: set[asyncio.Task] = set()
+        self._ai_recommendation_reason: str | None = None
 
     def _spawn_bg(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -895,6 +898,22 @@ class ExplorationEngine:
             if navigated:
                 name_input, email_input, password_input, active_scope = await _find_inputs()
 
+        # Semantic AI fallback if heuristic selectors failed to locate inputs
+        if not email_input or not password_input:
+            try:
+                from app.engine.browser.auth import find_auth_inputs_semantically
+                ai_prov = get_ai_provider()
+                s_name, s_email, s_pwd, s_scope = await find_auth_inputs_semantically(
+                    page, provider=ai_prov, is_signup=is_signup
+                )
+                if s_email or s_pwd:
+                    name_input = name_input or s_name
+                    email_input = email_input or s_email
+                    password_input = password_input or s_pwd
+                    active_scope = s_scope or active_scope
+            except Exception as e:
+                logger.debug("Explorer semantic auth fallback error: %s", e)
+
         # Multi-step authentication: email entered on step 1, password appears on step 2
         if email_input and not password_input:
             try:
@@ -908,6 +927,15 @@ class ExplorationEngine:
                     await submit_btn.click(timeout=2000)
                     await asyncio.sleep(1.0)
                     name_input, email_input, password_input, active_scope = await _find_inputs()
+                    if not password_input:
+                        try:
+                            from app.engine.browser.auth import find_auth_inputs_semantically
+                            ai_prov = get_ai_provider()
+                            _, _, password_input, active_scope = await find_auth_inputs_semantically(
+                                page, provider=ai_prov, is_signup=is_signup
+                            )
+                        except Exception:
+                            pass
             except Exception as ex:
                 logger.debug("Multi-step email submit attempt: %s", ex)
 
@@ -1155,6 +1183,10 @@ class ExplorationEngine:
                 'a:has-text("Create Account")', 'button:has-text("Create Account")',
                 'a:has-text("Get started")', 'button:has-text("Get started")',
                 'a:has-text("Get Started")', 'button:has-text("Get Started")',
+                'a:has-text("Start Learning")', 'button:has-text("Start Learning")',
+                'a:has-text("Start learning")', 'button:has-text("Start learning")',
+                'a:has-text("Start Free")', 'button:has-text("Start Free")',
+                'a:has-text("Try for Free")', 'button:has-text("Try for Free")',
                 'a:has-text("Register")', 'button:has-text("Register")',
                 'a:has-text("Join")', 'button:has-text("Join")',
                 'a[href*="signup" i]', 'a[href*="register" i]', 'a[href*="create-account" i]',

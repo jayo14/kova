@@ -190,6 +190,8 @@ async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
             'a:has-text("Create Account")', 'button:has-text("Create Account")',
             'a:has-text("Get started")', 'button:has-text("Get started")',
             'a:has-text("Get Started")', 'button:has-text("Get Started")',
+            'a:has-text("Start Learning")', 'button:has-text("Start Learning")',
+            'a:has-text("Start learning")', 'button:has-text("Start learning")',
             'a:has-text("Register")', 'button:has-text("Register")',
             'a:has-text("Join")', 'button:has-text("Join")',
             'a[href*="signup" i]', 'a[href*="register" i]', 'a[href*="create-account" i]',
@@ -237,12 +239,125 @@ async def open_auth_view_if_needed(page: Any, is_signup: bool = False) -> bool:
     return False
 
 
+async def find_auth_inputs_semantically(
+    page: Any,
+    provider: Any = None,
+    is_signup: bool = False,
+) -> tuple[Any | None, Any | None, Any | None, Any]:
+    """Inspects the page for visible input/button elements and uses AI or semantic heuristics to find fields."""
+    frames = [page]
+    try:
+        page_frames = getattr(page, "frames", [])
+        for f in page_frames:
+            if f not in frames:
+                frames.append(f)
+    except Exception:
+        pass
+
+    extract_script = """
+    () => {
+        const candidates = [];
+        const selector = 'input, textarea, [contenteditable="true"], [role="textbox"], button, [role="button"]';
+        const elements = document.querySelectorAll(selector);
+        let idx = 0;
+        for (const el of elements) {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+            if (rect.width <= 0 || rect.height <= 0) continue;
+
+            let labelText = '';
+            if (el.id) {
+                const lbl = document.querySelector(`label[for="${el.id}"]`);
+                if (lbl) labelText = lbl.innerText.trim();
+            }
+            if (!labelText && el.closest('label')) {
+                labelText = el.closest('label').innerText.trim();
+            }
+            if (!labelText && el.previousElementSibling && ['LABEL', 'SPAN', 'P'].includes(el.previousElementSibling.tagName)) {
+                labelText = el.previousElementSibling.innerText.trim();
+            }
+
+            el.setAttribute('data-kova-auth-candidate', String(idx));
+            candidates.push({
+                index: idx,
+                tagName: el.tagName.toLowerCase(),
+                type: el.getAttribute('type') || '',
+                name: el.getAttribute('name') || '',
+                id: el.getAttribute('id') || '',
+                placeholder: el.getAttribute('placeholder') || '',
+                ariaLabel: el.getAttribute('aria-label') || '',
+                labelText: labelText.slice(0, 80),
+                role: el.getAttribute('role') || '',
+                text: (el.innerText || el.value || '').trim().slice(0, 80),
+            });
+            idx++;
+            if (candidates.length >= 30) break;
+        }
+        return candidates;
+    }
+    """
+
+    for scope in frames:
+        try:
+            candidates = await scope.evaluate(extract_script)
+            if not candidates:
+                continue
+
+            # Try AI provider if available
+            ai_prov = provider
+            if ai_prov is None:
+                try:
+                    from app.engine.ai.provider import get_ai_provider
+                    ai_prov = get_ai_provider()
+                except Exception:
+                    ai_prov = None
+
+            result = None
+            if ai_prov:
+                try:
+                    from app.engine.ai.reasoner import AgentReasoner
+                    reasoner = AgentReasoner(ai_prov)
+                    current_url = getattr(page, "url", "")
+                    result = await reasoner.identify_auth_elements(current_url, candidates, is_signup=is_signup)
+                except Exception as ex:
+                    logger.debug("AI reasoner auth input identification error: %s", ex)
+
+            email_idx = result.email_or_user_index if result else None
+            pwd_idx = result.password_index if result else None
+            name_idx = result.name_index if result else None
+
+            # Resilient fallback if AI is unavailable or didn't match
+            if email_idx is None or pwd_idx is None:
+                for c in candidates:
+                    idx = c["index"]
+                    text_blob = f"{c['type']} {c['name']} {c['id']} {c['placeholder']} {c['ariaLabel']} {c['labelText']}".lower()
+                    if pwd_idx is None and ("password" in text_blob or "pass" in text_blob):
+                        pwd_idx = idx
+                    elif email_idx is None and any(k in text_blob for k in ["email", "user", "identifier", "login", "phone", "account"]):
+                        email_idx = idx
+                    elif name_idx is None and is_signup and any(k in text_blob for k in ["fullname", "full_name", "first name", "name"]):
+                        name_idx = idx
+
+            email_loc = scope.locator(f'[data-kova-auth-candidate="{email_idx}"]').first if email_idx is not None else None
+            pwd_loc = scope.locator(f'[data-kova-auth-candidate="{pwd_idx}"]').first if pwd_idx is not None else None
+            name_loc = scope.locator(f'[data-kova-auth-candidate="{name_idx}"]').first if name_idx is not None else None
+
+            if email_loc or pwd_loc:
+                return name_loc, email_loc, pwd_loc, scope
+        except Exception as e:
+            logger.debug("Semantic auth input extraction failed in scope: %s", e)
+
+    return None, None, None, page
+
+
 async def perform_login(
     page: Any,
     email: str,
     password: str,
     name: str | None = None,
     is_signup: bool = False,
+    provider: Any = None,
 ) -> tuple[bool, str]:
     """Fill login or registration form, submit credentials, and wait for session.
 
@@ -263,6 +378,17 @@ async def perform_login(
         if opened:
             name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
 
+    # Semantic AI fallback if heuristic selectors failed to locate input fields
+    if not email_input or not password_input:
+        s_name, s_email, s_pwd, s_scope = await find_auth_inputs_semantically(
+            page, provider=provider, is_signup=is_signup
+        )
+        if s_email or s_pwd:
+            name_input = name_input or s_name
+            email_input = email_input or s_email
+            password_input = password_input or s_pwd
+            active_scope = s_scope or active_scope
+
     # Multi-step authentication: email entered on step 1, password appears on step 2
     if email_input and not password_input:
         try:
@@ -276,6 +402,10 @@ async def perform_login(
                 await next_btn.click(timeout=2000)
                 await asyncio.sleep(1.0)
                 _, _, password_input, active_scope = await find_auth_inputs_across_frames(page)
+                if not password_input:
+                    _, _, password_input, active_scope = await find_auth_inputs_semantically(
+                        page, provider=provider, is_signup=is_signup
+                    )
         except Exception as ex:
             logger.debug("Multi-step email submit attempt: %s", ex)
 
@@ -306,7 +436,8 @@ async def perform_login(
 
         # Focus and fill password (handles repeat password / confirm password if present)
         try:
-            pwd_locs = await page.locator(password_selector).all()
+            target_scope = active_scope or page
+            pwd_locs = await target_scope.locator('input[type="password"], input[name*="pass" i]').all()
             for p_loc in pwd_locs:
                 try:
                     if await p_loc.is_visible(timeout=500):
@@ -318,14 +449,15 @@ async def perform_login(
                 except Exception:
                     pass
         except Exception:
-            await password_input.focus()
-            await password_input.fill(password)
-            try:
-                await password_input.evaluate(
-                    "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-                )
-            except Exception:
-                pass
+            if password_input:
+                await password_input.focus()
+                await password_input.fill(password)
+                try:
+                    await password_input.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                    )
+                except Exception:
+                    pass
 
         # Agree to terms if checkbox exists
         terms_selector = (
