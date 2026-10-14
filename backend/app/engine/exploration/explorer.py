@@ -857,7 +857,7 @@ class ExplorationEngine:
             for scope in frames:
                 try:
                     loc = scope.locator(email_selector).first
-                    if await loc.is_visible(timeout=600):
+                    if await loc.is_visible(timeout=1000):
                         found_email = loc
                         found_scope = scope
                 except Exception:
@@ -865,7 +865,7 @@ class ExplorationEngine:
 
                 try:
                     loc = scope.locator(password_selector).first
-                    if await loc.is_visible(timeout=600):
+                    if await loc.is_visible(timeout=1000):
                         found_pwd = loc
                         found_scope = scope
                 except Exception:
@@ -874,7 +874,7 @@ class ExplorationEngine:
                 if not found_email:
                     try:
                         loc = scope.locator(fallback_email_selector).first
-                        if await loc.is_visible(timeout=400):
+                        if await loc.is_visible(timeout=600):
                             found_email = loc
                             found_scope = scope
                     except Exception:
@@ -1160,10 +1160,10 @@ class ExplorationEngine:
             try:
                 el_email = scope.locator(email_selector).first
                 el_pwd = scope.locator(password_selector).first
-                if await el_pwd.is_visible(timeout=400) or await el_email.is_visible(timeout=400):
+                if await el_pwd.is_visible(timeout=800) or await el_email.is_visible(timeout=800):
                     return True
                 any_pwd = scope.locator('input[type="password"], input[name*="pass" i]').first
-                if await any_pwd.is_visible(timeout=300):
+                if await any_pwd.is_visible(timeout=600):
                     return True
             except Exception:
                 continue
