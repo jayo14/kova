@@ -22,6 +22,7 @@ from app.engine.ai.schemas import (
     ActionProposal,
     AIGeneratedJourney,
     AIGeneratedJourneyList,
+    AuthFormSemanticResult,
     GoalInterpretation,
     JourneyPlan,
     ProposedStep,
@@ -306,6 +307,49 @@ class AgentReasoner:
             )
         except AIProviderError as e:
             logger.warning("AI journey synthesis failed: %s", e)
+            return None
+
+    # ── Semantic Form Field Identification Fallback ─────────────────
+
+    async def identify_auth_elements(
+        self,
+        current_url: str,
+        candidates: list[dict],
+        is_signup: bool = False,
+    ) -> AuthFormSemanticResult | None:
+        """Semantically identify email, password, and submit inputs from non-standard candidate elements."""
+        if not self.provider or not candidates:
+            return None
+
+        flow_type = "Sign up / Account Creation" if is_signup else "Sign in / Log in"
+        system = (
+            "You are an expert browser automation element identifier. "
+            "Given candidate interactive elements from a web page where heuristic CSS selectors failed, "
+            "identify the candidate element indices corresponding to the authentication form fields.\n\n"
+            "Identify:\n"
+            "1. email_or_user_index: Candidate index for the email, username, phone, or identifier input.\n"
+            "2. password_index: Candidate index for the password input (or null if multi-step step 1).\n"
+            "3. submit_index: Candidate index for the primary submit or continue button.\n"
+            "4. name_index: Candidate index for the user's full name or display name input (if registration).\n"
+            "5. is_multi_step: True if this page currently only requests the identifier/email before password is shown.\n\n"
+            "Respond ONLY with valid JSON matching the AuthFormSemanticResult schema."
+        )
+
+        user_prompt = (
+            f"Action: {flow_type}\n"
+            f"Current URL: {current_url}\n"
+            f"Candidate Elements:\n{json.dumps(candidates[:30], indent=1)}"
+        )
+
+        try:
+            return await self.provider.generate_structured(
+                system, user_prompt, AuthFormSemanticResult
+            )
+        except AIProviderError as e:
+            logger.warning("AI provider failed to semantically identify auth inputs: %s", e)
+            return None
+        except Exception as e:
+            logger.warning("Unexpected error during semantic auth identification: %s", e)
             return None
 
     # ── Phase 7/8: Next-action proposal (the agent loop's brain) ────

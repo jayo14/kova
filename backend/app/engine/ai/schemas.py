@@ -190,3 +190,31 @@ class AIGeneratedJourneyList(BaseModel):
         description="Editorial explanation of why the recommended journeys were selected",
     )
 
+
+class AuthFormSemanticResult(BaseModel):
+    """Semantic identification of authentication elements on arbitrary or non-standard DOMs."""
+
+    email_or_user_index: int | None = Field(
+        default=None,
+        description="Index of candidate element corresponding to email, username, or identifier input",
+    )
+    password_index: int | None = Field(
+        default=None,
+        description="Index of candidate element corresponding to password input",
+    )
+    submit_index: int | None = Field(
+        default=None,
+        description="Index of candidate element corresponding to form submit, continue, or action button",
+    )
+    name_index: int | None = Field(
+        default=None,
+        description="Index of candidate element corresponding to full name or display name input (if registration)",
+    )
+    is_multi_step: bool = Field(
+        default=False,
+        description="True if the form only asks for email/username on current step before revealing password",
+    )
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    reasoning: str = ""
+
+
