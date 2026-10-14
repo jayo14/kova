@@ -1132,18 +1132,28 @@ class ExplorationEngine:
             'input[name="username" i], '
             'input[name="identifier" i], '
             'input[name="login" i], '
+            'input[name="user" i], '
             'input[autocomplete="email" i], '
             'input[autocomplete="username" i], '
             '#email, #username, #identifier, '
             'input[placeholder*="email" i], '
-            'input[placeholder*="username" i]'
+            'input[placeholder*="username" i], '
+            'input[aria-label*="email" i], '
+            'input[aria-label*="username" i], '
+            'input[data-testid*="email" i], '
+            'input[data-testid*="username" i]'
         )
         password_selector = (
             'input[type="password"], '
             'input[name="password" i], '
             'input[name="pass" i], '
+            'input[name*="password" i], '
+            'input[autocomplete*="password" i], '
             '#password, #pass, '
-            'input[placeholder*="password" i]'
+            'input[id*="pass" i], '
+            'input[placeholder*="password" i], '
+            'input[aria-label*="password" i], '
+            'input[data-testid*="password" i]'
         )
 
         for scope in frames:
@@ -1151,6 +1161,9 @@ class ExplorationEngine:
                 el_email = scope.locator(email_selector).first
                 el_pwd = scope.locator(password_selector).first
                 if await el_pwd.is_visible(timeout=400) or await el_email.is_visible(timeout=400):
+                    return True
+                any_pwd = scope.locator('input[type="password"], input[name*="pass" i]').first
+                if await any_pwd.is_visible(timeout=300):
                     return True
             except Exception:
                 continue

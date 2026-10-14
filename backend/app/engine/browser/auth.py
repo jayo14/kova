@@ -257,8 +257,10 @@ async def find_auth_inputs_semantically(
     extract_script = """
     () => {
         const candidates = [];
-        const selector = 'input, textarea, [contenteditable="true"], [role="textbox"], button, [role="button"]';
-        const elements = document.querySelectorAll(selector);
+        // Extract form inputs and editable textboxes before generic buttons to prevent navbar starvation
+        const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]), textarea, [contenteditable="true"], [role="textbox"]'));
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"], input[type="submit"]'));
+        const elements = [...inputs, ...buttons];
         let idx = 0;
         for (const el of elements) {
             const rect = el.getBoundingClientRect();
@@ -287,12 +289,12 @@ async def find_auth_inputs_semantically(
                 id: el.getAttribute('id') || '',
                 placeholder: el.getAttribute('placeholder') || '',
                 ariaLabel: el.getAttribute('aria-label') || '',
-                labelText: labelText.slice(0, 80),
+                labelText: labelText.slice(0, 100),
                 role: el.getAttribute('role') || '',
-                text: (el.innerText || el.value || '').trim().slice(0, 80),
+                text: (el.innerText || el.value || '').trim().slice(0, 100),
             });
             idx++;
-            if (candidates.length >= 30) break;
+            if (candidates.length >= 60) break;
         }
         return candidates;
     }
@@ -329,15 +331,36 @@ async def find_auth_inputs_semantically(
 
             # Resilient fallback if AI is unavailable or didn't match
             if email_idx is None or pwd_idx is None:
+                # Pass 1: standard keyword search in candidate metadata
                 for c in candidates:
                     idx = c["index"]
+                    if c["tagName"] == "button" and c.get("type") != "submit":
+                        continue
                     text_blob = f"{c['type']} {c['name']} {c['id']} {c['placeholder']} {c['ariaLabel']} {c['labelText']}".lower()
-                    if pwd_idx is None and ("password" in text_blob or "pass" in text_blob):
+                    if pwd_idx is None and ("password" in text_blob or "pass" in text_blob or c["type"] == "password"):
                         pwd_idx = idx
                     elif email_idx is None and any(k in text_blob for k in ["email", "user", "identifier", "login", "phone", "account"]):
                         email_idx = idx
                     elif name_idx is None and is_signup and any(k in text_blob for k in ["fullname", "full_name", "first name", "name"]):
                         name_idx = idx
+
+                # Pass 2: structural pairing (if password field identified, preceding text input is identifier)
+                if pwd_idx is not None and email_idx is None:
+                    for c in candidates:
+                        if c["index"] < pwd_idx and c["tagName"] in ("input", "textarea") and c.get("type") not in ("password", "hidden", "checkbox", "radio", "submit"):
+                            email_idx = c["index"]
+                            break
+
+                # Pass 3: layout pairing (if exactly two non-button inputs exist on page/form, input 0 is email, input 1 is password)
+                if email_idx is None or pwd_idx is None:
+                    text_inputs = [c for c in candidates if c["tagName"] in ("input", "textarea") and c.get("type") not in ("hidden", "checkbox", "radio", "submit")]
+                    if len(text_inputs) >= 2:
+                        if email_idx is None:
+                            email_idx = text_inputs[0]["index"]
+                        if pwd_idx is None and text_inputs[1]["index"] != email_idx:
+                            pwd_idx = text_inputs[1]["index"]
+                    elif len(text_inputs) == 1 and email_idx is None:
+                        email_idx = text_inputs[0]["index"]
 
             email_loc = scope.locator(f'[data-kova-auth-candidate="{email_idx}"]').first if email_idx is not None else None
             pwd_loc = scope.locator(f'[data-kova-auth-candidate="{pwd_idx}"]').first if pwd_idx is not None else None
