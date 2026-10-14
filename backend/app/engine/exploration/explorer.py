@@ -1867,9 +1867,9 @@ class ExplorationEngine:
         ai_provider = get_ai_provider()
         ai_reasoner = AgentReasoner(ai_provider) if ai_provider else None
 
-        if ai_reasoner and route_map and mission_count < max_missions:
+        if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
-                page_text = " ".join([el.get("name", "") for el in interactive_elements[:15]])
+                page_text = " ".join([el.get("name", "") for el in interactive_elements[:30] if el.get("name")])
                 ai_journeys_result = await asyncio.wait_for(
                     ai_reasoner.synthesize_journeys(
                         base_url=current_url,
@@ -1888,8 +1888,8 @@ class ExplorationEngine:
                     has_recommended = any(m.recommended for m in missions)
                     for j in ai_journeys_result.journeys:
                         is_rec = j.recommended and not has_recommended
-                        # Never recommend an auth journey if there are other feature journeys
-                        if is_rec and j.category == "auth" and len(ai_journeys_result.journeys) > 1:
+                        # Never recommend an auth or settings journey if there are other feature journeys
+                        if is_rec and j.category in ("auth", "settings") and len(ai_journeys_result.journeys) > 1:
                             is_rec = False
                         if is_rec:
                             has_recommended = True
@@ -1914,8 +1914,9 @@ class ExplorationEngine:
                             )
                         )
                     if not has_recommended and missions:
-                        first_non_auth = next((m for m in missions if m.category != "auth"), missions[0])
-                        first_non_auth.recommended = True
+                        first_core_feature = next((m for m in missions if m.category not in ("auth", "settings")), None)
+                        target = first_core_feature or next((m for m in missions if m.category != "auth"), missions[0])
+                        target.recommended = True
                     mission_count = len(missions)
             except asyncio.TimeoutError:
                 logger.warning("AI journey synthesis timed out after 25s, falling back to heuristics")
