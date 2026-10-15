@@ -543,6 +543,19 @@ class ExplorationEngine:
             })
             # Ensure missions and discoveries are processed before ready state_change
             await asyncio.sleep(0.05)
+
+            # Run structured DiscoveryPipeline to capture Product Graph entities
+            discovery_result = None
+            try:
+                from app.engine.exploration.discovery.pipeline import DiscoveryPipeline
+                disc_pipeline = DiscoveryPipeline(
+                    project_id=self.exploration_id,
+                    base_url=self.url,
+                )
+                discovery_result = await disc_pipeline.discover(page)
+            except Exception as disc_err:
+                logger.warning("Discovery pipeline run in explorer encountered: %s", disc_err)
+
             await self._emit("state_change", {"status": "READY"})
             await self._emit("ready", {})
 
@@ -551,6 +564,7 @@ class ExplorationEngine:
                 "status": ExplorationStatus.READY,
                 "discoveries": [d.model_dump() for d in discoveries],
                 "candidate_missions": [m.model_dump() for m in missions],
+                "discovery_result": discovery_result.model_dump(mode="json") if discovery_result else None,
             }
 
         finally:

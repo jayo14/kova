@@ -104,6 +104,20 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    DISCOVERY_MAX_DEPTH: int = 3
+    DISCOVERY_MAX_PAGES: int = 50
+
+    @field_validator("DISCOVERY_MAX_DEPTH", mode="before")
+    @classmethod
+    def cap_discovery_depth(cls, v: Any) -> int:
+        val = int(v) if v is not None else 3
+        return min(max(val, 1), 5)
+
+    @field_validator("DISCOVERY_MAX_PAGES", mode="before")
+    @classmethod
+    def cap_discovery_pages(cls, v: Any) -> int:
+        val = int(v) if v is not None else 50
+        return min(max(val, 1), 200)
 
     @property
     def is_production(self) -> bool:

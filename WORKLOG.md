@@ -76,5 +76,24 @@
     - `GET /api/v1/projects/{project_id}/product-graph/diff?from=v1&to=v2`
   - Created unit tests `backend/tests/unit/test_product_graph_schemas.py` and integration tests `backend/tests/integration/test_product_graph_db.py`.
 - **Tests Passing:**
-  - `pytest backend/tests/unit/test_product_graph_schemas.py backend/tests/integration/test_product_graph_db.py -v` (15 passed)
   - `pytest backend/tests/integration/test_flow_db.py backend/tests/integration/test_project_db.py backend/tests/unit/test_continuous_validation.py backend/tests/unit/test_flow_dependencies.py -v` (33 passed)
+
+## Chunk 06 — Modular multi-stage product discovery pipeline
+- **Status:** Done
+- **Changes:**
+  - Refactored monolithic exploration engine into modular multi-stage `DiscoveryPipeline` subpackage under `backend/app/engine/exploration/discovery/`:
+    - `crawler.py`: BFS crawler with path parameterization (`/courses/101` -> `/courses/:id`), budget controls (`max_depth`, `max_pages`), and SSRF protection (`_is_safe_url`).
+    - `auth_detector.py`: Auth boundary mapping leveraging Chunk 02's `observe_auth_signals` and `classify_auth_page`.
+    - `persona_detector.py`: Multi-role persona detection from role switchers, dropdowns, and route prefixes.
+    - `capability_extractor.py`: Interactive action extraction (buttons, forms, links) with DOM selectors and heuristic/state mutation grouping.
+    - `invariant_inferrer.py`: Deterministic invariant generation for auth boundaries, state mutations, and destructive actions.
+    - `ai_assistant.py`: Bounded AI pattern assistance for ambiguous UI patterns, with confidence capped at `<= 0.9` and `source="ai_assistant"`.
+    - `pipeline.py`: Pipeline orchestrator supporting full discovery and incremental rediscovery (`rediscover()`).
+  - Added discovery settings `DISCOVERY_MAX_DEPTH` (default 3, max 5) and `DISCOVERY_MAX_PAGES` (default 50, max 200) to `backend/app/config/settings.py`.
+  - Added `confidence` and `source` attribution across entity schemas and `AIProposal` in `backend/app/modules/product_graph/schemas.py`.
+  - Integrated `DiscoveryPipeline` into `ExplorationEngine` and `ExplorationService`, firing `product_graph.updated` WebSocket events upon discovery completion.
+  - Updated `ProductGraphService.upsert_from_discovery` to preserve discovered entity IDs and map page IDs to prevent foreign key constraint violations.
+  - Added unit test suite `backend/tests/unit/test_discovery_pipeline.py` and end-to-end integration test `backend/tests/e2e/test_exploration_flow.py::test_discovery_pipeline_to_product_graph_e2e`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_explorer.py backend/tests/unit/test_discovery_pipeline.py backend/tests/e2e/test_exploration_flow.py -v` (26 passed)
+

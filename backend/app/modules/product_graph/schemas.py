@@ -30,7 +30,8 @@ class Goal(BaseModel):
     description: str | None = None
     persona_id: uuid.UUID | None = None
     success_criteria: list[StateAssertion] = Field(default_factory=list)
-    source: Literal["user_provided", "discovered", "inferred"] = "discovered"
+    source: Literal["user_provided", "discovered", "inferred", "ai_proposal"] = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -45,6 +46,8 @@ class Persona(BaseModel):
     description: str | None = None
     credentials_required: bool = False
     default_capabilities: list[str] = Field(default_factory=list)
+    source: str = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -60,6 +63,8 @@ class Page(BaseModel):
     requires_auth: bool = False
     required_state: list[StateAssertion] = Field(default_factory=list)
     source_files: list[str] = Field(default_factory=list)
+    source: str = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -83,6 +88,8 @@ class Action(BaseModel):
     action_type: Literal["click", "input", "select", "upload", "scroll", "submit"] = "click"
     expected_effect: list[StateAssertion] = Field(default_factory=list)
     mutates: list[str] = Field(default_factory=list)
+    source: str = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -103,6 +110,8 @@ class Capability(BaseModel):
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     provider_flow_ids: list[str] = Field(default_factory=list)
     user_edited: bool = False
+    source: str = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -163,6 +172,8 @@ class Invariant(BaseModel):
     assertion: StateAssertion
     checked_by_flow_ids: list[str] = Field(default_factory=list)
     violated_count: int = 0
+    source: str = "discovered"
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -215,5 +226,38 @@ class DiscoveryResult(BaseModel):
     capabilities: list[Capability] = Field(default_factory=list)
     states: list[State] = Field(default_factory=list)
     invariants: list[Invariant] = Field(default_factory=list)
+    coverage_map: dict[str, str] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    ai_proposals: list[AIProposal] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="ignore")
+
+    @property
+    def review_required(self) -> list[dict[str, Any]]:
+        """Return any discovered entities where confidence is below 0.7."""
+        items = []
+        for p in self.pages:
+            if p.confidence < 0.7:
+                items.append({"entity_type": "page", "id": str(p.id), "name": p.url_pattern, "confidence": p.confidence, "source": p.source})
+        for a in self.actions:
+            if a.confidence < 0.7:
+                items.append({"entity_type": "action", "id": str(a.id), "name": a.name, "confidence": a.confidence, "source": a.source})
+        for c in self.capabilities:
+            if c.confidence < 0.7:
+                items.append({"entity_type": "capability", "id": str(c.id), "name": c.name, "confidence": c.confidence, "source": c.source})
+        for i in self.invariants:
+            if i.confidence < 0.7:
+                items.append({"entity_type": "invariant", "id": str(i.id), "name": i.name, "confidence": i.confidence, "source": i.source})
+        for g in self.goals:
+            if g.confidence < 0.7:
+                items.append({"entity_type": "goal", "id": str(g.id), "name": g.name, "confidence": g.confidence, "source": g.source})
+        return items
+
+
+class AIProposal(BaseModel):
+    stage: str
+    input_summary: str
+    output_summary: str
+    accepted: bool = True
+    reasoning: str | None = None
+    confidence: float = Field(default=0.8, le=0.9)

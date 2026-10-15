@@ -118,6 +118,7 @@ class ProductGraphService:
             else:
                 await self.repo.create_persona(
                     project_id=project_id,
+                    persona_id=uuid.UUID(str(p_data["id"])) if p_data.get("id") else None,
                     name=p_data["name"],
                     description=p_data.get("description"),
                     credentials_required=p_data.get("credentials_required", False),
@@ -141,6 +142,7 @@ class ProductGraphService:
             else:
                 await self.repo.create_goal(
                     project_id=project_id,
+                    goal_id=uuid.UUID(str(g_data["id"])) if g_data.get("id") else None,
                     name=g_data["name"],
                     description=g_data.get("description"),
                     persona_id=g_data.get("persona_id"),
@@ -149,10 +151,14 @@ class ProductGraphService:
                 )
 
         # 3. Pages
+        page_id_map: dict[uuid.UUID, uuid.UUID] = {}
         for page in discovery_result.pages:
             pg_data = _dump_model(page)
+            orig_id = uuid.UUID(str(pg_data["id"])) if pg_data.get("id") else None
             existing = await self.repo.get_page_by_url_pattern(project_id, pg_data["url_pattern"])
             if existing:
+                if orig_id:
+                    page_id_map[orig_id] = existing.id
                 merged_files = list(set((existing.source_files or []) + (pg_data.get("source_files") or [])))
                 await self.repo.update_page(
                     existing.id,
@@ -161,8 +167,12 @@ class ProductGraphService:
                     last_seen_at=datetime.now(timezone.utc),
                 )
             else:
+                new_page_id = orig_id or uuid.uuid4()
+                if orig_id:
+                    page_id_map[orig_id] = new_page_id
                 await self.repo.create_page(
                     project_id=project_id,
+                    page_id=new_page_id,
                     url_pattern=pg_data["url_pattern"],
                     title=pg_data.get("title"),
                     requires_auth=pg_data.get("requires_auth", False),
@@ -173,7 +183,12 @@ class ProductGraphService:
         # 4. Actions
         for action in discovery_result.actions:
             act_data = _dump_model(action)
-            existing_actions = await self.repo.list_actions_by_page(uuid.UUID(str(act_data["page_id"])))
+            orig_page_id = uuid.UUID(str(act_data["page_id"]))
+            target_page_id = page_id_map.get(orig_page_id, orig_page_id)
+            target_page = await self.repo.get_page(target_page_id)
+            if not target_page:
+                continue
+            existing_actions = await self.repo.list_actions_by_page(target_page_id)
             existing = next(
                 (a for a in existing_actions if a.selector == act_data["selector"] and a.action_type == act_data["action_type"]),
                 None,
@@ -188,7 +203,8 @@ class ProductGraphService:
             else:
                 await self.repo.create_action(
                     project_id=project_id,
-                    page_id=uuid.UUID(str(act_data["page_id"])),
+                    action_id=uuid.UUID(str(act_data["id"])) if act_data.get("id") else None,
+                    page_id=target_page_id,
                     name=act_data["name"],
                     selector=act_data["selector"],
                     action_type=act_data.get("action_type", "click"),
@@ -221,6 +237,7 @@ class ProductGraphService:
             else:
                 await self.repo.create_capability(
                     project_id=project_id,
+                    capability_id=uuid.UUID(str(c_data["id"])) if c_data.get("id") else None,
                     name=c_data["name"],
                     description=c_data.get("description"),
                     requires_capabilities=c_data.get("requires_capabilities", []),
@@ -239,6 +256,7 @@ class ProductGraphService:
             if not existing:
                 await self.repo.create_state(
                     project_id=project_id,
+                    state_id=uuid.UUID(str(s_data["id"])) if s_data.get("id") else None,
                     key=s_data["key"],
                     value_type=s_data.get("value_type", "bool"),
                     default_value=s_data.get("default_value"),
@@ -260,6 +278,7 @@ class ProductGraphService:
             else:
                 await self.repo.create_invariant(
                     project_id=project_id,
+                    invariant_id=uuid.UUID(str(i_data["id"])) if i_data.get("id") else None,
                     name=i_data["name"],
                     assertion=i_data["assertion"],
                     checked_by_flow_ids=i_data.get("checked_by_flow_ids", []),
