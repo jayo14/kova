@@ -675,6 +675,20 @@ class ExplorationService:
                     clear_credential_request=(result.get("credential_request") is None and status != ExplorationStatus.AUTH_REQUIRED),
                     clear_question=(result.get("question") is None and status != ExplorationStatus.ASKING),
                 )
+
+                if status == ExplorationStatus.READY and resolved_project_id:
+                    try:
+                        disc_data = result.get("discovery_result")
+                        if disc_data:
+                            from app.modules.product_graph.schemas import DiscoveryResult
+                            from app.modules.product_graph.service import ProductGraphService
+                            disc_obj = DiscoveryResult.model_validate(disc_data)
+                            pg_service = ProductGraphService(db)
+                            await pg_service.upsert_from_discovery(resolved_project_id, disc_obj)
+                            await event_emitter("product_graph.updated", {"project_id": str(resolved_project_id)})
+                    except Exception as pg_e:
+                        logger.warning("Could not persist discovery to Product Graph: %s", pg_e)
+
                 await db.commit()
 
             except asyncio.CancelledError:

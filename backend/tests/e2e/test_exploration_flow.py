@@ -179,3 +179,74 @@ async def test_exploration_engine_role_detection():
 
 
 from unittest.mock import AsyncMock, MagicMock
+
+
+@pytest.mark.asyncio
+async def test_discovery_pipeline_to_product_graph_e2e(db_session):
+    """Test full discovery -> Product Graph persistence chain."""
+    from app.engine.exploration.discovery.pipeline import DiscoveryPipeline
+    from app.modules.product_graph.service import ProductGraphService
+    from app.modules.projects.models import Project
+    from app.modules.users.models import User
+
+    user = User(id=uuid.uuid4(), email="discovery_e2e@test.com")
+    db_session.add(user)
+    await db_session.flush()
+
+    project = Project(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="Discovery Target App",
+        base_url="http://127.0.0.1:8000",
+    )
+    db_session.add(project)
+    await db_session.flush()
+
+    pipeline = DiscoveryPipeline(project_id=project.id, base_url="http://127.0.0.1:8000")
+
+    mock_browser_page = AsyncMock()
+    mock_browser_page.url = "http://127.0.0.1:8000"
+    mock_browser_page.title = AsyncMock(return_value="Demo App")
+
+    # Mock crawler link extraction across pages
+    mock_browser_page.evaluate = AsyncMock(side_effect=[
+        # First page links
+        ["http://127.0.0.1:8000/courses/101", "http://127.0.0.1:8000/contact"],
+        # Courses page links
+        [],
+        # Contact page links
+        [],
+        # Page 1 actions
+        [
+            {"text": "Sign In", "tag": "button", "type": "submit", "selector": "#signin"},
+            {"text": "Register", "tag": "a", "type": "button", "selector": "#register"},
+        ],
+        # Page 2 (/courses/:id) actions
+        [
+            {"text": "Enroll in Course", "tag": "button", "type": "button", "selector": "#enroll-btn"},
+            {"text": "Download Syllabus", "tag": "button", "type": "button", "selector": "#download"},
+        ],
+        # Page 3 (/contact) actions
+        [
+            {"text": "Submit Message", "tag": "button", "type": "submit", "selector": "#submit-btn"},
+        ],
+        # Persona detection roles
+        ["student", "instructor"],
+    ])
+
+    discovery_result = await pipeline.discover(mock_browser_page)
+
+    assert len(discovery_result.pages) >= 3
+    assert len(discovery_result.actions) >= 5
+    assert len(discovery_result.personas) >= 1
+    assert len(discovery_result.invariants) >= 1
+
+    # Persist via ProductGraphService
+    pg_service = ProductGraphService(db_session)
+    export_data = await pg_service.upsert_from_discovery(project.id, discovery_result)
+
+    assert export_data["project_id"] == str(project.id)
+    assert len(export_data["pages"]) >= 3
+    assert len(export_data["actions"]) >= 5
+    assert len(export_data["personas"]) >= 1
+    assert len(export_data["invariants"]) >= 1
