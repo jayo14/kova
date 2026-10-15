@@ -138,3 +138,37 @@ class ValidationRunRead(BaseModel):
     summary: dict
     created_at: datetime
     completed_at: datetime | None
+
+
+class ValidationRequest(BaseModel):
+    project_id: uuid.UUID
+    base_url: str | None = None
+    diff_content: str | None = None
+    changed_files: list[str] | None = None
+    commit_message: str | None = None
+    persona: str | None = None
+    timeout_seconds: int = 1800
+
+
+class FlowValidationResult(BaseModel):
+    flow_id: uuid.UUID
+    flow_name: str
+    role: Literal["prerequisite", "target", "teardown"]
+    status: Literal["passed", "failed", "unverified", "skipped", "error"]
+    duration_ms: int = 0
+    evidence_ids: list[uuid.UUID] = Field(default_factory=list)
+    failure_reason: str | None = None
+    state_changes: dict[str, Any] = Field(default_factory=dict)
+
+
+class ValidationReport(BaseModel):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    request: ValidationRequest
+    impact_report: ImpactReport
+    results: list[FlowValidationResult] = Field(default_factory=list)
+    overall_status: Literal["passed", "failed", "unverified", "no_graph", "no_flows"]
+    duration_ms: int = 0
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    finished_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    evidence_summary: dict[str, int] = Field(default_factory=dict)
+    signed_url: str | None = None

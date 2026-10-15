@@ -13,7 +13,15 @@ from app.modules.validation.schemas import (
     ProductModelCreate,
     ProductModelUpdate,
     ValidationCreate,
+    ValidationRequest,
+    FlowValidationResult,
+    ValidationReport,
 )
+from app.modules.flows.dependency_resolver import ExecutionPlan, ExecutionStep
+from app.modules.validation.planner import TargetedRegressionPlanner
+from app.modules.validation.runner import ValidationRunner
+from app.modules.validation.aggregator import ResultAggregator
+from unittest.mock import AsyncMock, MagicMock
 from app.modules.validation.selector import RegressionFlowSelector
 from app.modules.validation.service import ValidationService
 
@@ -618,3 +626,226 @@ def test_graph_traversal_filters_inactive_flows(lms_product_graph):
     if report.minimal_execution_plan:
         plan_flow_names = {s.flow_name for s in report.minimal_execution_plan.steps}
         assert "draft_unreviewed_flow" not in plan_flow_names
+
+
+@pytest.mark.asyncio
+async def test_planner_with_populated_graph(lms_product_graph):
+    """Planner on populated graph returns impact report and minimal execution plan."""
+    planner = TargetedRegressionPlanner(product_graph=lms_product_graph)
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+    assert impact is not None
+    assert "course_enrollment" in impact.affected_capabilities
+    assert plan is not None
+    step_names = [s.flow_name for s in plan.steps]
+    assert "enroll_in_course" in step_names
+    # Topological order: prerequisite auth comes before enroll
+    auth_idx = step_names.index("authenticate_as_student")
+    enroll_idx = step_names.index("enroll_in_course")
+    assert auth_idx < enroll_idx
+
+
+@pytest.mark.asyncio
+async def test_planner_with_empty_graph():
+    """Planner on empty graph returns confidence 0.0 and None plan."""
+    planner = TargetedRegressionPlanner(product_graph={})
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+    assert plan is None
+    assert impact.confidence == 0.0
+    assert not impact.product_graph_consulted
+
+
+@pytest.mark.asyncio
+async def test_runner_passes_when_all_flows_pass(lms_product_graph):
+    """When all target flows pass, overall status is 'passed' and passing prerequisites are omitted from results."""
+    planner = TargetedRegressionPlanner(product_graph=lms_product_graph)
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock(
+        return_value=[
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "authenticate_as_student",
+                "role": "prerequisite",
+                "status": "passed",
+                "duration_ms": 150,
+                "evidence_ids": [str(uuid.uuid4())],
+            },
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "enroll_in_course",
+                "role": "target",
+                "status": "passed",
+                "duration_ms": 320,
+                "evidence_ids": [str(uuid.uuid4()), str(uuid.uuid4())],
+                "evidence_counts": {"screenshots": 1, "network_logs": 1},
+            },
+        ]
+    )
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    report = await runner.run(req, plan=plan, impact_report=impact)
+
+    assert report.overall_status == "passed"
+    # Passing prerequisite must be omitted to prevent report pollution
+    assert len(report.results) == 1
+    assert report.results[0].flow_name == "enroll_in_course"
+    assert report.results[0].status == "passed"
+    assert len(report.results[0].evidence_ids) == 2
+    assert report.evidence_summary.get("screenshots") == 1
+
+
+@pytest.mark.asyncio
+async def test_runner_fails_when_any_flow_fails(lms_product_graph):
+    """When any target flow fails, overall status is 'failed'."""
+    planner = TargetedRegressionPlanner(product_graph=lms_product_graph)
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock(
+        return_value=[
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "enroll_in_course",
+                "role": "target",
+                "status": "failed",
+                "duration_ms": 320,
+                "failure_reason": "Button not found",
+            },
+        ]
+    )
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    report = await runner.run(req, plan=plan, impact_report=impact)
+
+    assert report.overall_status == "failed"
+    assert report.results[0].failure_reason == "Button not found"
+
+
+@pytest.mark.asyncio
+async def test_runner_unverified_when_any_flow_unverified(lms_product_graph):
+    """When a target flow is unverified, overall status is 'unverified'."""
+    planner = TargetedRegressionPlanner(product_graph=lms_product_graph)
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock(
+        return_value=[
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "enroll_in_course",
+                "role": "target",
+                "status": "unverified",
+                "duration_ms": 200,
+                "failure_reason": "Could not confirm enrollment badge",
+            },
+        ]
+    )
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    report = await runner.run(req, plan=plan, impact_report=impact)
+
+    assert report.overall_status == "unverified"
+
+
+@pytest.mark.asyncio
+async def test_runner_no_graph():
+    """Missing graph reports 'no_graph' fail-closed and executes no flows."""
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock()
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    req = ValidationRequest(project_id=uuid.uuid4(), changed_files=["src/pages/Enroll.tsx"])
+    impact = ImpactReport(
+        changed_files=["src/pages/Enroll.tsx"],
+        confidence=0.0,
+        product_graph_consulted=False,
+    )
+    report = await runner.run(req, plan=None, impact_report=impact)
+
+    assert report.overall_status == "no_graph"
+    assert report.results == []
+    mock_exec_service.batch_execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_runner_no_flows_affected(lms_product_graph):
+    """Empty plan reports 'no_flows' fail-closed and executes no flows."""
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock()
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    req = ValidationRequest(project_id=uuid.uuid4(), changed_files=["README.md"])
+    impact = ImpactReport(
+        changed_files=["README.md"],
+        confidence=1.0,
+        product_graph_consulted=True,
+    )
+    plan = ExecutionPlan(steps=[])
+    report = await runner.run(req, plan=plan, impact_report=impact)
+
+    assert report.overall_status == "no_flows"
+    assert report.results == []
+    mock_exec_service.batch_execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_runner_prereq_failure_marks_run_failed(lms_product_graph):
+    """If a prerequisite fails, overall status is 'failed' and the failed prerequisite is reported."""
+    planner = TargetedRegressionPlanner(product_graph=lms_product_graph)
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["src/pages/Enroll.tsx"],
+    )
+    impact, plan = await planner.plan(req)
+
+    mock_exec_service = MagicMock()
+    mock_exec_service.batch_execute = AsyncMock(
+        return_value=[
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "authenticate_as_student",
+                "role": "prerequisite",
+                "status": "failed",
+                "duration_ms": 110,
+                "failure_reason": "Invalid credentials",
+            },
+            {
+                "flow_id": str(uuid.uuid4()),
+                "flow_name": "enroll_in_course",
+                "role": "target",
+                "status": "skipped",
+                "duration_ms": 0,
+            },
+        ]
+    )
+
+    runner = ValidationRunner(execution_service=mock_exec_service)
+    report = await runner.run(req, plan=plan, impact_report=impact)
+
+    assert report.overall_status == "failed"
+    names = [r.flow_name for r in report.results]
+    assert "authenticate_as_student" in names
+    prereq_res = next(r for r in report.results if r.flow_name == "authenticate_as_student")
+    assert prereq_res.failure_reason == "Invalid credentials"
+

@@ -37,9 +37,14 @@ def _schedule_dispatch(execution_id: str) -> None:
 
 class CIRunRequest(BaseModel):
     project_id: uuid.UUID
-    flow_ids: list[uuid.UUID]
+    flow_ids: list[uuid.UUID] | None = None
     base_url: str | None = None
     fail_on_healed: bool = False
+    diff_content: str | None = None
+    changed_files: list[str] | None = None
+    commit_message: str | None = None
+    persona: str | None = None
+    timeout_seconds: int = 1800
 
 
 class CIRunExecutionSummary(BaseModel):
@@ -54,13 +59,24 @@ class CIRunResponse(BaseModel):
     count: int
 
 
-@router.post("/run", response_model=CIRunResponse, status_code=status.HTTP_201_CREATED)
+from app.modules.validation.runner import ValidationRunner
+from app.modules.validation.schemas import (
+    ValidationCreate,
+    ValidationReport,
+    ValidationRequest,
+    ValidationRunRead,
+)
+from app.modules.validation.service import ValidationService
+
+
+@router.post("/run", status_code=status.HTTP_201_CREATED)
 async def ci_run(
     data: CIRunRequest,
+    response: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Trigger CI execution for specified flows in a project."""
+    """Trigger CI execution for specified flows (legacy) or minimal valid path from git diff."""
     # 1. Verify project belongs to user
     stmt = select(Project).where(Project.id == data.project_id, Project.user_id == user.id)
     project_res = await db.execute(stmt)
@@ -74,62 +90,90 @@ async def ci_run(
     if data.base_url:
         project.base_url = data.base_url
 
-    # 2. Verify all flow_ids belong to this project and create executions
-    exec_service = ExecutionService(db)
-    executions: list[CIRunExecutionSummary] = []
-    execution_ids_to_dispatch: list[str] = []
+    # Branch A: Legacy flow_ids execution
+    if data.flow_ids:
+        exec_service = ExecutionService(db)
+        executions: list[CIRunExecutionSummary] = []
+        execution_ids_to_dispatch: list[str] = []
 
-    for flow_id in data.flow_ids:
-        flow_stmt = select(Flow).where(Flow.id == flow_id, Flow.project_id == project.id)
-        flow_res = await db.execute(flow_stmt)
-        flow = flow_res.scalar_one_or_none()
-        if not flow:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Flow {flow_id} not found in project {project.id}",
+        for flow_id in data.flow_ids:
+            flow_stmt = select(Flow).where(Flow.id == flow_id, Flow.project_id == project.id)
+            flow_res = await db.execute(flow_stmt)
+            flow = flow_res.scalar_one_or_none()
+            if not flow:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Flow {flow_id} not found in project {project.id}",
+                )
+
+            execution = await exec_service.create_execution(ExecutionCreate(flow_id=flow.id))
+            executions.append(
+                CIRunExecutionSummary(
+                    id=execution.id,
+                    flow_id=flow.id,
+                    status=execution.status.value if hasattr(execution.status, "value") else str(execution.status),
+                )
             )
+            execution_ids_to_dispatch.append(str(execution.id))
 
-        execution = await exec_service.create_execution(ExecutionCreate(flow_id=flow.id))
-        executions.append(
-            CIRunExecutionSummary(
-                id=execution.id,
-                flow_id=flow.id,
-                status=execution.status.value if hasattr(execution.status, "value") else str(execution.status),
-            )
-        )
-        execution_ids_to_dispatch.append(str(execution.id))
+        await db.commit()
 
-    await db.commit()
+        if data.fail_on_healed:
+            from app.engine.execution.control import set_execution_fail_on_healed
+            for eid in execution_ids_to_dispatch:
+                await set_execution_fail_on_healed(eid, True)
 
-    if data.fail_on_healed:
-        from app.engine.execution.control import set_execution_fail_on_healed
+        # Schedule execution dispatches in background
         for eid in execution_ids_to_dispatch:
-            await set_execution_fail_on_healed(eid, True)
+            _schedule_dispatch(eid)
 
-    # Schedule execution dispatches in background
-    for eid in execution_ids_to_dispatch:
-        _schedule_dispatch(eid)
+        response.status_code = status.HTTP_201_CREATED
+        return CIRunResponse(
+            project_id=project.id,
+            executions=executions,
+            count=len(executions),
+        )
 
-    return CIRunResponse(
-        project_id=project.id,
-        executions=executions,
-        count=len(executions),
+    # Branch B: Targeted diff execution
+    if data.diff_content or data.changed_files:
+        runner = ValidationRunner(db)
+        req = ValidationRequest(
+            project_id=data.project_id,
+            base_url=data.base_url,
+            diff_content=data.diff_content,
+            changed_files=data.changed_files,
+            commit_message=data.commit_message,
+            persona=data.persona,
+            timeout_seconds=data.timeout_seconds,
+        )
+        report = await runner.run(req)
+        response.status_code = status.HTTP_200_OK
+        return report
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Must provide either flow_ids or diff_content/changed_files",
     )
 
 
-from app.modules.validation.service import ValidationService
-from app.modules.validation.schemas import ValidationCreate, ValidationRunRead
-
-
-@router.post("/validate", response_model=ValidationRunRead, status_code=status.HTTP_201_CREATED)
+@router.post("/validate")
 async def ci_validate(
-    data: ValidationCreate,
+    data: dict,
+    response: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Trigger an explainable, risk-aware continuous validation run with change impact analysis."""
+    """Trigger an explainable continuous validation run (async run or synchronous targeted report)."""
     # Verify project ownership
-    stmt = select(Project).where(Project.id == data.project_id, Project.user_id == user.id)
+    project_id_raw = data.get("project_id")
+    if not project_id_raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_id is required")
+    try:
+        project_uuid = uuid.UUID(str(project_id_raw))
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project_id UUID")
+
+    stmt = select(Project).where(Project.id == project_uuid, Project.user_id == user.id)
     project_res = await db.execute(stmt)
     project = project_res.scalar_one_or_none()
     if not project:
@@ -138,11 +182,22 @@ async def ci_validate(
             detail="Project not found or not owned by user",
         )
 
-    service = ValidationService(db)
-    vrun = await service.create_validation_run(data)
-    await db.commit()
-    await db.refresh(vrun)
-    return vrun
+    # If request has scope, route to asynchronous ValidationRun (continuous validation baseline)
+    if "scope" in data:
+        vcreate = ValidationCreate.model_validate(data)
+        service = ValidationService(db)
+        vrun = await service.create_validation_run(vcreate)
+        await db.commit()
+        await db.refresh(vrun)
+        response.status_code = status.HTTP_201_CREATED
+        return ValidationRunRead.model_validate(vrun)
+
+    # Otherwise route to synchronous targeted regression runner
+    vreq = ValidationRequest.model_validate(data)
+    runner = ValidationRunner(db)
+    report = await runner.run(vreq)
+    response.status_code = status.HTTP_200_OK
+    return report
 
 
 @router.get("/validate/{validation_run_id}", response_model=ValidationRunRead)

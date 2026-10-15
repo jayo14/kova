@@ -179,3 +179,29 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_impact_analysis_integration.py -v` (19 passed)
 
+## Chunk 11: Targeted Regression Execution (Minimum Valid Path)
+- **Status:** Complete
+- **Changes:**
+  - Extended `backend/app/modules/validation/schemas.py` with `ValidationRequest`, `FlowValidationResult`, and `ValidationReport`.
+  - Added `ValidationReportModel` in `backend/app/modules/validation/models.py` and created Alembic migration `019_add_validation_reports.py`.
+  - Implemented `backend/app/modules/validation/planner.py` (`TargetedRegressionPlanner`):
+    - Connects git diffs and changed files to minimal execution plans via `ChangeImpactAnalyzer`.
+    - Fail-closed behavior on missing Product Graph (`plan = None`, `confidence = 0.0`).
+  - Implemented `backend/app/modules/validation/aggregator.py` (`ResultAggregator`):
+    - Aggregates per-flow results into a comprehensive `ValidationReport`.
+    - Computes `overall_status`: `passed`, `failed`, `unverified`, `no_graph`, `no_flows`.
+    - Omits passing prerequisites from results to avoid report pollution; reports failing or unverified prerequisites.
+  - Implemented `backend/app/modules/validation/runner.py` (`ValidationRunner`):
+    - Orchestrates batch execution of prerequisites and targets as a single unified plan.
+    - Persists report to `validation_reports` database table.
+    - Enforces timeout cap (30 min / configured timeout) with timeout error marking.
+  - Added `batch_execute` to `ExecutionService` (`backend/app/modules/executions/service.py`) with transition validation (`CREATED -> PLANNING -> RUNNING -> COMPLETED/FAILED/UNVERIFIED`) and evidence ID collection.
+  - Extended `backend/app/api/routes/ci.py`:
+    - `POST /api/v1/ci/validate`: routes diff-based requests through `ValidationRunner` to return `ValidationReport`.
+    - `POST /api/v1/ci/run`: backward-compatible dual-path supporting both legacy `flow_ids` (`CIRunResponse`) and diff-based execution (`ValidationReport`).
+  - Added unit test suite in `backend/tests/unit/test_continuous_validation.py` covering planner with populated/empty graphs, runner pass/fail/unverified/no-graph/no-flows/prereq-failure.
+  - Added end-to-end integration test suite in `backend/tests/integration/test_ci_and_reports.py` testing `/ci/validate`, `/ci/run`, fail-closed `no_graph`, and `no_flows`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_ci_and_reports.py backend/tests/unit/test_ci_cli_and_api.py -v` (31 passed)
+
+
