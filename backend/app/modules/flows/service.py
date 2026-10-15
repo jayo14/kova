@@ -67,3 +67,65 @@ class FlowService:
 
     async def delete_flow(self, flow_id: uuid.UUID):
         return await self.repo.delete(flow_id)
+
+    async def generate_flows(
+        self,
+        project_id: uuid.UUID,
+        request: "GenerationRequest | None" = None,
+        goal_id: uuid.UUID | None = None,
+        target_capability: str | None = None,
+    ) -> "GenerationResult":
+        from app.engine.ai.settings import ai_settings
+        from app.modules.flows.generator import (
+            AIFlowProposer,
+            DeterministicFlowGenerator,
+            GenerationRequest,
+            GenerationResult,
+        )
+
+        if request is None:
+            request = GenerationRequest(
+                project_id=project_id,
+                goal_id=goal_id,
+                target_capability=target_capability,
+            )
+
+        det_gen = DeterministicFlowGenerator(self.repo.db)
+        flows, unresolved = await det_gen.generate(request)
+
+        ai_proposals = []
+        if unresolved and ai_settings.ai_enabled:
+            ai_proposer = AIFlowProposer(self.repo.db)
+            proposed_flows, proposals = await ai_proposer.propose(project_id, unresolved)
+            flows.extend(proposed_flows)
+            ai_proposals.extend(proposals)
+
+        # Persist generated flows with active=False (requiring review before CI)
+        for f in flows:
+            await self.repo.create(
+                project_id=project_id,
+                name=f.name,
+                goal_id=f.goal_id,
+                persona_id=f.persona_id,
+                page_ids=[str(p) for p in f.page_ids],
+                steps=[s.to_runner_dict() for s in f.internal],
+                state_contract=f.state_contract.model_dump() if f.state_contract else None,
+                source=f.source,
+                confidence=f.confidence,
+                active=False,
+                json_repr=f.json_repr,
+                gherkin_repr=f.gherkin,
+            )
+
+        remaining_unresolved = (
+            unresolved
+            if not ai_proposals
+            else [u for u in unresolved if not any(u in p.input_summary for p in ai_proposals)]
+        )
+
+        return GenerationResult(
+            flows=flows,
+            unresolved_goals=remaining_unresolved,
+            ai_proposals=ai_proposals,
+        )
+

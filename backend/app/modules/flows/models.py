@@ -40,6 +40,11 @@ class Flow(Base):
         ForeignKey("product_personas.id", ondelete="SET NULL"), nullable=True
     )
     page_ids: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="legacy", server_default="legacy")
+    confidence: Mapped[float] = mapped_column(nullable=False, default=1.0, server_default="1.0")
+    active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
+    json_repr: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True)
+    gherkin_repr: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

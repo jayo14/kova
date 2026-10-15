@@ -97,3 +97,22 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_explorer.py backend/tests/unit/test_discovery_pipeline.py backend/tests/e2e/test_exploration_flow.py -v` (26 passed)
 
+## Chunk 07 — Flow Generation (Product Graph → executable flows)
+- **Status:** Done
+- **Changes:**
+  - Created modular flow generation subpackage `backend/app/modules/flows/generator/`:
+    - `schemas.py`: Defined `ExecutionStep`, `GeneratedFlow`, `GenerationRequest`, and `GenerationResult`.
+    - `representations/internal.py`: Built internal execution plan steps (`step_navigate`, `step_locate`, `step_input`, `step_click`, `step_assert`, `step_capture_evidence`, `to_runner_steps`).
+    - `representations/json_repr.py`: Serialized flows to diff-able JSON dicts and built `diff_flows` semantic comparator.
+    - `representations/gherkin.py`: Generated human-readable Gherkin feature exports (`Feature:`, `Scenario:`, `Given`, `When`, `Then`).
+    - `deterministic.py`: Deterministically walked the Product Graph (capabilities, pages, actions, personas, goals) without AI or hardcoded selectors.
+    - `ai_proposer.py`: Integrated bounded fallback AI proposals for unresolved goals via `AgentReasoner.propose_flows()`, capping confidence at `<= 0.9` with `source="ai_proposal"` and audit records in `ai_proposals`.
+  - Added additive columns `source`, `confidence`, `active` (default False for generated flows, requiring human review before CI eligibility), `json_repr`, and `gherkin_repr` to `Flow` ORM model, Alembic migration `016_add_generated_flow_columns.py`, `FlowCreate`, `FlowUpdate`, `FlowRead`, and `FlowRepository`.
+  - Implemented `FlowService.generate_flows()` to orchestrate deterministic generation, conditional AI fallback, and persistence as inactive flows.
+  - Added API route `POST /api/v1/projects/{project_id}/flows:generate` returning 200 for project owner/admin, 403 for non-members, and 404 for missing projects.
+  - Added unit test suite `backend/tests/unit/test_flow_generation.py` and integration tests in `backend/tests/integration/test_flow_db.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_flow_generation.py backend/tests/integration/test_flow_db.py -v` (16 passed)
+  - `pytest backend/tests/unit/test_flow_generation.py backend/tests/integration/test_flow_db.py backend/tests/unit/test_product_graph_schemas.py backend/tests/integration/test_product_graph_db.py backend/tests/unit/test_flow_dependencies.py backend/tests/unit/test_discovery_pipeline.py backend/tests/unit/test_explorer.py -v` (61 passed)
+
+

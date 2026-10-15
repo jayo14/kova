@@ -213,3 +213,24 @@ async def get_product_graph_diff(
     await _get_project_with_auth(db, project_id, user.id)
     service = ProductGraphService(db)
     return await service.diff(from_version, to_version, project_id)
+
+
+from app.modules.flows.generator.schemas import GenerationRequest, GenerationResult
+from app.modules.flows.service import FlowService
+
+
+@router.post("/{project_id}/flows:generate", response_model=GenerationResult)
+async def generate_flows_endpoint(
+    project_id: uuid.UUID,
+    data: dict,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Generate executable test flows from the project's Product Graph."""
+    await _get_project_with_auth(db, project_id, user.id)
+    req_dict = dict(data)
+    req_dict["project_id"] = project_id
+    gen_request = GenerationRequest.model_validate(req_dict)
+    service = FlowService(db)
+    return await service.generate_flows(project_id, request=gen_request)
+
