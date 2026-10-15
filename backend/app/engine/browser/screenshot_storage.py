@@ -66,10 +66,12 @@ class ScreenshotStorage:
         url: str = "",
         folder: str = "explorations",
         content_type: str = "image/png",
+        purpose: str = "discovery",
+        step_id: str | None = None,
     ) -> dict:
         """Upload screenshot to S3 and return public URL.
 
-        Returns metadata dict with screenshot_url and screenshot_key.
+        Returns metadata dict with screenshot_url, screenshot_key, purpose, and step_id.
         Raises RuntimeError if S3 is not configured.
         """
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
@@ -109,6 +111,8 @@ class ScreenshotStorage:
                 "screenshot_url": public_url,
                 "screenshot_key": filename,
                 "screenshot_size_bytes": len(screenshot_bytes),
+                "purpose": purpose,
+                "step_id": step_id,
             }
         except Exception as e:
             raise RuntimeError(f"S3 upload failed: {e}")
@@ -119,10 +123,12 @@ class ScreenshotStorage:
         screenshot_bytes: bytes,
         url: str = "",
         content_type: str = "image/jpeg",
+        purpose: str = "step_evidence",
+        step_id: str | None = None,
     ) -> dict:
         """Upload an execution screenshot safely to S3.
 
-        Returns metadata dict. If upload fails or is not configured, logs warning
+        Returns metadata dict with purpose and step_id. If upload fails or is not configured, logs warning
         and returns fallback dict without raising.
         """
         try:
@@ -132,6 +138,8 @@ class ScreenshotStorage:
                 url=url,
                 folder="executions",
                 content_type=content_type,
+                purpose=purpose,
+                step_id=step_id,
             )
         except Exception as e:
             logger.warning("Could not upload execution screenshot to S3: %s", e)
@@ -139,6 +147,8 @@ class ScreenshotStorage:
                 "screenshot_url": None,
                 "screenshot_key": None,
                 "screenshot_size_bytes": len(screenshot_bytes),
+                "purpose": purpose,
+                "step_id": step_id,
             }
 
     def get_public_url(self, key: str, exploration_id: str = "", folder: str = "explorations") -> str | None:

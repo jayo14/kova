@@ -179,4 +179,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    # gated behind settings.DEBUG
+    from app.config.settings import settings
+    if not settings.DEBUG:
+        print("Diagnostic scripts are dev-only and gated behind settings.DEBUG")
+        sys.exit(1)
     asyncio.run(main())

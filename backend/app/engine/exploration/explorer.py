@@ -2111,7 +2111,7 @@ class ExplorationEngine:
                 for el in interactive_elements
             )
             if not has_form_mission and has_contact and mission_count < max_missions:
-                fake_route = {
+                current_page_form_route = {
                     "path": urlparse(current_url).path or "/contact",
                     "url": current_url,
                     "title": title or "Contact",
@@ -2120,7 +2120,7 @@ class ExplorationEngine:
                     "has_form": True,
                 }
                 form_mission = self._build_standalone_form_mission(
-                    fake_route, current_url, title, persona_name
+                    current_page_form_route, current_url, title, persona_name
                 )
                 if form_mission:
                     missions.append(form_mission)

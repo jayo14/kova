@@ -69,6 +69,17 @@ export function EvidenceViewer({ evidence, open, onClose, onRefreshUrl }: Eviden
 
   if (!open || !evidence) return null;
 
+  const isOrphan =
+    evidence.type === "SCREENSHOT" &&
+    !evidence.stepId &&
+    !evidence.purpose &&
+    evidence.purpose !== "legacy";
+
+  const isDev = process.env.NODE_ENV !== "production";
+  if (isOrphan && !isDev) {
+    return null;
+  }
+
   const isImage = evidence.type === "SCREENSHOT" && currentUrl;
   const isVerification = evidence.type === "VERIFICATION";
 
@@ -99,6 +110,12 @@ export function EvidenceViewer({ evidence, open, onClose, onRefreshUrl }: Eviden
             <MaterialIcon name="close" size={18} />
           </button>
         </div>
+
+        {isOrphan && isDev && (
+          <div className="w-full mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-500 text-caption text-center">
+            Found orphan screenshot — capture path bug. Missing step_id and purpose.
+          </div>
+        )}
 
         {/* Content */}
         {isImage ? (

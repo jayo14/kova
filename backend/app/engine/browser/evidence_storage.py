@@ -63,8 +63,10 @@ class EvidenceStorage:
         evidence_id: str,
         data: bytes,
         content_type: str = "image/png",
+        purpose: str = "step_evidence",
+        step_id: str | None = None,
     ) -> dict:
-        """Upload evidence to S3. Returns {storage_key, url}."""
+        """Upload evidence to S3. Returns {storage_key, url, purpose, step_id}."""
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             raise RuntimeError(
                 "S3 storage not configured. "
@@ -97,6 +99,8 @@ class EvidenceStorage:
             return {
                 "storage_key": object_path,
                 "url": None,  # Use create_signed_url() for access
+                "purpose": purpose,
+                "step_id": step_id,
             }
         except Exception as e:
             raise RuntimeError(f"S3 evidence upload failed: {e}")

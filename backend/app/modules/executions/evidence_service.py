@@ -20,11 +20,50 @@ class EvidenceService:
         self.repo = EvidenceRepository(db)
         self.event_service = EventService(db)
 
+    async def create(
+        self,
+        execution_id: uuid.UUID,
+        type: str,
+        title: str,
+        purpose: str | None = None,
+        step_id: str | None = None,
+        description: str | None = None,
+        status: str = "CAPTURED",
+        storage_key: str | None = None,
+        mime_type: str | None = None,
+        metadata: dict | None = None,
+    ) -> Evidence:
+        """Create an evidence record with purpose and step_id enforcement.
+
+        Rejects rows missing both purpose and step_id with ValueError (fail-closed).
+        """
+        if not purpose and not step_id:
+            raise ValueError("Evidence must specify at least purpose or step_id")
+        valid_purposes = {"verification", "failure", "step_evidence", "discovery", "legacy"}
+        if purpose and purpose not in valid_purposes:
+            raise ValueError(f"Invalid evidence purpose '{purpose}'. Must be one of {valid_purposes}")
+
+        resolved_purpose = purpose or "step_evidence"
+        return await self.repo.create(
+            execution_id=execution_id,
+            type=type,
+            title=title,
+            purpose=resolved_purpose,
+            step_id=step_id,
+            description=description,
+            status=status,
+            storage_key=storage_key,
+            mime_type=mime_type,
+            metadata=metadata or {},
+        )
+
     async def capture_screenshot(
         self,
         execution_id: uuid.UUID,
         screenshot_bytes: bytes,
         title: str,
+        purpose: str | None = None,
+        step_id: str | None = None,
         description: str | None = None,
         mime_type: str = "image/png",
         extra_data: dict | None = None,
@@ -35,6 +74,15 @@ class EvidenceService:
         Returns evidence dict or None on failure.
         """
         evidence_id = uuid.uuid4()
+        eff_purpose = purpose or (extra_data or {}).get("purpose") or (extra_data or {}).get("checkpoint")
+        eff_step_id = step_id or (extra_data or {}).get("step_id")
+        if not eff_purpose and not eff_step_id:
+            raise ValueError("Evidence screenshot must declare purpose or step_id")
+
+        valid_purposes = {"verification", "failure", "step_evidence", "discovery", "legacy"}
+        if eff_purpose and eff_purpose not in valid_purposes:
+            raise ValueError(f"Invalid evidence purpose '{eff_purpose}'. Must be one of {valid_purposes}")
+        resolved_purpose = eff_purpose or "step_evidence"
 
         try:
             # Upload to storage
@@ -50,6 +98,8 @@ class EvidenceService:
                 execution_id=execution_id,
                 type=EvidenceType.SCREENSHOT.value,
                 title=sanitize_text(title, limit=500),
+                purpose=resolved_purpose,
+                step_id=eff_step_id,
                 description=sanitize_text(description) if description else None,
                 status=EvidenceStatus.CAPTURED.value,
                 storage_key=upload_result.get("storage_key"),
@@ -65,13 +115,15 @@ class EvidenceService:
                     "evidence_id": str(evidence.id),
                     "type": EvidenceType.SCREENSHOT.value,
                     "title": title,
+                    "purpose": resolved_purpose,
+                    "step_id": eff_step_id,
                     **{key: value for key, value in (extra_data or {}).items() if key in {"step_id", "step_index", "checkpoint"}},
                 },
             )
 
             logger.info(
-                "Evidence captured: %s (execution=%s, type=%s)",
-                evidence.id, execution_id, EvidenceType.SCREENSHOT.value,
+                "Evidence captured: %s (execution=%s, type=%s, purpose=%s)",
+                evidence.id, execution_id, EvidenceType.SCREENSHOT.value, resolved_purpose,
             )
 
             return {
@@ -79,12 +131,16 @@ class EvidenceService:
                 "execution_id": str(evidence.execution_id),
                 "type": evidence.type,
                 "title": evidence.title,
+                "purpose": evidence.purpose,
+                "step_id": evidence.step_id,
                 "description": evidence.description,
                 "status": evidence.status,
                 "mime_type": evidence.mime_type,
                 "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
             }
 
+        except ValueError:
+            raise
         except Exception as e:
             logger.warning("Evidence capture failed (execution=%s, error_type=%s)", execution_id, type(e).__name__)
             await self.event_service.record_event(
@@ -99,6 +155,8 @@ class EvidenceService:
         execution_id: uuid.UUID,
         title: str,
         description: str,
+        purpose: str = "verification",
+        step_id: str | None = None,
         checks: list[dict] | None = None,
         extra_data: dict | None = None,
     ) -> dict | None:
@@ -106,11 +164,14 @@ class EvidenceService:
 
         No storage needed — this is metadata evidence.
         """
+        eff_step_id = step_id or (extra_data or {}).get("step_id")
         try:
             evidence = await self.repo.create(
                 execution_id=execution_id,
                 type=EvidenceType.VERIFICATION.value,
                 title=sanitize_text(title, limit=500),
+                purpose=purpose,
+                step_id=eff_step_id,
                 description=sanitize_text(description),
                 status=(
                     EvidenceStatus.VERIFIED.value
@@ -127,6 +188,8 @@ class EvidenceService:
                     "evidence_id": str(evidence.id),
                     "type": EvidenceType.VERIFICATION.value,
                     "title": title,
+                    "purpose": purpose,
+                    "step_id": eff_step_id,
                 },
             )
 
@@ -135,6 +198,8 @@ class EvidenceService:
                 "execution_id": str(evidence.execution_id),
                 "type": evidence.type,
                 "title": evidence.title,
+                "purpose": evidence.purpose,
+                "step_id": evidence.step_id,
                 "description": evidence.description,
                 "status": evidence.status,
                 "metadata": evidence.extra_data,
@@ -156,6 +221,8 @@ class EvidenceService:
             "execution_id": str(evidence.execution_id),
             "type": evidence.type,
             "title": evidence.title,
+            "purpose": evidence.purpose,
+            "step_id": evidence.step_id,
             "description": evidence.description,
             "status": evidence.status,
             "mime_type": evidence.mime_type,
@@ -184,6 +251,8 @@ class EvidenceService:
                 "execution_id": str(evidence.execution_id),
                 "type": evidence.type,
                 "title": evidence.title,
+                "purpose": evidence.purpose,
+                "step_id": evidence.step_id,
                 "description": evidence.description,
                 "status": evidence.status,
                 "mime_type": evidence.mime_type,

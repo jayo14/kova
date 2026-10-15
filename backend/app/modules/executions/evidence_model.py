@@ -25,6 +25,8 @@ class Evidence(Base):
     __table_args__ = (
         Index("ix_evidence_execution_id", "execution_id"),
         Index("ix_evidence_type", "type"),
+        Index("ix_evidence_purpose", "purpose"),
+        Index("ix_evidence_step_id", "step_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -35,6 +37,10 @@ class Evidence(Base):
     )
     type: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="legacy", server_default="legacy"
+    )
+    step_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=EvidenceStatus.CAPTURED.value

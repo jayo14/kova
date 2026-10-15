@@ -11,6 +11,8 @@ class EvidenceRead(BaseModel):
     execution_id: uuid.UUID
     type: str
     title: str
+    purpose: str = "legacy"
+    step_id: str | None = None
     description: str | None
     status: str
     mime_type: str | None

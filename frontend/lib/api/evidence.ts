@@ -10,6 +10,8 @@ export interface Evidence {
   executionId: string;
   type: EvidenceType;
   title: string;
+  purpose?: string | null;
+  stepId?: string | null;
   description?: string | null;
   status: EvidenceStatus;
   mimeType?: string | null;
@@ -42,15 +44,18 @@ export async function getExecutionEvidence(
   );
   return (raw as Record<string, unknown>[]).map((item) => {
     const mapped = mapKeysToCamel(item) as Record<string, unknown>;
+    const meta = (mapped.metadata as Record<string, unknown>) || {};
     return {
       id: mapped.id as string,
       executionId: mapped.executionId as string,
       type: mapped.type as EvidenceType,
       title: mapped.title as string,
+      purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
+      stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
       description: mapped.description as string | null | undefined,
       status: mapped.status as EvidenceStatus,
       mimeType: mapped.mimeType as string | null | undefined,
-      metadata: mapped.metadata as Record<string, unknown> | undefined,
+      metadata: meta,
       createdAt: mapped.createdAt as string,
       url: formatEvidenceUrl(mapped.url),
     } satisfies Evidence;
@@ -71,15 +76,18 @@ export async function getEvidence(
       { token }
     );
     const mapped = mapKeysToCamel(raw as Record<string, unknown>) as Record<string, unknown>;
+    const meta = (mapped.metadata as Record<string, unknown>) || {};
     return {
       id: mapped.id as string,
       executionId: mapped.executionId as string,
       type: mapped.type as EvidenceType,
       title: mapped.title as string,
+      purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
+      stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
       description: mapped.description as string | null | undefined,
       status: mapped.status as EvidenceStatus,
       mimeType: mapped.mimeType as string | null | undefined,
-      metadata: mapped.metadata as Record<string, unknown> | undefined,
+      metadata: meta,
       createdAt: mapped.createdAt as string,
       url: formatEvidenceUrl(mapped.url),
     } satisfies Evidence;
