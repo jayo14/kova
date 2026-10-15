@@ -127,3 +127,19 @@ class ProjectRepository:
         await self.db.delete(project)
         await self.db.flush()
         return True
+
+    async def get_product_model(self, project_id: uuid.UUID):
+        try:
+            from sqlalchemy import desc
+            from app.modules.validation.models import ProductModel
+
+            stmt = (
+                select(ProductModel)
+                .where(ProductModel.project_id == project_id)
+                .order_by(desc(ProductModel.version))
+                .limit(1)
+            )
+            res = await self.db.execute(stmt)
+            return res.scalar_one_or_none()
+        except Exception:
+            return None

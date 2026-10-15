@@ -38,8 +38,23 @@ def test_impact_analysis_direct_mapping_and_shared_components():
     analyzer = ChangeImpactAnalyzer(
         product_model={
             "capabilities": [
-                {"name": "authentication", "routes": ["/login", "/signup"]},
-                {"name": "course_enrollment", "routes": ["/courses", "/enroll"]},
+                {
+                    "name": "authentication",
+                    "routes": ["/login", "/signup"],
+                    "source_files": ["backend/app/auth/*"],
+                    "kind": "shared",
+                },
+                {
+                    "name": "navigation",
+                    "routes": ["/"],
+                    "source_files": ["frontend/components/Navbar.tsx"],
+                    "kind": "shared",
+                },
+                {
+                    "name": "course_enrollment",
+                    "routes": ["/courses/enroll", "/courses"],
+                    "source_files": ["app/courses/enroll/page.tsx"],
+                },
             ]
         }
     )
@@ -50,12 +65,14 @@ def test_impact_analysis_direct_mapping_and_shared_components():
     assert "/courses/enroll" in report.affected_routes
     assert report.recommended_scope == "targeted"
     assert report.confidence == 1.0
+    assert report.product_graph_consulted is True
 
     # 2. Shared authentication code changes broaden scope and detect auth capability
     report_auth = analyzer.analyze(changed_files=["backend/app/auth/jwt_tokens.py"])
     assert "authentication" in report_auth.affected_capabilities
     assert report_auth.recommended_scope == "expanded"
     assert report_auth.confidence == 0.85
+    assert report_auth.product_graph_consulted is True
 
     # 3. Shared layout/nav changes downstream effects
     report_nav = analyzer.analyze(changed_files=["frontend/components/Navbar.tsx"])
@@ -67,6 +84,51 @@ def test_impact_analysis_direct_mapping_and_shared_components():
     assert report_unknown.recommended_scope == "expanded"
     assert report_unknown.confidence == 0.60
     assert len(report_unknown.uncertainty) > 0
+    assert "misc/tool.py" in report_unknown.unmatched_files
+
+
+def test_impact_analysis_empty_product_graph_full_scope():
+    analyzer = ChangeImpactAnalyzer(product_model={})
+    report = analyzer.analyze(changed_files=["src/foo/bar.ts"])
+    assert report.product_graph_consulted is False
+    assert report.recommended_scope == "full"
+    assert report.confidence == 0.0
+    assert report.unmatched_files == ["src/foo/bar.ts"]
+    assert "No Product Graph available; cannot perform targeted validation. Run Product Discovery first." in report.uncertainties
+
+
+def test_impact_analysis_source_file_matching():
+    analyzer = ChangeImpactAnalyzer(
+        product_model={
+            "capabilities": [
+                {
+                    "name": "custom_widget",
+                    "routes": [],
+                    "source_files": ["src/foo/bar.ts"],
+                }
+            ]
+        }
+    )
+    report = analyzer.analyze(changed_files=["src/foo/bar.ts"])
+    assert report.affected_capabilities == ["custom_widget"]
+    assert report.product_graph_consulted is True
+    assert report.unmatched_files == []
+
+
+def test_impact_analysis_unmatched_file_regression():
+    analyzer = ChangeImpactAnalyzer(
+        product_model={
+            "capabilities": [
+                {"name": "cap_a", "source_files": ["src/a.ts"], "routes": []},
+                {"name": "cap_b", "source_files": ["src/b.ts"], "routes": []},
+            ]
+        }
+    )
+    report = analyzer.analyze(changed_files=["src/widgets/foobar.ts"])
+    assert report.unmatched_files == ["src/widgets/foobar.ts"]
+    assert "foobar" not in report.affected_capabilities
+    assert report.recommended_scope == "expanded"
+    assert report.confidence <= 0.60
 
 
 def test_regression_selector_scopes_and_explanations():

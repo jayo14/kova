@@ -430,3 +430,36 @@ async def test_resolve_hidden_element_not_returned(test_server, browser_session)
     # Locator exists in DOM but is hidden
     assert await locator.count() == 1
     assert not await locator.is_visible()
+
+
+@pytest.fixture
+def seeded_product_graph():
+    return {
+        "capabilities": [
+            {
+                "name": "account_authentication",
+                "routes": ["/login", "/session"],
+                "source_files": ["backend/app/auth/*.py"],
+                "kind": "shared",
+            },
+            {
+                "name": "catalog_browsing",
+                "routes": ["/items", "/items/:id"],
+                "source_files": ["frontend/components/ItemCatalog.tsx"],
+                "kind": "feature",
+            },
+        ]
+    }
+
+
+def test_impact_analyzer_uses_seeded_product_graph(seeded_product_graph):
+    from app.modules.validation.impact_analysis import ChangeImpactAnalyzer
+
+    analyzer = ChangeImpactAnalyzer(product_model=seeded_product_graph)
+    report = analyzer.analyze(changed_files=["frontend/components/ItemCatalog.tsx"])
+
+    assert report.product_graph_consulted is True
+    assert report.affected_capabilities == ["catalog_browsing"]
+    assert report.recommended_scope == "targeted"
+    assert report.confidence == 1.0
+    assert report.unmatched_files == []

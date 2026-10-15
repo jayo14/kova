@@ -1,6 +1,7 @@
 """Change detection and impact analysis engine."""
 from __future__ import annotations
 
+import fnmatch
 import re
 from typing import Any
 
@@ -30,6 +31,23 @@ def extract_files_from_diff(diff_content: str | None) -> list[str]:
     return sorted(files)
 
 
+def _file_matches_pattern(file_path: str, pattern: str) -> bool:
+    """Check if file matches exact path, suffix, or glob pattern."""
+    p = pattern.strip()
+    if not p:
+        return False
+    # Exact or stripped match
+    if file_path == p or file_path.lstrip("/") == p.lstrip("/"):
+        return True
+    # Suffix match (e.g. pattern "Navbar.tsx" matching "frontend/components/Navbar.tsx")
+    if file_path.endswith("/" + p.lstrip("/")):
+        return True
+    # Glob match
+    if fnmatch.fnmatch(file_path, p) or fnmatch.fnmatch(file_path.lstrip("/"), p.lstrip("/")):
+        return True
+    return False
+
+
 class ChangeImpactAnalyzer:
     """Deterministically maps changed files and commit signals to product model capabilities."""
 
@@ -48,11 +66,23 @@ class ChangeImpactAnalyzer:
             files.update(extract_files_from_diff(diff_content))
 
         cleaned_files = sorted(f.strip() for f in files if f.strip())
-        affected_capabilities: set[str] = set()
-        affected_routes: set[str] = set()
-        reasons: dict[str, str] = {}
-        downstream_effects: list[str] = []
-        uncertainties: list[str] = []
+        raw_caps = self.product_model.get("capabilities", []) if isinstance(self.product_model, dict) else []
+        product_graph_consulted = bool(raw_caps)
+
+        # Empty product graph handling: report honestly when files changed
+        if not product_graph_consulted and cleaned_files:
+            return ImpactReport(
+                changed_files=cleaned_files,
+                affected_capabilities=[],
+                affected_routes=[],
+                reasons={},
+                confidence=0.0,
+                uncertainty=["No Product Graph available; cannot perform targeted validation. Run Product Discovery first."],
+                recommended_scope="full",
+                downstream_effects=[],
+                product_graph_consulted=False,
+                unmatched_files=cleaned_files,
+            )
 
         if not cleaned_files and not commit_message:
             return ImpactReport(
@@ -64,100 +94,108 @@ class ChangeImpactAnalyzer:
                 uncertainty=["No file changes or diff provided; defaulting to targeted validation."],
                 recommended_scope="targeted",
                 downstream_effects=[],
+                product_graph_consulted=product_graph_consulted,
+                unmatched_files=[],
             )
 
-        # 1. Analyze each file path deterministically
-        shared_auth_changed = False
-        shared_nav_changed = False
-        schema_changed = False
+        affected_capabilities: set[str] = set()
+        affected_routes: set[str] = set()
+        reasons: dict[str, str] = {}
+        downstream_effects: list[str] = []
+        uncertainties: list[str] = []
+        unmatched_files: list[str] = []
 
+        shared_cap_changed = False
+        has_shared_caps = any(
+            isinstance(cap, dict) and (cap.get("kind") == "shared" or cap.get("is_shared") is True)
+            for cap in raw_caps
+        )
+        if product_graph_consulted and not has_shared_caps:
+            uncertainties.append("Product Graph contains no shared capabilities; cannot assess shared component impact.")
+
+        # 1. Analyze each file path deterministically against the Product Graph
         for f in cleaned_files:
-            lower = f.lower()
+            file_matched = False
 
-            # Shared authentication & credentials
-            if any(term in lower for term in ["auth", "login", "session", "credential", "jwt", "token", "user", "signup", "register"]):
-                affected_capabilities.add("authentication")
-                reasons["authentication"] = f"File {f} touches authentication or user session logic."
-                shared_auth_changed = True
-
-            # Navigation & shell headers
-            if any(term in lower for term in ["nav", "header", "sidebar", "menu", "layout", "app-shell", "shell"]):
-                shared_nav_changed = True
-                downstream_effects.append(f"Global layout/navigation altered by {f}; affects top-level route accessibility.")
-
-            # Database / Schema migrations
-            if "alembic" in lower or "migration" in lower or "models" in lower or "schema" in lower:
-                schema_changed = True
-                downstream_effects.append(f"Database schema or model modified by {f}; may alter persisted entity state.")
-
-            # Route & capability heuristics based on known paths
-            if "course" in lower or "enroll" in lower:
-                affected_capabilities.add("course_enrollment")
-                reasons["course_enrollment"] = f"File {f} modifies course enrollment or material logic."
-                downstream_effects.append("Downstream course content access and assignment submission workflows potentially affected.")
-
-            if "assign" in lower or "grade" in lower or "submission" in lower:
-                affected_capabilities.add("assignment_submission")
-                reasons["assignment_submission"] = f"File {f} modifies assignment or grading workflows."
-
-            if "cart" in lower or "checkout" in lower or "order" in lower or "payment" in lower:
-                affected_capabilities.add("checkout")
-                reasons["checkout"] = f"File {f} modifies order, cart, or payment handling."
-
-            if "profile" in lower or "account" in lower or "settings" in lower:
-                affected_capabilities.add("profile_management")
-                reasons["profile_management"] = f"File {f} alters user profile or account settings."
-
-            # Map Next.js / frontend page routes (app/.../page.tsx or pages/...)
+            # Extract Next.js / frontend page routes (app/.../page.tsx or pages/...)
             route_match = re.search(r"(?:app|pages)/([a-zA-Z0-9_\-\/\[\]]+?)(?:/page|\.[a-zA-Z]+$)", f)
+            clean_route = None
             if route_match:
                 extracted_route = "/" + route_match.group(1).replace("[", ":").replace("]", "")
-                # Normalize route
                 clean_route = re.sub(r"/+", "/", extracted_route)
-                affected_routes.add(clean_route)
-                reasons[clean_route] = f"Source route file {f} was directly modified."
 
-        # 2. Check capabilities registered in the stored ProductModel
-        stored_caps = self.product_model.get("capabilities", [])
-        for cap in stored_caps:
-            cap_name = cap.get("name") if isinstance(cap, dict) else str(cap)
-            cap_routes = cap.get("routes", []) if isinstance(cap, dict) else []
-            # If any affected route belongs to this capability
-            if any(r in affected_routes for r in cap_routes):
-                affected_capabilities.add(cap_name)
-                reasons[cap_name] = f"Capability {cap_name} contains route affected by code change."
+            for cap in raw_caps:
+                if not isinstance(cap, dict):
+                    continue
+                cap_name = cap.get("name", "")
+                if not cap_name:
+                    continue
 
-        # 3. Analyze commit message keywords if available
+                source_files = cap.get("source_files", [])
+                routes = cap.get("routes", [])
+                is_shared = cap.get("kind") == "shared" or cap.get("is_shared") is True
+
+                matched_by_source = any(_file_matches_pattern(f, pattern) for pattern in source_files)
+                matched_by_route = clean_route is not None and clean_route in routes
+
+                if matched_by_source or matched_by_route:
+                    file_matched = True
+                    affected_capabilities.add(cap_name)
+
+                    if matched_by_source:
+                        reasons[cap_name] = f"File {f} is listed as a source file for capability '{cap_name}' in the Product Graph."
+                    else:
+                        reasons[cap_name] = f"Source route file {f} matches route '{clean_route}' for capability '{cap_name}' in the Product Graph."
+
+                    if clean_route is not None:
+                        affected_routes.add(clean_route)
+                        reasons[clean_route] = f"Source route file {f} was directly modified."
+
+                    if is_shared:
+                        shared_cap_changed = True
+                        downstream_effects.append(
+                            f"Shared capability '{cap_name}' modified by {f}; affects downstream workflows."
+                        )
+
+            if not file_matched:
+                unmatched_files.append(f)
+                if clean_route is not None:
+                    affected_routes.add(clean_route)
+                    reasons[clean_route] = f"Source route file {f} was directly modified."
+
+        # 2. Advisory commit message analysis (broadens scope & adds uncertainties, does not invent capabilities)
         if commit_message:
             msg_lower = commit_message.lower()
-            if "auth" in msg_lower or "login" in msg_lower:
-                affected_capabilities.add("authentication")
-                reasons.setdefault("authentication", "Commit message explicitly mentions authentication.")
-            if "enroll" in msg_lower or "course" in msg_lower:
-                affected_capabilities.add("course_enrollment")
-                reasons.setdefault("course_enrollment", "Commit message explicitly references course enrollment.")
-            if "breaking" in msg_lower or "migration" in msg_lower or "refactor" in msg_lower:
+            if any(term in msg_lower for term in ["breaking", "migration", "refactor"]):
                 uncertainties.append("Commit message signals refactor or breaking change; broader impact possible.")
 
-        # 4. Determine confidence and recommended validation scope
+        # 3. Determine confidence and recommended validation scope
         confidence = 1.0
         recommended_scope = "targeted"
 
-        if shared_auth_changed or shared_nav_changed or schema_changed:
+        if shared_cap_changed:
             recommended_scope = "expanded"
-            uncertainties.append("Shared system component or schema modified; recommended scope expanded to verify downstream workflows.")
-            confidence = 0.85
+            uncertainties.append("Shared system capability modified; recommended scope expanded to verify downstream workflows.")
+            confidence = min(confidence, 0.85)
+
+        if unmatched_files:
+            if recommended_scope == "targeted":
+                recommended_scope = "expanded"
+            uncertainties.append(
+                f"{len(unmatched_files)} modified file(s) could not be mapped to known capabilities in the Product Graph: "
+                f"{', '.join(unmatched_files[:3])}{'...' if len(unmatched_files) > 3 else ''}; expanding scope to avoid missing regressions."
+            )
+            confidence = min(confidence, 0.60)
+
+        if commit_message and any(term in commit_message.lower() for term in ["breaking", "migration", "refactor"]):
+            if recommended_scope == "targeted":
+                recommended_scope = "expanded"
+            confidence = min(confidence, 0.80)
 
         if len(cleaned_files) > 20:
             recommended_scope = "full"
             uncertainties.append(f"Large diff across {len(cleaned_files)} files; recommended full regression validation.")
-            confidence = 0.75
-
-        # If no deterministic capabilities were detected despite file changes, flag uncertainty and broaden scope!
-        if cleaned_files and not affected_capabilities and not affected_routes:
-            recommended_scope = "expanded"
-            uncertainties.append("Modified files could not be mapped to specific known capabilities; expanding scope to avoid missing regressions.")
-            confidence = 0.60
+            confidence = min(confidence, 0.75)
 
         return ImpactReport(
             changed_files=cleaned_files,
@@ -168,4 +206,6 @@ class ChangeImpactAnalyzer:
             uncertainty=uncertainties,
             recommended_scope=recommended_scope,
             downstream_effects=downstream_effects,
+            product_graph_consulted=product_graph_consulted,
+            unmatched_files=unmatched_files,
         )

@@ -13,6 +13,8 @@ class DiscoveredCapability(BaseModel):
     routes: list[str] = Field(default_factory=list)
     roles: list[str] = Field(default_factory=list)
     entities: list[str] = Field(default_factory=list)
+    source_files: list[str] = Field(default_factory=list)
+    kind: str = "feature"
     is_inferred: bool = False
     confidence: float = 1.0
     provenance: str = "observed"
@@ -65,6 +67,12 @@ class ImpactReport(BaseModel):
     uncertainty: list[str] = Field(default_factory=list)
     recommended_scope: Literal["targeted", "expanded", "full"] = "targeted"
     downstream_effects: list[str] = Field(default_factory=list)
+    product_graph_consulted: bool = False
+    unmatched_files: list[str] = Field(default_factory=list)
+
+    @property
+    def uncertainties(self) -> list[str]:
+        return self.uncertainty
 
 
 class ValidationCreate(BaseModel):
