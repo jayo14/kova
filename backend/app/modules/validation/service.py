@@ -101,6 +101,17 @@ class ValidationService:
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
 
+    async def get_product_model(self, project_id: uuid.UUID) -> ProductModel | None:
+        """Retrieve the latest product model without automatically seeding if none exists."""
+        stmt = (
+            select(ProductModel)
+            .where(ProductModel.project_id == project_id)
+            .order_by(desc(ProductModel.version))
+            .limit(1)
+        )
+        res = await self.db.execute(stmt)
+        return res.scalar_one_or_none()
+
     # --- Change Impact Analysis ---
 
     async def analyze_impact(
@@ -110,17 +121,21 @@ class ValidationService:
         diff_content: str | None = None,
         commit_message: str | None = None,
     ) -> ImpactReport:
-        model = await self.get_latest_product_model(project_id)
+        model = await self.get_product_model(project_id)
         flows_stmt = select(Flow).where(Flow.project_id == project_id)
         flows_res = await self.db.execute(flows_stmt)
         flows = list(flows_res.scalars().all())
 
-        analyzer = ChangeImpactAnalyzer(
-            product_model={
+        product_model_dict: dict[str, Any] = {}
+        if model and model.capabilities:
+            product_model_dict = {
                 "capabilities": model.capabilities,
                 "routes": model.routes,
                 "roles": model.roles,
-            },
+            }
+
+        analyzer = ChangeImpactAnalyzer(
+            product_model=product_model_dict,
             flows=[{"id": str(f.id), "name": f.name, "capability": f.capability, "routes": f.routes} for f in flows],
         )
         return analyzer.analyze(
