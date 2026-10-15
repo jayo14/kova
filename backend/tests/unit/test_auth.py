@@ -375,3 +375,102 @@ async def test_reset_password_redis_jti_persists_across_app_restart(db_session):
         app.dependency_overrides.clear()
 
 
+@pytest.mark.asyncio
+async def test_authenticator_password_form_success():
+    from unittest.mock import AsyncMock, MagicMock
+    from app.engine.browser.session import SessionState
+    from app.modules.flows.auth import Authenticator
+    from app.modules.product_graph.schemas import AuthCapability
+
+    cap = AuthCapability(
+        project_id=uuid.uuid4(),
+        name="authenticate_student",
+        persona="student",
+        login_url="http://127.0.0.1:8000/login",
+        success_url_pattern=r"/dashboard",
+    )
+
+    mock_browser = MagicMock()
+    mock_browser.page = MagicMock()
+    mock_browser.page.url = "http://127.0.0.1:8000/login"
+    mock_browser.navigate = AsyncMock()
+    mock_browser.fill = AsyncMock()
+    mock_browser.click = AsyncMock()
+    mock_browser.screenshot = AsyncMock(return_value=b"fake_png")
+    mock_browser.save_session_state = AsyncMock(
+        return_value=SessionState(cookies=[{"name": "session", "value": "xyz"}])
+    )
+
+    mock_input = MagicMock()
+    mock_input.is_visible = AsyncMock(return_value=True)
+    mock_browser.page.query_selector = AsyncMock(return_value=mock_input)
+
+    async def on_click(*args, **kwargs):
+        mock_browser.page.url = "http://127.0.0.1:8000/dashboard"
+
+    mock_browser.click.side_effect = on_click
+
+    mock_cred = MagicMock()
+    mock_cred.email = "student@kova.dev"
+    mock_cred.password = "ValidPassword123!"
+
+    authenticator = Authenticator()
+    res = await authenticator.authenticate(
+        capability=cap,
+        browser=mock_browser,
+        credential=mock_cred,
+    )
+
+    assert res.success is True
+    assert res.session_state is not None
+    assert res.session_state.cookies[0]["value"] == "xyz"
+    assert len(res.attempts) >= 1
+    assert res.attempts[0].success is True
+
+
+@pytest.mark.asyncio
+async def test_authenticator_password_form_failure_wrong_url():
+    from unittest.mock import AsyncMock, MagicMock
+    from app.modules.flows.auth import Authenticator
+    from app.modules.product_graph.schemas import AuthCapability
+
+    cap = AuthCapability(
+        project_id=uuid.uuid4(),
+        name="authenticate_student",
+        persona="student",
+        login_url="http://127.0.0.1:8000/login",
+        success_url_pattern=r"/dashboard",
+    )
+
+    mock_browser = MagicMock()
+    mock_browser.page = MagicMock()
+    # Post-submit URL stays on /login (bad credentials)
+    mock_browser.page.url = "http://127.0.0.1:8000/login"
+    mock_browser.navigate = AsyncMock()
+    mock_browser.fill = AsyncMock()
+    mock_browser.click = AsyncMock()
+    mock_browser.screenshot = AsyncMock(return_value=b"fake_png")
+
+    mock_input = MagicMock()
+    mock_input.is_visible = AsyncMock(return_value=True)
+    mock_browser.page.query_selector = AsyncMock(return_value=mock_input)
+
+    mock_cred = MagicMock()
+    mock_cred.email = "student@kova.dev"
+    mock_cred.password = "WrongPassword!"
+
+    authenticator = Authenticator()
+    res = await authenticator.authenticate(
+        capability=cap,
+        browser=mock_browser,
+        credential=mock_cred,
+    )
+
+    assert res.success is False
+    assert res.session_state is None
+    assert "did not match success pattern" in (res.failure_reason or "")
+    assert len(res.attempts) == 2  # Retried once
+    assert all(not a.success for a in res.attempts)
+
+
+

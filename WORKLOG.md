@@ -115,4 +115,20 @@
   - `pytest backend/tests/unit/test_flow_generation.py backend/tests/integration/test_flow_db.py -v` (16 passed)
   - `pytest backend/tests/unit/test_flow_generation.py backend/tests/integration/test_flow_db.py backend/tests/unit/test_product_graph_schemas.py backend/tests/integration/test_product_graph_db.py backend/tests/unit/test_flow_dependencies.py backend/tests/unit/test_discovery_pipeline.py backend/tests/unit/test_explorer.py -v` (61 passed)
 
+## Chunk 08: Smart Auth Capability & Session Manager for Multi-Flow Reuse
+- **Status:** Complete
+- **Changes:**
+  - Added `AuthCapability` schema to `backend/app/modules/product_graph/schemas.py`.
+  - Added `persona` and `auth_strategy` columns to `Credential` ORM model, Alembic migration `017_add_credential_persona_and_strategy.py`, schemas, repository, service, and routes (`PUT /api/v1/projects/{project_id}/credentials/{credential_id}`).
+  - Added `SessionState`, `save_session_state()`, and `restore_session_state()` to `BrowserSession` (`backend/app/engine/browser/session.py`).
+  - Implemented `backend/app/modules/flows/auth/`:
+    - `Authenticator`: strategy dispatcher for `password_form`, `magic_link`, `oauth_mock`, `otp`.
+    - `SessionManager`: persona-keyed ephemeral session store with Redis & in-memory TTL caching, returning `(session_state, was_reused)`.
+    - Strategies: `PasswordFormStrategy` (semantic form detection, credential decryption, SSRF checks, pre/post screenshots and sanitized network logs with `purpose="auth_attempt"`, single retry), `MagicLinkStrategy`, `OAuthStrategy`, and `OTPStrategy`.
+  - Integrated `SessionManager` into `FlowRunner` setup dependency handling to eliminate redundant logins.
+  - Added unit test suites `test_session_manager.py` (4 tests), `test_auth_evidence.py` (1 test), `test_auth.py` (19 tests), and `test_multi_flow_session_reuse` (in `test_agent_robustness.py`).
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_session_manager.py backend/tests/unit/test_auth_evidence.py backend/tests/unit/test_auth.py backend/tests/integration/test_agent_robustness.py` (34 passed)
+
+
 

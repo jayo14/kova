@@ -298,6 +298,53 @@ class FlowRunner:
                             })
                             await self._emit_events(ctx, event_recorder)
                             continue
+
+                    # First-class AuthCapability / authentication dependency handling
+                    is_auth_dep = (
+                        dependency.get("kind") == "auth"
+                        or dependency.get("capability") in ("auth", "authentication")
+                        or "authenticated" in dependency.get("provides_capabilities", [])
+                        or any("auth" in str(p).lower() for p in dependency.get("provides_capabilities", []))
+                    )
+                    if is_auth_dep:
+                        from app.modules.flows.auth import Authenticator, SessionManager
+                        from app.modules.product_graph.schemas import AuthCapability
+                        persona_name = (
+                            dependency.get("persona")
+                            or (persona.get("name") if isinstance(persona, dict) else str(persona or "default"))
+                        )
+                        session_mgr = SessionManager()
+                        cred = None
+                        for cid in ctx.credentials.list_ids():
+                            c = ctx.credentials.get(cid)
+                            if c:
+                                cred = c
+                                break
+                        auth_cap = AuthCapability(
+                            project_id=dependency.get("project_id") or uuid.uuid4(),
+                            name=dependency.get("name") or "Authenticate",
+                            login_url=dependency.get("routes", ["/login"])[0] if dependency.get("routes") else "/login",
+                            persona=persona_name,
+                        )
+                        try:
+                            session_state, was_reused = await session_mgr.get_or_establish(
+                                execution_id=exec_id,
+                                persona=persona_name,
+                                capability=auth_cap,
+                                browser=browser,
+                                credential=cred,
+                                authenticator=Authenticator(),
+                                event_recorder=event_recorder,
+                            )
+                            ctx.record_event("auth_session_established", {
+                                "persona": persona_name,
+                                "was_reused": was_reused,
+                            })
+                            await self._emit_events(ctx, event_recorder)
+                            continue
+                        except Exception as auth_err:
+                            logger.warning("SessionManager get_or_establish failed: %s", auth_err)
+
                     dep_preconditions = dependency.get("preconditions")
                     if dep_preconditions:
                         dep_check = await verifier.verify(dep_preconditions)

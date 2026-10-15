@@ -19,6 +19,8 @@ class CredentialRepository:
         name: str,
         email: str,
         password: str,
+        persona: str | None = None,
+        auth_strategy: str | None = "password_form",
     ) -> Credential:
         encrypted_password = encrypt_credential(password)
         credential = Credential(
@@ -26,8 +28,36 @@ class CredentialRepository:
             name=name,
             email=email,
             password=encrypted_password,
+            persona=persona,
+            auth_strategy=auth_strategy or "password_form",
         )
         self.db.add(credential)
+        await self.db.flush()
+        await self.db.refresh(credential)
+        return credential
+
+    async def update(
+        self,
+        credential_id: uuid.UUID,
+        name: str | None = None,
+        email: str | None = None,
+        password: str | None = None,
+        persona: str | None = None,
+        auth_strategy: str | None = None,
+    ) -> Credential | None:
+        credential = await self.get_by_id(credential_id)
+        if credential is None:
+            return None
+        if name is not None:
+            credential.name = name
+        if email is not None:
+            credential.email = email
+        if password is not None:
+            credential.password = encrypt_credential(password)
+        if persona is not None:
+            credential.persona = persona
+        if auth_strategy is not None:
+            credential.auth_strategy = auth_strategy
         await self.db.flush()
         await self.db.refresh(credential)
         return credential

@@ -101,6 +101,38 @@ async def get_credential(
     return credential
 
 
+from app.modules.credentials.schemas import CredentialUpdate
+
+
+@router.put(
+    "/{project_id}/credentials/{credential_id}",
+    response_model=CredentialRead,
+)
+async def update_credential_endpoint(
+    project_id: str,
+    credential_id: str,
+    data: CredentialUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Update a credential's name, email, password, persona, or auth_strategy."""
+    try:
+        pid = uuid.UUID(project_id)
+        cid = uuid.UUID(credential_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid ID")
+
+    await _verify_project_ownership(db, pid, user.id)
+
+    service = CredentialService(db)
+    credential = await service.get_credential(cid)
+    if credential is None or credential.project_id != pid:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    updated = await service.update_credential(cid, data)
+    return updated
+
+
 @router.delete("/{project_id}/credentials/{credential_id}", status_code=204)
 async def delete_credential(
     project_id: str,
