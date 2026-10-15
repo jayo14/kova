@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -172,3 +172,26 @@ class ValidationReport(BaseModel):
     finished_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     evidence_summary: dict[str, int] = Field(default_factory=dict)
     signed_url: str | None = None
+
+
+class FlowResultDiff(BaseModel):
+    flow_id: uuid.UUID
+    flow_name: str
+    status_before: str | None = None       # None if the flow didn't exist in the previous run
+    status_after: str | None = None
+    status_changed: bool = False
+    new_evidence_count: int = 0
+    removed_evidence_count: int = 0
+    failure_reason_before: str | None = None
+    failure_reason_after: str | None = None
+    failure_reason_changed: bool = False
+
+
+class ReportDiff(BaseModel):
+    report_before: ValidationReport
+    report_after: ValidationReport
+    overall_status_changed: bool = False
+    flows_added: list[FlowValidationResult] = Field(default_factory=list)      # in after, not in before
+    flows_removed: list[FlowValidationResult] = Field(default_factory=list)    # in before, not in after
+    flows_changed: list[FlowResultDiff] = Field(default_factory=list)          # in both, with status/evidence changes
+    flows_unchanged: list[FlowValidationResult] = Field(default_factory=list)  # in both, no changes

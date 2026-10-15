@@ -268,3 +268,302 @@ async def test_ci_run_and_runner_fail_on_healed(db_session):
     finally:
         app.dependency_overrides.clear()
 
+
+@pytest.mark.asyncio
+async def test_generate_validation_report_html():
+    from app.modules.executions.reporting import ReportGenerator
+    from app.modules.validation.schemas import (
+        FlowValidationResult,
+        ImpactReport,
+        ValidationReport,
+        ValidationRequest,
+    )
+
+    flow_id = uuid.uuid4()
+    req = ValidationRequest(
+        project_id=uuid.uuid4(),
+        changed_files=["app/routes/checkout.py"],
+    )
+    impact = ImpactReport(
+        changed_files=["app/routes/checkout.py"],
+        affected_capabilities=["checkout"],
+        graph_traversal_log=["[Impact] File app/routes/checkout.py mapped to capability checkout"],
+        minimal_execution_plan={
+            "steps": [
+                {"flow_id": str(flow_id), "flow_name": "Checkout Flow", "role": "target"}
+            ]
+        },
+    )
+    results = [
+        FlowValidationResult(
+            flow_id=flow_id,
+            flow_name="Checkout Flow",
+            role="target",
+            status="passed",
+            duration_ms=120,
+        )
+    ]
+    report = ValidationReport(
+        id=uuid.uuid4(),
+        request=req,
+        impact_report=impact,
+        results=results,
+        overall_status="passed",
+        duration_ms=120,
+    )
+
+    generator = ReportGenerator()
+    html_output = await generator.generate_validation_report(report, project_name="E-Commerce")
+
+    assert "Impact Summary" in html_output
+    assert "app/routes/checkout.py" in html_output
+    assert "Execution Plan" in html_output
+    assert "Checkout Flow" in html_output
+    assert "Feature: Checkout Flow" in html_output
+    assert "Graph Traversal Audit Log" in html_output
+
+
+@pytest.mark.asyncio
+async def test_generate_validation_report_json():
+    from app.modules.validation.schemas import (
+        FlowValidationResult,
+        ImpactReport,
+        ValidationReport,
+        ValidationRequest,
+    )
+
+    flow_id = uuid.uuid4()
+    report = ValidationReport(
+        id=uuid.uuid4(),
+        request=ValidationRequest(project_id=uuid.uuid4()),
+        impact_report=ImpactReport(changed_files=["main.py"]),
+        results=[
+            FlowValidationResult(
+                flow_id=flow_id,
+                flow_name="Login Flow",
+                role="target",
+                status="passed",
+            )
+        ],
+        overall_status="passed",
+    )
+
+    json_data = report.model_dump(mode="json")
+    round_tripped = ValidationReport.model_validate(json_data)
+    assert round_tripped.id == report.id
+    assert round_tripped.overall_status == "passed"
+    assert len(round_tripped.results) == 1
+    assert round_tripped.results[0].flow_name == "Login Flow"
+
+
+@pytest.mark.asyncio
+async def test_generate_diff_report():
+    from app.modules.executions.reporting import ReportGenerator
+    from app.modules.validation.differ import ReportDiffer
+    from app.modules.validation.schemas import (
+        FlowValidationResult,
+        ImpactReport,
+        ValidationReport,
+        ValidationRequest,
+    )
+
+    flow_id = uuid.uuid4()
+    report_before = ValidationReport(
+        id=uuid.uuid4(),
+        request=ValidationRequest(project_id=uuid.uuid4()),
+        impact_report=ImpactReport(),
+        results=[
+            FlowValidationResult(
+                flow_id=flow_id,
+                flow_name="Payment Flow",
+                role="target",
+                status="passed",
+            )
+        ],
+        overall_status="passed",
+    )
+    report_after = ValidationReport(
+        id=uuid.uuid4(),
+        request=ValidationRequest(project_id=uuid.uuid4()),
+        impact_report=ImpactReport(),
+        results=[
+            FlowValidationResult(
+                flow_id=flow_id,
+                flow_name="Payment Flow",
+                role="target",
+                status="failed",
+                failure_reason="Gateway timeout",
+            )
+        ],
+        overall_status="failed",
+    )
+
+    diff = ReportDiffer.diff(report_before, report_after)
+    assert diff.overall_status_changed is True
+    assert len(diff.flows_changed) == 1
+    assert diff.flows_changed[0].flow_id == flow_id
+    assert diff.flows_changed[0].status_changed is True
+    assert diff.flows_changed[0].status_before == "passed"
+    assert diff.flows_changed[0].status_after == "failed"
+
+    generator = ReportGenerator()
+    html_diff = await generator.generate_diff_report(diff, project_name="Payment System")
+    assert "Validation Comparison (Diff Mode)" in html_diff
+    assert "Payment Flow" in html_diff
+    assert "Flows Changed" in html_diff
+
+
+@pytest.mark.asyncio
+async def test_signed_url_validation(db_session):
+    from app.modules.executions.reporting import generate_validation_signature
+    from app.modules.validation.models import SignedUrlModel, ValidationReportModel
+    from datetime import datetime, timezone, timedelta
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="signed-user@kova.local")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="Signed Project", base_url="https://example.com")
+        val_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
+        report_row = ValidationReportModel(
+            id=val_id,
+            project_id=project.id,
+            overall_status="passed",
+            duration_ms=450,
+            request={"project_id": str(project.id)},
+            impact_report={"changed_files": []},
+            results=[],
+            evidence_summary={},
+            started_at=now,
+            finished_at=now,
+        )
+        db_session.add_all([user, project, report_row])
+        await db_session.commit()
+
+        sig = generate_validation_signature(val_id)
+        expiry_ts = int(sig.split(".", 1)[0])
+        signed_url = SignedUrlModel(
+            id=uuid.uuid4(),
+            validation_id=val_id,
+            url=f"http://test/api/v1/validations/{val_id}/report?signature={sig}",
+            signature=sig,
+            expires_at=datetime.fromtimestamp(expiry_ts, tz=timezone.utc),
+            created_by=user.id,
+        )
+        db_session.add(signed_url)
+        await db_session.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/validations/{val_id}/report?signature={sig}&format=html")
+            assert resp.status_code == 200
+            assert "text/html" in resp.headers["content-type"]
+            assert "Signed Project" in resp.text
+            assert "Validation Report" in resp.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_signed_url_expired(db_session):
+    from app.modules.executions.reporting import generate_validation_signature
+    from app.modules.validation.models import ValidationReportModel
+    from datetime import datetime, timezone
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="expired-user@kova.local")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="Expired Project", base_url="https://example.com")
+        val_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
+        report_row = ValidationReportModel(
+            id=val_id,
+            project_id=project.id,
+            overall_status="passed",
+            duration_ms=450,
+            request={"project_id": str(project.id)},
+            impact_report={},
+            results=[],
+            evidence_summary={},
+            started_at=now,
+            finished_at=now,
+        )
+        db_session.add_all([user, project, report_row])
+        await db_session.commit()
+
+        # Generate signature with past expiry
+        expired_sig = generate_validation_signature(val_id, expires_at=100)
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/validations/{val_id}/report?signature={expired_sig}")
+            assert resp.status_code == 403
+            assert "expired" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_signed_url_revoked(db_session):
+    from app.modules.executions.reporting import generate_validation_signature
+    from app.modules.validation.models import SignedUrlModel, ValidationReportModel
+    from datetime import datetime, timezone
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="revoked-user@kova.local")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="Revoked Project", base_url="https://example.com")
+        val_id = uuid.uuid4()
+        now = datetime.now(timezone.utc)
+        report_row = ValidationReportModel(
+            id=val_id,
+            project_id=project.id,
+            overall_status="passed",
+            duration_ms=450,
+            request={"project_id": str(project.id)},
+            impact_report={},
+            results=[],
+            evidence_summary={},
+            started_at=now,
+            finished_at=now,
+        )
+        db_session.add_all([user, project, report_row])
+        await db_session.commit()
+
+        sig = generate_validation_signature(val_id)
+        expiry_ts = int(sig.split(".", 1)[0])
+        signed_url = SignedUrlModel(
+            id=uuid.uuid4(),
+            validation_id=val_id,
+            url=f"http://test/api/v1/validations/{val_id}/report?signature={sig}",
+            signature=sig,
+            expires_at=datetime.fromtimestamp(expiry_ts, tz=timezone.utc),
+            created_by=user.id,
+        )
+        db_session.add(signed_url)
+        await db_session.commit()
+
+        # Delete from signed_urls to revoke it
+        await db_session.delete(signed_url)
+        await db_session.commit()
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/v1/validations/{val_id}/report?signature={sig}")
+            assert resp.status_code == 403
+            assert "revoked" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+

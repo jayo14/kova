@@ -1,0 +1,95 @@
+{# Embedded Evidence Viewer — self-contained, no external CSS/JS #}
+<div class="evidence-embed" id="evidence-embed-{{ flow_id }}">
+  {% if evidence_items %}
+    <div class="evidence-timeline">
+      {% for ev in evidence_items %}
+        <div class="evidence-card" style="margin-top: 12px; padding: 14px; background: #0f172a; border: 1px solid #334155; border-radius: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <div style="font-weight: 600; font-size: 13px; color: #e2e8f0;">
+              <span class="badge" style="font-size: 11px; padding: 2px 8px; margin-right: 6px; background: #334155; border-radius: 4px;">{{ ev.purpose or 'step_evidence' }}</span>
+              {% if ev.step_id %}<span style="color: #94a3b8; font-family: monospace;">Step: {{ ev.step_id }}</span>{% endif %}
+              <span style="margin-left: 8px;">{{ ev.title or 'Evidence' }}</span>
+            </div>
+            {% if ev.video_url %}
+              {% set start_sec = ev.timestamp_range[0] if ev.timestamp_range and ev.timestamp_range|length > 0 else 0 %}
+              {% set end_sec = ev.timestamp_range[1] if ev.timestamp_range and ev.timestamp_range|length > 1 else '' %}
+              {% set fragment = '#t=' ~ start_sec ~ (',' ~ end_sec if end_sec else '') %}
+              <a href="{{ ev.video_url }}{{ fragment }}" target="_blank" rel="noopener noreferrer" style="font-size: 12px; color: #38bdf8; text-decoration: none;">▶ Watch Video Segment</a>
+            {% endif %}
+          </div>
+
+          {% if ev.element_locator %}
+            <div style="font-size: 11px; color: #94a3b8; font-family: monospace; margin-bottom: 8px;">
+              Locator: <span style="color: #f1f5f9;">{{ ev.element_locator }}</span>
+            </div>
+          {% endif %}
+
+          {% if ev.note %}
+            <div style="background: rgba(56, 189, 248, 0.1); border-left: 3px solid #38bdf8; padding: 8px 12px; margin-bottom: 8px; font-size: 12px; color: #e0f2fe;">
+              <strong>Verification note:</strong> {{ ev.note }}
+            </div>
+          {% endif %}
+
+          <!-- Viewport Screenshot -->
+          {% if ev.storage_url or ev.storage_key %}
+            <div style="margin: 8px 0;">
+              {% set img_src = ev.storage_url or ('/api/v1/executions/' ~ ev.execution_id ~ '/evidence/' ~ ev.id ~ '/file') %}
+              <a href="{{ img_src }}" target="_blank">
+                <img src="{{ img_src }}" alt="Step Evidence" style="max-width: 100%; max-height: 380px; border-radius: 6px; border: 1px solid #334155; display: block;" loading="lazy" />
+              </a>
+            </div>
+          {% endif %}
+
+          <!-- Collapsible Inspection Sections -->
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 6px;">
+            {% if ev.a11y_tree %}
+              <details style="background: #1e293b; border-radius: 4px; padding: 6px 10px; font-size: 12px;">
+                <summary style="cursor: pointer; color: #38bdf8; font-weight: 500;">Accessibility Tree</summary>
+                <pre style="margin-top: 8px; color: #cbd5e1; font-family: monospace; font-size: 11px; overflow-x: auto; white-space: pre-wrap; max-height: 200px;">{{ ev.a11y_tree }}</pre>
+              </details>
+            {% endif %}
+
+            <details style="background: #1e293b; border-radius: 4px; padding: 6px 10px; font-size: 12px;">
+              <summary style="cursor: pointer; color: #38bdf8; font-weight: 500;">DOM Snapshot</summary>
+              <div style="margin-top: 6px; color: #94a3b8;">
+                <p style="margin: 0 0 6px 0;">Full snapshot can be inspected on demand:</p>
+                <a href="/api/v1/evidence/{{ ev.id }}/dom" target="_blank" style="color: #38bdf8; font-family: monospace; text-decoration: underline;">GET /api/v1/evidence/{{ ev.id }}/dom</a>
+                {% if ev.dom_snapshot %}
+                  <pre style="margin-top: 8px; color: #94a3b8; font-family: monospace; font-size: 10px; max-height: 140px; overflow: hidden;">{{ ev.dom_snapshot[:400] }}... [truncated, open link for full DOM]</pre>
+                {% endif %}
+              </div>
+            </details>
+
+            {% if ev.network_log %}
+              <details style="background: #1e293b; border-radius: 4px; padding: 6px 10px; font-size: 12px;">
+                <summary style="cursor: pointer; color: #38bdf8; font-weight: 500;">Step Network Activity ({{ ev.network_log|length }} requests)</summary>
+                <div style="margin-top: 8px; overflow-x: auto; max-height: 200px;">
+                  <table style="width: 100%; font-size: 11px; font-family: monospace; border-collapse: collapse;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid #334155; text-align: left; color: #64748b;">
+                        <th style="padding: 4px;">Method</th>
+                        <th style="padding: 4px;">Status</th>
+                        <th style="padding: 4px;">URL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for req in ev.network_log %}
+                        <tr style="border-bottom: 1px solid #1e293b;">
+                          <td style="padding: 4px; color: #38bdf8;">{{ req.method or 'GET' }}</td>
+                          <td style="padding: 4px; color: {{ '#10b981' if (req.status or 200) < 400 else '#ef4444' }};">{{ req.status or '-' }}</td>
+                          <td style="padding: 4px; color: #cbd5e1; word-break: break-all;">{{ req.url }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div style="padding: 12px; color: #64748b; font-size: 12px; font-style: italic;">No evidence recorded for this flow.</div>
+  {% endif %}
+</div>

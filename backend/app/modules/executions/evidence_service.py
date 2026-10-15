@@ -6,7 +6,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.engine.browser.evidence_storage import evidence_storage
-from app.modules.executions.evidence_model import EvidenceStatus, EvidenceType
+from app.modules.executions.evidence_model import Evidence, EvidenceStatus, EvidenceType
 from app.modules.executions.evidence_repository import EvidenceRepository
 from app.modules.executions.event_service import EventService
 from app.modules.executions.reporting import sanitize_payload, sanitize_text
@@ -411,3 +411,46 @@ class EvidenceService:
         return await self.repo.attach_execution_artifacts(
             execution_id, video_url=video_url, trace_url=trace_url
         )
+
+    async def get_for_validation(self, validation_id: uuid.UUID) -> list[Evidence]:
+        """Return all evidence across all flows and executions in the validation."""
+        import sqlalchemy as sa
+        from app.modules.validation.models import ValidationReportModel, ValidationRun
+
+        evidence_ids: list[uuid.UUID] = []
+        execution_ids: list[uuid.UUID] = []
+
+        stmt = sa.select(ValidationReportModel).where(ValidationReportModel.id == validation_id)
+        res = await self.db.execute(stmt)
+        vreport = res.scalars().first()
+        if vreport and vreport.results:
+            for r in vreport.results:
+                evs = r.get("evidence_ids", []) if isinstance(r, dict) else getattr(r, "evidence_ids", [])
+                for eid in evs:
+                    try:
+                        evidence_ids.append(uuid.UUID(str(eid)))
+                    except Exception:
+                        pass
+
+        stmt_run = sa.select(ValidationRun).where(ValidationRun.id == validation_id)
+        res_run = await self.db.execute(stmt_run)
+        vrun = res_run.scalars().first()
+        if vrun and vrun.execution_ids:
+            for xid in vrun.execution_ids:
+                try:
+                    execution_ids.append(uuid.UUID(str(xid)))
+                except Exception:
+                    pass
+
+        conditions = []
+        if evidence_ids:
+            conditions.append(Evidence.id.in_(evidence_ids))
+        if execution_ids:
+            conditions.append(Evidence.execution_id.in_(execution_ids))
+
+        if not conditions:
+            return []
+
+        stmt_ev = sa.select(Evidence).where(sa.or_(*conditions)).order_by(Evidence.created_at.asc())
+        ev_res = await self.db.execute(stmt_ev)
+        return list(ev_res.scalars().all())

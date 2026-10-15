@@ -212,7 +212,48 @@ export function EvidenceViewer({
         <div className="flex-1 overflow-y-auto p-6">
           {activeTab === "screenshot" && (
             <div className="space-y-4">
-              {currentUrl ? (
+              {compareEvidence ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Current Run */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-caption font-semibold">
+                      <span className="text-foreground">Current Run</span>
+                      <span className="text-muted-foreground">{evidence.title}</span>
+                    </div>
+                    <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black">
+                      {currentUrl ? (
+                        <img
+                          src={currentUrl}
+                          alt="Current Run Evidence"
+                          className="w-full h-auto max-h-[50vh] object-contain"
+                          onError={handleImageError}
+                        />
+                      ) : (
+                        <div className="py-12 text-center text-muted-foreground text-caption">No screenshot</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Compare Run */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-caption font-semibold">
+                      <span className="text-primary">Compare Run (Baseline)</span>
+                      <span className="text-muted-foreground">{compareEvidence.title}</span>
+                    </div>
+                    <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black">
+                      {compareEvidence.url ? (
+                        <img
+                          src={compareEvidence.url}
+                          alt="Compare Run Evidence"
+                          className="w-full h-auto max-h-[50vh] object-contain"
+                        />
+                      ) : (
+                        <div className="py-12 text-center text-muted-foreground text-caption">No screenshot in compare run</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : currentUrl ? (
                 <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black">
                   {imgError ? (
                     <div className="flex flex-col items-center justify-center py-16 text-foreground">

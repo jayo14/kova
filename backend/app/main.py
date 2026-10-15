@@ -148,6 +148,8 @@ app.include_router(projects.router, prefix="/api/v1")
 app.include_router(credentials.router, prefix="/api/v1")
 app.include_router(flows.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
+app.include_router(executions.validations_router, prefix="/api/v1")
+app.include_router(executions.evidence_router, prefix="/api/v1")
 app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(viewport.router)
 

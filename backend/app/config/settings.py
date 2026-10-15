@@ -116,6 +116,8 @@ class Settings(BaseSettings):
         val = int(v) if v is not None else 3
         return min(max(val, 1), 5)
 
+    SIGNED_URL_TTL_DAYS: int = 30
+
     @field_validator("DISCOVERY_MAX_PAGES", mode="before")
     @classmethod
     def cap_discovery_pages(cls, v: Any) -> int:

@@ -229,3 +229,34 @@
   - Added unit and regression tests in `backend/tests/test_evidence.py`.
 - **Tests Passing:**
   - `pytest backend/tests/test_evidence.py backend/tests/integration/test_e2e.py -v` (16 passed)
+
+## Chunk 13 — Signed, shareable, diff-able reports
+- **Status:** Complete
+- **Changes:**
+  - Extended schemas in `backend/app/modules/validation/schemas.py`:
+    - Added `FlowResultDiff` and `ReportDiff` schemas for differential analysis between validation runs.
+  - Implemented `ReportDiffer` in `backend/app/modules/validation/differ.py`:
+    - Matches flows across validation runs by `flow_id`.
+    - Detects status changes, failure reason changes, and evidence additions/removals.
+    - Categorizes flows into `flows_added`, `flows_removed`, `flows_changed`, and `flows_unchanged`.
+  - Added `SignedUrlModel` in `backend/app/modules/validation/models.py` and created Alembic migration `021_add_signed_urls.py` with foreign key relations, cascade deletes, and indices.
+  - Added `SIGNED_URL_TTL_DAYS` setting (default 30) in `backend/app/config/settings.py`.
+  - Extended `EvidenceService` (`backend/app/modules/executions/evidence_service.py`):
+    - Added `get_for_validation(validation_id)` to gather all evidence artifacts across all flows and executions in a validation run.
+  - Upgraded report generator in `backend/app/modules/executions/reporting.py`:
+    - Added `generate_validation_signature` and `verify_validation_signature` supporting HMAC-SHA256 signatures for validation IDs.
+    - Implemented `ReportGenerator` producing self-contained, dependency-free HTML and JSON reports.
+    - Added server-side Jinja2 templates:
+      - `backend/templates/validation_report.html`: Renders logo, project name, validation ID, duration, overall status badge, impact summary (changed files, affected capabilities, scope), graph traversal audit log, execution plan, flow results with Gherkin feature blocks and embedded evidence, evidence metrics summary, and signed URL footer with signing key ID.
+      - `backend/templates/_evidence_embed.html`: Renders collapsible step evidence bundles with viewport screenshots, video playback links scrubbed to step timestamps (`#t=start,end`), element locator, verification note, pretty-printed accessibility tree, on-demand DOM snapshot endpoint links, and redacted network activity logs.
+    - Added Jinja2 to `pyproject.toml` dependencies.
+  - Added API endpoints in `backend/app/api/routes/executions.py` and mounted in `backend/app/main.py`:
+    - `GET /api/v1/validations/{id}/report`: Supports `?format=html`, `?format=json`, `?compare_to=<other_id>`, and `?signature=<sig>`.
+    - Validates HMAC signatures, expiry timestamp, and revocability via `signed_urls` table (returns 403 on revoked/expired URLs).
+    - `GET /api/v1/evidence/{id}/dom`: Serves full DOM snapshots on demand without bloating the main report HTML.
+    - Extended `GET /api/v1/executions/{id}/report` to support `?compare_to=<id>` for execution-level diffing.
+  - Upgraded frontend evidence viewer (`frontend/components/executions/evidence-viewer.tsx`):
+    - Added side-by-side diff mode rendering when `compareEvidence` is provided for visual screenshot comparison against baseline runs.
+  - Added unit test suite in `backend/tests/unit/test_ci_and_reports.py` and integration e2e test in `backend/tests/integration/test_e2e.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_ci_and_reports.py backend/tests/integration/test_e2e.py -v` (13 passed)

@@ -749,6 +749,7 @@ async def get_execution_report(
     request: Request,
     signature: str | None = None,
     format: str | None = None,
+    compare_to: str | None = None,
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_session),
 ):
@@ -846,6 +847,29 @@ async def get_execution_report(
             else:
                 why_it_failed = "Execution did not complete required verification checks."
 
+    if compare_to:
+        try:
+            comp_uuid = uuid.UUID(compare_to)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid comparison execution ID")
+        comp_exec_stmt = select(Execution).where(Execution.id == comp_uuid)
+        comp_exec_res = await db.execute(comp_exec_stmt)
+        comp_exec = comp_exec_res.scalar_one_or_none()
+        if not comp_exec:
+            raise HTTPException(status_code=404, detail="Comparison execution not found")
+        comp_status = comp_exec.status.value if hasattr(comp_exec.status, "value") else str(comp_exec.status)
+        diff_html = f"""<!DOCTYPE html>
+<html>
+<head><title>Execution Diff</title><style>body {{ background: #0f172a; color: #f8fafc; font-family: sans-serif; padding: 24px; }} .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }} .box {{ background: #1e293b; padding: 16px; border-radius: 8px; border: 1px solid #334155; }}</style></head>
+<body>
+<h2>Execution Diff: {html.escape(flow_name)}</h2>
+<div class="grid">
+  <div class="box"><h3>Run A ({comp_uuid})</h3><p>Status: {comp_status}</p></div>
+  <div class="box"><h3>Run B ({exec_uuid})</h3><p>Status: {report_status}</p></div>
+</div>
+</body></html>"""
+        return HTMLResponse(content=diff_html)
+
     html_content = _render_report_html(
         execution_id=exec_uuid,
         status_str=report_status,
@@ -891,5 +915,169 @@ async def get_execution_report(
     if format != "json":
         report_response["html"] = html_content
     return report_response
+
+
+# ---------------------------------------------------------------------------
+# Validation & Evidence Endpoints (Chunk 13)
+# ---------------------------------------------------------------------------
+validations_router = APIRouter(prefix="/validations", tags=["validations"])
+evidence_router = APIRouter(prefix="/evidence", tags=["evidence"])
+
+
+@validations_router.get("/{validation_id}/report")
+async def get_validation_report(
+    validation_id: str,
+    request: Request,
+    signature: str | None = None,
+    format: str | None = None,
+    compare_to: str | None = None,
+    user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve full signed, diff-able ValidationReport in HTML or JSON format."""
+    try:
+        val_uuid = uuid.UUID(validation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid validation report ID")
+
+    from app.modules.validation.models import SignedUrlModel, ValidationReportModel
+    from app.modules.validation.schemas import ValidationReport
+    from app.modules.executions.reporting import (
+        ReportGenerator,
+        generate_validation_signature,
+        verify_validation_signature,
+    )
+    from datetime import datetime, timezone
+
+    # 1. Fetch validation report model
+    stmt = select(ValidationReportModel).where(ValidationReportModel.id == val_uuid)
+    res = await db.execute(stmt)
+    report_model = res.scalar_one_or_none()
+    if not report_model:
+        raise HTTPException(status_code=404, detail="Validation report not found")
+
+    # 2. Check authorization
+    if signature:
+        try:
+            expiry_text, _ = signature.split(".", 1)
+            expires_at = int(expiry_text)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        if expires_at < int(time.time()):
+            raise HTTPException(status_code=403, detail="Signed URL has expired")
+
+        if not verify_validation_signature(val_uuid, signature):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+
+        # Check revocability via signed_urls table
+        su_stmt = select(SignedUrlModel).where(
+            SignedUrlModel.validation_id == val_uuid,
+            SignedUrlModel.signature == signature,
+        )
+        su_res = await db.execute(su_stmt)
+        if not su_res.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Signed URL has been revoked")
+    else:
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        proj_repo = ProjectRepository(db)
+        project = await proj_repo.get_by_id(report_model.project_id)
+        if not project or project.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Forbidden: You do not own this project")
+
+    # Fetch project name
+    p_stmt = select(Project).where(Project.id == report_model.project_id)
+    p_res = await db.execute(p_stmt)
+    project_row = p_res.scalar_one_or_none()
+    project_name = project_row.name if project_row else "Project"
+
+    # 3. Diff mode
+    if compare_to:
+        try:
+            comp_uuid = uuid.UUID(compare_to)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid comparison validation ID")
+
+        comp_stmt = select(ValidationReportModel).where(ValidationReportModel.id == comp_uuid)
+        comp_res = await db.execute(comp_stmt)
+        comp_model = comp_res.scalar_one_or_none()
+        if not comp_model:
+            raise HTTPException(status_code=404, detail="Comparison validation report not found")
+
+        generator = ReportGenerator(db)
+        diff_html = await generator.generate_diff_report(
+            validation_id_before=comp_uuid,
+            validation_id_after=val_uuid,
+            project_name=project_name,
+        )
+        return HTMLResponse(content=diff_html)
+
+    # 4. JSON Format
+    accept_header = request.headers.get("accept", "")
+    if format == "json" or (not signature and format != "html" and "application/json" in accept_header and "text/html" not in accept_header):
+        vreport = ValidationReport(
+            id=report_model.id,
+            request=report_model.request,
+            impact_report=report_model.impact_report,
+            results=report_model.results,
+            overall_status=report_model.overall_status,
+            duration_ms=report_model.duration_ms,
+            started_at=report_model.started_at,
+            finished_at=report_model.finished_at,
+            evidence_summary=report_model.evidence_summary,
+            signed_url=report_model.signed_url,
+        )
+        return vreport.model_dump(mode="json")
+
+    # 5. HTML Format with persistent signed URL
+    base_url = str(request.base_url).rstrip("/")
+    sig = generate_validation_signature(val_uuid)
+    shareable_url = f"{base_url}/api/v1/validations/{val_uuid}/report?signature={sig}"
+
+    su_check = await db.execute(select(SignedUrlModel).where(SignedUrlModel.signature == sig))
+    if not su_check.scalar_one_or_none():
+        expiry_ts = int(sig.split(".", 1)[0])
+        expires_dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
+        db.add(
+            SignedUrlModel(
+                id=uuid.uuid4(),
+                validation_id=val_uuid,
+                url=shareable_url,
+                signature=sig,
+                expires_at=expires_dt,
+                created_by=user.id if user else None,
+            )
+        )
+        if not report_model.signed_url:
+            report_model.signed_url = shareable_url
+        await db.commit()
+
+    generator = ReportGenerator(db)
+    html_content = await generator.generate_validation_report(val_uuid, project_name=project_name)
+    return HTMLResponse(content=html_content)
+
+
+@evidence_router.get("/{evidence_id}/dom")
+async def get_evidence_dom(
+    evidence_id: str,
+    db: AsyncSession = Depends(get_session),
+):
+    """Serve full DOM snapshot on-demand without bloating main report payloads."""
+    try:
+        eid = uuid.UUID(evidence_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid evidence ID")
+
+    from app.modules.executions.evidence_model import Evidence
+
+    stmt = select(Evidence).where(Evidence.id == eid)
+    res = await db.execute(stmt)
+    evidence = res.scalar_one_or_none()
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    dom = evidence.dom_snapshot or "<html><body><p>No DOM snapshot recorded.</p></body></html>"
+    return HTMLResponse(content=dom)
 
 
