@@ -59,99 +59,134 @@ export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
     );
   }
 
-  // Sort: group by stepId, then purpose, then newest
-  const sorted = [...validEvidence].sort((a, b) => {
-    const stepA = a.stepId || "";
-    const stepB = b.stepId || "";
-    if (stepA !== stepB) return stepA.localeCompare(stepB);
+  // Group by stepId
+  const stepGroups: { stepId: string; items: Evidence[] }[] = [];
+  const groupMap = new Map<string, Evidence[]>();
 
-    const purposeOrder: Record<string, number> = {
-      verification: 0,
-      failure: 1,
-      step_evidence: 2,
-      discovery: 3,
-      legacy: 4,
-    };
-    const pA = purposeOrder[a.purpose || ""] ?? 5;
-    const pB = purposeOrder[b.purpose || ""] ?? 5;
-    if (pA !== pB) return pA - pB;
+  for (const item of validEvidence) {
+    const sid = item.stepId || "General";
+    if (!groupMap.has(sid)) {
+      groupMap.set(sid, []);
+    }
+    groupMap.get(sid)!.push(item);
+  }
 
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-  });
+  for (const [stepId, items] of groupMap.entries()) {
+    items.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+    stepGroups.push({ stepId, items });
+  }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-6">
       {isDev && orphanScreenshots.length > 0 && (
         <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 text-caption mb-3">
           Found {orphanScreenshots.length} orphan screenshot(s) — capture path bug.
         </div>
       )}
-      <div className="space-y-1.5">
-      {sorted.map((item) => (
-        <button
-          key={item.id}
-          onClick={() => onEvidenceClick?.(item)}
-          className={cn(
-            "w-full flex items-center gap-3 rounded-xl border border-border bg-card/50 px-4 py-3 text-left transition-colors",
-            "hover:bg-card hover:border-border/80",
-            item.type === "SCREENSHOT" && "cursor-pointer"
-          )}
-        >
-          <div
-            className={cn(
-              "h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
-              item.type === "VERIFICATION"
-                ? "bg-emerald-500/10"
-                : item.type === "SCREENSHOT"
-                ? "bg-primary/10"
-                : "bg-secondary"
-            )}
-          >
-            <MaterialIcon
-              name={typeIcons[item.type] || "description"}
-              size={18}
-              className={cn(
-                item.type === "VERIFICATION"
-                  ? "text-emerald-600"
-                  : item.type === "SCREENSHOT"
-                  ? "text-primary"
-                  : "text-muted-foreground"
-              )}
-            />
+
+      {stepGroups.map((group, groupIdx) => (
+        <div key={group.stepId} className="relative pl-6 border-l-2 border-border/60 ml-3 space-y-3">
+          {/* Timeline bullet */}
+          <div className="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-border bg-background flex items-center justify-center">
+            <div className="h-1.5 w-1.5 rounded-full bg-primary" />
           </div>
 
-          <div className="flex-1 min-w-0">
-            <p className="text-body-sm font-medium text-foreground truncate">
-              {item.title}
-            </p>
-            <p className="text-caption text-muted-foreground">
-              {typeLabels[item.type] || item.type}
-              {item.description && (
-                <span className="ml-1.5">— {item.description}</span>
-              )}
-            </p>
-          </div>
-
-          <div className="text-right shrink-0">
-            <span className={cn("text-[11px] font-medium capitalize", statusColors[item.status] || "text-muted-foreground")}>
-              {item.status === "VERIFIED" ? "Verified" : item.status === "CAPTURED" ? "Captured" : "Failed"}
+          <div className="flex items-center justify-between">
+            <h4 className="text-body-sm font-semibold text-foreground">
+              {group.stepId.startsWith("step_") ? `Step ${group.stepId.replace("step_", "")}` : group.stepId}
+            </h4>
+            <span className="text-[11px] text-muted-foreground/70">
+              {group.items.length} {group.items.length === 1 ? "artifact" : "artifacts"}
             </span>
-            <p className="text-[11px] text-muted-foreground/80 mt-0.5">
-              {new Date(item.createdAt).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </p>
           </div>
 
-          {item.type === "SCREENSHOT" && item.url && (
-            <MaterialIcon
-              name="open_in_new"
-              size={14}
-              className="text-muted-foreground/40 shrink-0"
-            />
-          )}
-        </button>
+          <div className="space-y-1.5">
+            {group.items.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => onEvidenceClick?.(item)}
+                className={cn(
+                  "w-full flex items-center gap-3 rounded-xl border border-border bg-card/50 px-4 py-3 text-left transition-colors",
+                  "hover:bg-card hover:border-border/80 cursor-pointer"
+                )}
+              >
+                <div
+                  className={cn(
+                    "h-9 w-9 rounded-lg flex items-center justify-center shrink-0",
+                    item.type === "VERIFICATION"
+                      ? "bg-emerald-500/10"
+                      : item.type === "SCREENSHOT"
+                      ? "bg-primary/10"
+                      : "bg-secondary"
+                  )}
+                >
+                  <MaterialIcon
+                    name={
+                      item.videoUrl
+                        ? "movie"
+                        : item.type === "VERIFICATION"
+                        ? "verified"
+                        : item.type === "SCREENSHOT"
+                        ? "photo_library"
+                        : "description"
+                    }
+                    size={18}
+                    className={cn(
+                      item.type === "VERIFICATION"
+                        ? "text-emerald-600"
+                        : item.type === "SCREENSHOT"
+                        ? "text-primary"
+                        : "text-muted-foreground"
+                    )}
+                  />
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <p className="text-body-sm font-medium text-foreground truncate">
+                    {item.title}
+                  </p>
+                  <p className="text-caption text-muted-foreground truncate">
+                    {typeLabels[item.type] || item.type}
+                    {item.elementLocator && (
+                      <span className="ml-1.5 font-mono text-[11px] text-muted-foreground/80">
+                        [{item.elementLocator}]
+                      </span>
+                    )}
+                    {item.description && (
+                      <span className="ml-1.5">— {item.description}</span>
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {item.domSnapshot && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      DOM
+                    </span>
+                  )}
+                  {item.a11yTree && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      A11Y
+                    </span>
+                  )}
+                  {Array.isArray(item.networkLog) && item.networkLog.length > 0 && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      NET ({item.networkLog.length})
+                    </span>
+                  )}
+                  {item.videoUrl && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-500">
+                      VIDEO
+                    </span>
+                  )}
+                  <span className={cn("text-[11px] font-medium capitalize", statusColors[item.status] || "text-muted-foreground")}>
+                    {item.status === "VERIFIED" ? "Verified" : item.status === "CAPTURED" ? "Captured" : "Failed"}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
       ))}
     </div>
   );

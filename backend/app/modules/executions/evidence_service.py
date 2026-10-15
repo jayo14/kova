@@ -32,6 +32,14 @@ class EvidenceService:
         storage_key: str | None = None,
         mime_type: str | None = None,
         metadata: dict | None = None,
+        dom_snapshot: str | None = None,
+        a11y_tree: str | None = None,
+        network_log: list | dict | None = None,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+        element_locator: str | None = None,
+        timestamp_range: list | None = None,
+        note: str | None = None,
     ) -> Evidence:
         """Create an evidence record with purpose and step_id enforcement.
 
@@ -55,6 +63,14 @@ class EvidenceService:
             storage_key=storage_key,
             mime_type=mime_type,
             metadata=metadata or {},
+            dom_snapshot=dom_snapshot,
+            a11y_tree=a11y_tree,
+            network_log=network_log,
+            video_url=video_url,
+            trace_url=trace_url,
+            element_locator=element_locator,
+            timestamp_range=timestamp_range,
+            note=note,
         )
 
     async def capture_screenshot(
@@ -67,6 +83,14 @@ class EvidenceService:
         description: str | None = None,
         mime_type: str = "image/png",
         extra_data: dict | None = None,
+        dom_snapshot: str | None = None,
+        a11y_tree: str | None = None,
+        network_log: list | dict | None = None,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+        element_locator: str | None = None,
+        timestamp_range: list | None = None,
+        note: str | None = None,
     ) -> dict | None:
         """Capture a screenshot as evidence.
 
@@ -105,6 +129,14 @@ class EvidenceService:
                 storage_key=upload_result.get("storage_key"),
                 mime_type=mime_type,
                 metadata=sanitize_payload({"size_bytes": len(screenshot_bytes), **(extra_data or {})}),
+                dom_snapshot=dom_snapshot,
+                a11y_tree=a11y_tree,
+                network_log=network_log,
+                video_url=video_url,
+                trace_url=trace_url,
+                element_locator=element_locator,
+                timestamp_range=timestamp_range,
+                note=note,
             )
 
             # Emit event
@@ -136,6 +168,14 @@ class EvidenceService:
                 "description": evidence.description,
                 "status": evidence.status,
                 "mime_type": evidence.mime_type,
+                "dom_snapshot": evidence.dom_snapshot,
+                "a11y_tree": evidence.a11y_tree,
+                "network_log": evidence.network_log,
+                "video_url": evidence.video_url,
+                "trace_url": evidence.trace_url,
+                "element_locator": evidence.element_locator,
+                "timestamp_range": evidence.timestamp_range,
+                "note": evidence.note,
                 "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
             }
 
@@ -159,11 +199,18 @@ class EvidenceService:
         step_id: str | None = None,
         checks: list[dict] | None = None,
         extra_data: dict | None = None,
+        dom_snapshot: str | None = None,
+        a11y_tree: str | None = None,
+        network_log: list | dict | None = None,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+        element_locator: str | None = None,
+        timestamp_range: list | None = None,
+        note: str | None = None,
+        storage_key: str | None = None,
+        mime_type: str | None = None,
     ) -> dict | None:
-        """Create verification evidence (structured proof that a check passed).
-
-        No storage needed — this is metadata evidence.
-        """
+        """Create verification evidence (structured proof that a check passed)."""
         eff_step_id = step_id or (extra_data or {}).get("step_id")
         try:
             evidence = await self.repo.create(
@@ -178,7 +225,17 @@ class EvidenceService:
                     if checks and all(check.get("passed") is True for check in checks)
                     else EvidenceStatus.FAILED.value
                 ),
+                storage_key=storage_key,
+                mime_type=mime_type,
                 metadata=sanitize_payload({"checks": checks or [], **(extra_data or {})}),
+                dom_snapshot=dom_snapshot,
+                a11y_tree=a11y_tree,
+                network_log=network_log,
+                video_url=video_url,
+                trace_url=trace_url,
+                element_locator=element_locator,
+                timestamp_range=timestamp_range,
+                note=note,
             )
 
             await self.event_service.record_event(
@@ -202,6 +259,14 @@ class EvidenceService:
                 "step_id": evidence.step_id,
                 "description": evidence.description,
                 "status": evidence.status,
+                "dom_snapshot": evidence.dom_snapshot,
+                "a11y_tree": evidence.a11y_tree,
+                "network_log": evidence.network_log,
+                "video_url": evidence.video_url,
+                "trace_url": evidence.trace_url,
+                "element_locator": evidence.element_locator,
+                "timestamp_range": evidence.timestamp_range,
+                "note": evidence.note,
                 "metadata": evidence.extra_data,
                 "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
             }
@@ -209,6 +274,13 @@ class EvidenceService:
         except Exception as e:
             logger.warning("Verification evidence failed (execution=%s): %s", execution_id, e)
             return None
+
+    async def link_evidence_to_step(self, evidence_id: uuid.UUID, step_id: str) -> None:
+        """Link an existing evidence artifact to a specific step ID."""
+        evidence = await self.repo.get_by_id(evidence_id)
+        if evidence:
+            evidence.step_id = step_id
+            await self.db.commit()
 
     async def get_evidence(self, evidence_id: uuid.UUID) -> dict | None:
         """Get evidence by ID."""
@@ -227,6 +299,14 @@ class EvidenceService:
             "status": evidence.status,
             "mime_type": evidence.mime_type,
             "storage_key": evidence.storage_key,
+            "dom_snapshot": evidence.dom_snapshot,
+            "a11y_tree": evidence.a11y_tree,
+            "network_log": evidence.network_log,
+            "video_url": evidence.video_url,
+            "trace_url": evidence.trace_url,
+            "element_locator": evidence.element_locator,
+            "timestamp_range": evidence.timestamp_range,
+            "note": evidence.note,
             "metadata": evidence.extra_data,
             "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
         }
@@ -257,6 +337,14 @@ class EvidenceService:
                 "status": evidence.status,
                 "mime_type": evidence.mime_type,
                 "storage_key": evidence.storage_key,
+                "dom_snapshot": evidence.dom_snapshot,
+                "a11y_tree": evidence.a11y_tree,
+                "network_log": evidence.network_log,
+                "video_url": evidence.video_url,
+                "trace_url": evidence.trace_url,
+                "element_locator": evidence.element_locator,
+                "timestamp_range": evidence.timestamp_range,
+                "note": evidence.note,
                 "metadata": evidence.extra_data,
                 "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
             }
@@ -271,6 +359,17 @@ class EvidenceService:
             results.append(item)
 
         return results
+
+    async def get_evidence_list_grouped_by_step(self, execution_id: uuid.UUID) -> list[dict]:
+        """List evidence grouped by step_id in step appearance order."""
+        items = await self.get_evidence_list(execution_id)
+        grouped_dict: dict[str, list[dict]] = {}
+        for item in items:
+            sid = item.get("step_id") or "general"
+            if sid not in grouped_dict:
+                grouped_dict[sid] = []
+            grouped_dict[sid].append(item)
+        return [{"step_id": sid, "items": group_items} for sid, group_items in grouped_dict.items()]
 
     async def get_evidence_url(self, evidence_id: uuid.UUID) -> str | None:
         """Get a fresh signed URL for evidence artifact access."""
@@ -301,3 +400,14 @@ class EvidenceService:
         deleted = await self.repo.delete_by_execution(execution_id)
         logger.info("Cleaned up %d evidence items for execution %s", deleted, execution_id)
         return deleted
+
+    async def attach_execution_artifacts(
+        self,
+        execution_id: uuid.UUID,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+    ) -> int:
+        """Attach video and/or trace URLs to all evidence records of an execution."""
+        return await self.repo.attach_execution_artifacts(
+            execution_id, video_url=video_url, trace_url=trace_url
+        )

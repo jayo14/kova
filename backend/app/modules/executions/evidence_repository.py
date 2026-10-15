@@ -1,4 +1,5 @@
 import uuid
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,14 @@ class EvidenceRepository:
         storage_key: str | None = None,
         mime_type: str | None = None,
         metadata: dict | None = None,
+        dom_snapshot: str | None = None,
+        a11y_tree: str | None = None,
+        network_log: list | dict | None = None,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+        element_locator: str | None = None,
+        timestamp_range: list | None = None,
+        note: str | None = None,
     ) -> Evidence:
         evidence = Evidence(
             execution_id=execution_id,
@@ -33,7 +42,15 @@ class EvidenceRepository:
             status=status,
             storage_key=storage_key,
             mime_type=mime_type,
-            metadata=metadata or {},
+            extra_data=metadata or {},
+            dom_snapshot=dom_snapshot,
+            a11y_tree=a11y_tree,
+            network_log=network_log,
+            video_url=video_url,
+            trace_url=trace_url,
+            element_locator=element_locator,
+            timestamp_range=timestamp_range,
+            note=note,
         )
         self.db.add(evidence)
         await self.db.flush()
@@ -66,3 +83,28 @@ class EvidenceRepository:
         if count:
             await self.db.flush()
         return count
+
+    async def attach_execution_artifacts(
+        self,
+        execution_id: uuid.UUID,
+        video_url: str | None = None,
+        trace_url: str | None = None,
+    ) -> int:
+        """Update all evidence records for an execution with video_url and/or trace_url."""
+        from sqlalchemy import update
+
+        values: dict[str, Any] = {}
+        if video_url is not None:
+            values["video_url"] = video_url
+        if trace_url is not None:
+            values["trace_url"] = trace_url
+        if not values:
+            return 0
+
+        result = await self.db.execute(
+            update(Evidence)
+            .where(Evidence.execution_id == execution_id)
+            .values(**values)
+        )
+        await self.db.flush()
+        return result.rowcount

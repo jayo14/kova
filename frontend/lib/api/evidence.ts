@@ -19,6 +19,14 @@ export interface Evidence {
   createdAt: string;
   /** Short-lived signed URL or direct API URL for artifact access (screenshots only). */
   url?: string | null;
+  domSnapshot?: string | null;
+  a11yTree?: string | null;
+  networkLog?: Array<Record<string, unknown>> | Record<string, unknown> | null;
+  videoUrl?: string | null;
+  traceUrl?: string | null;
+  elementLocator?: string | null;
+  timestampRange?: [number, number] | number[] | null;
+  note?: string | null;
 }
 
 function formatEvidenceUrl(url: unknown): string | null {
@@ -28,6 +36,33 @@ function formatEvidenceUrl(url: unknown): string | null {
   }
   const base = getApiBaseUrl();
   return `${base}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+function parseEvidenceItem(item: Record<string, unknown>): Evidence {
+  const mapped = mapKeysToCamel(item) as Record<string, unknown>;
+  const meta = (mapped.metadata as Record<string, unknown>) || {};
+  return {
+    id: mapped.id as string,
+    executionId: mapped.executionId as string,
+    type: mapped.type as EvidenceType,
+    title: mapped.title as string,
+    purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
+    stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
+    description: mapped.description as string | null | undefined,
+    status: mapped.status as EvidenceStatus,
+    mimeType: mapped.mimeType as string | null | undefined,
+    metadata: meta,
+    createdAt: mapped.createdAt as string,
+    url: formatEvidenceUrl(mapped.url),
+    domSnapshot: (mapped.domSnapshot as string) || null,
+    a11yTree: (mapped.a11yTree as string) || null,
+    networkLog: (mapped.networkLog as Array<Record<string, unknown>>) || null,
+    videoUrl: formatEvidenceUrl(mapped.videoUrl),
+    traceUrl: formatEvidenceUrl(mapped.traceUrl),
+    elementLocator: (mapped.elementLocator as string) || null,
+    timestampRange: (mapped.timestampRange as number[]) || null,
+    note: (mapped.note as string) || null,
+  };
 }
 
 /**
@@ -42,24 +77,24 @@ export async function getExecutionEvidence(
     `/api/v1/executions/${executionId}/evidence`,
     { token }
   );
-  return (raw as Record<string, unknown>[]).map((item) => {
-    const mapped = mapKeysToCamel(item) as Record<string, unknown>;
-    const meta = (mapped.metadata as Record<string, unknown>) || {};
-    return {
-      id: mapped.id as string,
-      executionId: mapped.executionId as string,
-      type: mapped.type as EvidenceType,
-      title: mapped.title as string,
-      purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
-      stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
-      description: mapped.description as string | null | undefined,
-      status: mapped.status as EvidenceStatus,
-      mimeType: mapped.mimeType as string | null | undefined,
-      metadata: meta,
-      createdAt: mapped.createdAt as string,
-      url: formatEvidenceUrl(mapped.url),
-    } satisfies Evidence;
-  });
+  return (raw as Record<string, unknown>[]).map(parseEvidenceItem);
+}
+
+/**
+ * Fetch evidence grouped by step_id.
+ */
+export async function getGroupedExecutionEvidence(
+  executionId: string,
+  token?: string
+): Promise<{ stepId: string; items: Evidence[] }[]> {
+  const raw = await api.get<Array<{ step_id: string; items: Record<string, unknown>[] }>>(
+    `/api/v1/executions/${executionId}/evidence?grouped=true`,
+    { token }
+  );
+  return raw.map((group) => ({
+    stepId: group.step_id,
+    items: (group.items || []).map(parseEvidenceItem),
+  }));
 }
 
 /**
@@ -75,22 +110,7 @@ export async function getEvidence(
       `/api/v1/executions/${executionId}/evidence/${evidenceId}`,
       { token }
     );
-    const mapped = mapKeysToCamel(raw as Record<string, unknown>) as Record<string, unknown>;
-    const meta = (mapped.metadata as Record<string, unknown>) || {};
-    return {
-      id: mapped.id as string,
-      executionId: mapped.executionId as string,
-      type: mapped.type as EvidenceType,
-      title: mapped.title as string,
-      purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
-      stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
-      description: mapped.description as string | null | undefined,
-      status: mapped.status as EvidenceStatus,
-      mimeType: mapped.mimeType as string | null | undefined,
-      metadata: meta,
-      createdAt: mapped.createdAt as string,
-      url: formatEvidenceUrl(mapped.url),
-    } satisfies Evidence;
+    return parseEvidenceItem(raw as Record<string, unknown>);
   } catch {
     return null;
   }

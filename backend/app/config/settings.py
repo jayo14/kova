@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    EVIDENCE_CAPTURE_VIDEO: bool = True
+    EVIDENCE_CAPTURE_TRACE: bool = False
+    EVIDENCE_VIDEO_DIR: str = "/tmp/kova_videos"
     DISCOVERY_MAX_DEPTH: int = 3
     DISCOVERY_MAX_PAGES: int = 50
 

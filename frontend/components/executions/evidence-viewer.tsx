@@ -1,23 +1,50 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
 import type { Evidence } from "@/lib/api/evidence";
 
 interface EvidenceViewerProps {
   evidence: Evidence | null;
+  compareEvidence?: Evidence | null;
   open: boolean;
   onClose: () => void;
   onRefreshUrl?: (evidenceId: string) => Promise<string | null>;
 }
 
-export function EvidenceViewer({ evidence, open, onClose, onRefreshUrl }: EvidenceViewerProps) {
+type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "verification";
+
+export function EvidenceViewer({
+  evidence,
+  compareEvidence,
+  open,
+  onClose,
+  onRefreshUrl,
+}: EvidenceViewerProps) {
+  const [activeTab, setActiveTab] = useState<TabType>("screenshot");
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const retriedRef = useRef(false);
+
+  // Available tabs
+  const availableTabs = useMemo(() => {
+    if (!evidence) return [];
+    const tabs: TabType[] = [];
+    if (evidence.url || evidence.type === "SCREENSHOT") tabs.push("screenshot");
+    if (evidence.domSnapshot) tabs.push("dom");
+    if (evidence.a11yTree) tabs.push("a11y");
+    if (evidence.networkLog && (Array.isArray(evidence.networkLog) ? evidence.networkLog.length > 0 : true)) {
+      tabs.push("network");
+    }
+    if (evidence.videoUrl) tabs.push("video");
+    if (evidence.type === "VERIFICATION" || evidence.metadata?.checks || evidence.note) {
+      tabs.push("verification");
+    }
+    return tabs.length > 0 ? tabs : (["screenshot"] as TabType[]);
+  }, [evidence]);
 
   useEffect(() => {
     if (open && evidence) {
@@ -26,8 +53,17 @@ export function EvidenceViewer({ evidence, open, onClose, onRefreshUrl }: Eviden
       setRefreshing(false);
       setCurrentUrl(evidence.url || null);
       retriedRef.current = false;
+      if (evidence.type === "VERIFICATION") {
+        setActiveTab("verification");
+      } else if (evidence.url) {
+        setActiveTab("screenshot");
+      } else if (evidence.videoUrl) {
+        setActiveTab("video");
+      } else if (availableTabs[0]) {
+        setActiveTab(availableTabs[0]);
+      }
     }
-  }, [open, evidence?.id, evidence?.url]);
+  }, [open, evidence, availableTabs]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -69,162 +105,346 @@ export function EvidenceViewer({ evidence, open, onClose, onRefreshUrl }: Eviden
 
   if (!open || !evidence) return null;
 
-  const isOrphan =
-    evidence.type === "SCREENSHOT" &&
-    !evidence.stepId &&
-    !evidence.purpose &&
-    evidence.purpose !== "legacy";
-
-  const isDev = process.env.NODE_ENV !== "production";
-  if (isOrphan && !isDev) {
-    return null;
-  }
-
-  const isImage = evidence.type === "SCREENSHOT" && currentUrl;
-  const isVerification = evidence.type === "VERIFICATION";
-
   const checks = Array.isArray(evidence.metadata?.checks)
     ? (evidence.metadata.checks as Array<{ type: string; passed: boolean; message?: string }>)
     : [];
 
+  // Parse DOM snapshot if serialized JSON {before, after}
+  let domBefore: string | null = null;
+  let domAfter: string | null = null;
+  if (evidence.domSnapshot) {
+    try {
+      const parsed = JSON.parse(evidence.domSnapshot);
+      if (typeof parsed === "object" && parsed !== null && ("before" in parsed || "after" in parsed)) {
+        domBefore = parsed.before || null;
+        domAfter = parsed.after || null;
+      } else {
+        domAfter = evidence.domSnapshot;
+      }
+    } catch {
+      domAfter = evidence.domSnapshot;
+    }
+  }
+
+  // Parse a11y tree formatted
+  let formattedA11y: string | null = null;
+  if (evidence.a11yTree) {
+    try {
+      const parsed = JSON.parse(evidence.a11yTree);
+      formattedA11y = JSON.stringify(parsed, null, 2);
+    } catch {
+      formattedA11y = evidence.a11yTree;
+    }
+  }
+
+  // Network logs
+  const networkLogs = Array.isArray(evidence.networkLog)
+    ? (evidence.networkLog as Array<Record<string, unknown>>)
+    : [];
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative flex flex-col items-center max-w-3xl w-full mx-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative flex flex-col max-w-4xl w-full max-h-[90vh] bg-background border border-border rounded-2xl shadow-2xl overflow-hidden z-10">
         {/* Header */}
-        <div className="flex items-center justify-between w-full mb-3">
-          <div className="flex items-center gap-2">
-            <MaterialIcon
-              name={isVerification ? "verified" : "photo_library"}
-              size={18}
-              className="text-muted-foreground"
-            />
-            <span className="text-body-sm font-medium text-foreground">
-              {evidence.title}
-            </span>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-card/60">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+              <MaterialIcon name="photo_library" size={18} className="text-primary" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-body-sm font-semibold text-foreground truncate">
+                {evidence.title}
+              </h3>
+              <p className="text-[12px] text-muted-foreground truncate">
+                {evidence.stepId ? `Step: ${evidence.stepId}` : "Execution Evidence"}
+                {evidence.elementLocator && ` • locator: ${evidence.elementLocator}`}
+                {evidence.purpose && ` • ${evidence.purpose}`}
+              </p>
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-muted/50 text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <MaterialIcon name="close" size={18} />
-          </button>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <MaterialIcon name="close" size={18} />
+            </button>
+          </div>
         </div>
 
-        {isOrphan && isDev && (
-          <div className="w-full mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-500 text-caption text-center">
-            Found orphan screenshot — capture path bug. Missing step_id and purpose.
-          </div>
-        )}
+        {/* Tab Bar */}
+        <div className="flex items-center gap-1 px-6 border-b border-border bg-muted/20 overflow-x-auto">
+          {availableTabs.map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "flex items-center gap-1.5 px-3.5 py-2.5 text-caption font-medium border-b-2 transition-colors capitalize",
+                activeTab === tab
+                  ? "border-primary text-primary"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"
+              )}
+            >
+              <MaterialIcon
+                name={
+                  tab === "screenshot"
+                    ? "image"
+                    : tab === "dom"
+                    ? "code"
+                    : tab === "a11y"
+                    ? "accessibility"
+                    : tab === "network"
+                    ? "wifi"
+                    : tab === "video"
+                    ? "movie"
+                    : "verified"
+                }
+                size={16}
+              />
+              <span>{tab}</span>
+            </button>
+          ))}
+        </div>
 
-        {/* Content */}
-        {isImage ? (
-          <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black">
-            {imgError ? (
-              <div className="flex flex-col items-center justify-center py-16 text-foreground">
-                <MaterialIcon name="broken_image" size={48} className="mb-3 opacity-60" />
-                <p className="text-body-sm font-medium">Evidence could not be loaded.</p>
-                <p className="text-caption text-muted-foreground mt-1">The signed URL may have expired.</p>
-                {onRefreshUrl && (
-                  <button
-                    onClick={async () => {
-                      retriedRef.current = false;
-                      setImgError(false);
-                      setRefreshing(true);
-                      try {
-                        const freshUrl = await onRefreshUrl(evidence.id);
-                        if (freshUrl) {
-                          setCurrentUrl(freshUrl);
-                          retriedRef.current = true;
-                        } else {
-                          setImgError(true);
-                        }
-                      } catch {
-                        setImgError(true);
-                      }
-                      setRefreshing(false);
-                    }}
-                    className="mt-3 text-caption text-primary hover:underline"
-                    disabled={refreshing}
-                  >
-                    {refreshing ? "Refreshing..." : "Try again"}
-                  </button>
-                )}
-              </div>
-            ) : (
-              <>
-                {(refreshing || !imgLoaded) && (
-                  <div className="flex items-center justify-center py-16">
-                    <MaterialIcon name="progress_activity" size={24} className="animate-spin text-muted-foreground" />
-                  </div>
-                )}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={currentUrl!}
-                  alt={evidence.title}
-                  className={cn(
-                    "w-full h-auto max-h-[70vh] object-contain",
-                    !imgLoaded && "hidden"
-                  )}
-                  onLoad={() => setImgLoaded(true)}
-                  onError={handleImageError}
-                />
-              </>
-            )}
-          </div>
-        ) : isVerification ? (
-          <div className="w-full rounded-xl border border-border bg-card p-6">
-            <div className="flex items-start gap-3 mb-4">
-              <div className="h-10 w-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
-                <MaterialIcon name="check_circle" size={20} className="text-emerald-600" />
-              </div>
-              <div>
-                <p className="text-body-sm font-semibold text-foreground">
-                  {evidence.title}
-                </p>
-                {evidence.description && (
-                  <p className="text-caption text-muted-foreground mt-1">
-                    {evidence.description}
-                  </p>
-                )}
-              </div>
-            </div>
-            {checks.length > 0 && (
-              <div className="space-y-2 mt-4">
-                {checks.map((check, i) => (
-                    <div
-                      key={i}
-                      className={cn(
-                        "flex items-center gap-2 rounded-lg px-3 py-2 text-caption",
-                        check.passed
-                          ? "bg-emerald-500/5 text-emerald-700"
-                          : "bg-destructive/5 text-destructive"
+        {/* Tab Content */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {activeTab === "screenshot" && (
+            <div className="space-y-4">
+              {currentUrl ? (
+                <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black">
+                  {imgError ? (
+                    <div className="flex flex-col items-center justify-center py-16 text-foreground">
+                      <MaterialIcon name="broken_image" size={48} className="mb-3 opacity-60" />
+                      <p className="text-body-sm font-medium">Evidence image could not be loaded.</p>
+                      <p className="text-caption text-muted-foreground mt-1">The signed URL may have expired.</p>
+                      {onRefreshUrl && (
+                        <button
+                          onClick={async () => {
+                            retriedRef.current = false;
+                            setImgError(false);
+                            setRefreshing(true);
+                            try {
+                              const freshUrl = await onRefreshUrl(evidence.id);
+                              if (freshUrl) {
+                                setCurrentUrl(freshUrl);
+                                retriedRef.current = true;
+                              } else {
+                                setImgError(true);
+                              }
+                            } catch {
+                              setImgError(true);
+                            }
+                            setRefreshing(false);
+                          }}
+                          className="mt-3 text-caption text-primary hover:underline"
+                          disabled={refreshing}
+                        >
+                          {refreshing ? "Refreshing..." : "Try again"}
+                        </button>
                       )}
-                    >
-                      <MaterialIcon
-                        name={check.passed ? "check" : "close"}
-                        size={14}
-                      />
-                      <span>{check.message || check.type}</span>
                     </div>
-                  )
-                )}
+                  ) : (
+                    <>
+                      {(refreshing || !imgLoaded) && (
+                        <div className="flex items-center justify-center py-16">
+                          <MaterialIcon name="progress_activity" size={24} className="animate-spin text-muted-foreground" />
+                        </div>
+                      )}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={currentUrl}
+                        alt={evidence.title}
+                        className={cn(
+                          "w-full h-auto max-h-[60vh] object-contain",
+                          !imgLoaded && "hidden"
+                        )}
+                        onLoad={() => setImgLoaded(true)}
+                        onError={handleImageError}
+                      />
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="p-8 text-center border border-dashed border-border rounded-xl">
+                  <MaterialIcon name="image_not_supported" size={40} className="mx-auto mb-2 text-muted-foreground/60" />
+                  <p className="text-body-sm text-muted-foreground">No screenshot artifact available for this step.</p>
+                </div>
+              )}
+
+              {evidence.elementLocator && (
+                <div className="p-3 bg-muted/40 border border-border rounded-lg text-caption flex items-center justify-between">
+                  <span className="text-muted-foreground">Target Element Locator:</span>
+                  <code className="font-mono text-primary bg-background px-2 py-0.5 rounded border border-border">
+                    {evidence.elementLocator}
+                  </code>
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "dom" && (
+            <div className="space-y-4">
+              {domBefore && domAfter ? (
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <h4 className="text-caption font-semibold text-muted-foreground mb-1">DOM Before Action</h4>
+                    <pre className="p-4 rounded-xl border border-border bg-muted/30 text-[11px] font-mono max-h-[50vh] overflow-auto whitespace-pre-wrap">
+                      {domBefore}
+                    </pre>
+                  </div>
+                  <div>
+                    <h4 className="text-caption font-semibold text-muted-foreground mb-1">DOM After Action</h4>
+                    <pre className="p-4 rounded-xl border border-border bg-muted/30 text-[11px] font-mono max-h-[50vh] overflow-auto whitespace-pre-wrap">
+                      {domAfter}
+                    </pre>
+                  </div>
+                </div>
+              ) : domAfter ? (
+                <div>
+                  <h4 className="text-caption font-semibold text-muted-foreground mb-1">DOM Snapshot</h4>
+                  <pre className="p-4 rounded-xl border border-border bg-muted/30 text-[11px] font-mono max-h-[55vh] overflow-auto whitespace-pre-wrap">
+                    {domAfter}
+                  </pre>
+                </div>
+              ) : (
+                <p className="text-body-sm text-muted-foreground">No DOM snapshot recorded for this run.</p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "a11y" && (
+            <div className="space-y-2">
+              <h4 className="text-caption font-semibold text-muted-foreground mb-1">Accessibility Tree (AI View)</h4>
+              {formattedA11y ? (
+                <pre className="p-4 rounded-xl border border-border bg-muted/30 text-[11px] font-mono max-h-[55vh] overflow-auto whitespace-pre-wrap">
+                  {formattedA11y}
+                </pre>
+              ) : (
+                <p className="text-body-sm text-muted-foreground">No accessibility tree captured.</p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "network" && (
+            <div className="space-y-2">
+              <h4 className="text-caption font-semibold text-muted-foreground mb-1">Network Activity During Step</h4>
+              {networkLogs.length > 0 ? (
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <table className="w-full text-left text-[12px]">
+                    <thead className="bg-muted/40 border-b border-border text-muted-foreground font-medium">
+                      <tr>
+                        <th className="px-3 py-2">Method</th>
+                        <th className="px-3 py-2">Status</th>
+                        <th className="px-3 py-2">URL</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {networkLogs.map((log, idx) => {
+                        const status = Number(log.status || 0);
+                        return (
+                          <tr key={idx} className="hover:bg-muted/20 font-mono">
+                            <td className="px-3 py-2 text-foreground font-semibold">
+                              {String(log.method || "GET")}
+                            </td>
+                            <td className="px-3 py-2">
+                              <span
+                                className={cn(
+                                  "px-1.5 py-0.5 rounded text-[10px] font-semibold",
+                                  status >= 400
+                                    ? "bg-destructive/10 text-destructive"
+                                    : "bg-emerald-500/10 text-emerald-600"
+                                )}
+                              >
+                                {status || "—"}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-muted-foreground truncate max-w-md">
+                              {String(log.url || "")}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-body-sm text-muted-foreground">No network requests observed during this step.</p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "video" && (
+            <div className="space-y-4">
+              {evidence.videoUrl ? (
+                <div className="rounded-xl border border-border overflow-hidden bg-black flex justify-center">
+                  <video
+                    src={evidence.videoUrl}
+                    controls
+                    className="max-h-[60vh] w-auto"
+                  />
+                </div>
+              ) : (
+                <p className="text-body-sm text-muted-foreground">Video recording not available for this run.</p>
+              )}
+              {evidence.timestampRange && (
+                <p className="text-caption text-muted-foreground">
+                  Step window: {evidence.timestampRange[0]?.toFixed(2)}s - {evidence.timestampRange[1]?.toFixed(2)}s
+                </p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "verification" && (
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 p-4 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
+                <MaterialIcon name="verified" size={24} className="text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-body-sm font-semibold text-foreground">{evidence.title}</h4>
+                  {evidence.note && (
+                    <p className="text-caption text-muted-foreground mt-1 font-mono">
+                      {evidence.note}
+                    </p>
+                  )}
+                  {evidence.description && (
+                    <p className="text-caption text-muted-foreground mt-1">
+                      {evidence.description}
+                    </p>
+                  )}
+                </div>
               </div>
-            )}
-          </div>
-        ) : (
-          <div className="w-full rounded-xl border border-border bg-card p-6 text-center">
-            <MaterialIcon name="description" size={48} className="mx-auto mb-3 text-muted-foreground/40" />
-            <p className="text-body-sm text-muted-foreground">
-              This evidence type cannot be previewed here.
-            </p>
-          </div>
-        )}
+
+              {checks.length > 0 && (
+                <div className="space-y-2">
+                  <h5 className="text-caption font-semibold text-foreground">Executed Checks</h5>
+                  <div className="space-y-1.5">
+                    {checks.map((chk, i) => (
+                      <div
+                        key={i}
+                        className={cn(
+                          "flex items-center gap-2 px-3 py-2 rounded-lg text-caption border",
+                          chk.passed
+                            ? "bg-emerald-500/5 border-emerald-500/20 text-emerald-700"
+                            : "bg-destructive/5 border-destructive/20 text-destructive"
+                        )}
+                      >
+                        <MaterialIcon name={chk.passed ? "check_circle" : "cancel"} size={16} />
+                        <span className="font-medium font-mono">{chk.type}:</span>
+                        <span>{chk.message || (chk.passed ? "Check passed" : "Check failed")}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Footer */}
-        <div className="flex items-center gap-4 mt-3 text-caption text-muted-foreground/80">
-          <span className="capitalize">{evidence.type.toLowerCase()}</span>
-          <span>{new Date(evidence.createdAt).toLocaleTimeString()}</span>
+        <div className="flex items-center justify-between px-6 py-3 border-t border-border bg-card/40 text-caption text-muted-foreground">
+          <span>Type: {evidence.type}</span>
+          <span>Captured: {new Date(evidence.createdAt).toLocaleTimeString()}</span>
         </div>
       </div>
     </div>
