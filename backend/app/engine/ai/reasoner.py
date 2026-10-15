@@ -76,6 +76,7 @@ class AgentReasoner:
 
     def __init__(self, provider: AIProvider | None):
         self.provider = provider
+        self._provider = provider
 
     # ── Phase 5: Goal interpretation ────────────────────────────────
 
@@ -861,6 +862,55 @@ class AgentReasoner:
         except Exception as e:
             logger.warning("AI propose_submit_button failed: %s", e)
         return None
+
+    async def propose_flows(
+        self,
+        goal_name: str,
+        product_graph_summary: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Propose executable flow candidates for an unresolved goal.
+
+        Returns a list of dicts with flow proposals: {name, steps, confidence, reasoning}.
+        Confidence is strictly capped at <= 0.9.
+        """
+        provider = self.provider or getattr(self, "_provider", None)
+        if provider:
+            system_prompt = (
+                "You are an expert software test automation planner. Given a high-level goal and "
+                "a summary of discovered application pages and interactive elements from the Product Graph, "
+                "propose an executable flow to achieve the goal.\n"
+                "Respond ONLY with a JSON list of flow objects, each containing: "
+                "'name' (string), 'steps' (list of {action, target, value, description}), "
+                "'confidence' (float <= 0.9), and 'reasoning' (string)."
+            )
+            user_prompt = (
+                f"Goal: {goal_name}\n"
+                f"Product Graph context: {json.dumps(product_graph_summary, default=str)[:3000]}\n"
+            )
+            try:
+                res = await provider.generate(system_prompt=system_prompt, user_prompt=user_prompt)
+                match = re.search(r"\[.*\]", res, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group(0))
+                    if isinstance(parsed, list):
+                        for p in parsed:
+                            p["confidence"] = min(float(p.get("confidence", 0.8)), 0.9)
+                        return parsed
+            except Exception as e:
+                logger.warning("AI propose_flows failed: %s", e)
+
+        # Conservative heuristic fallback
+        return [
+            {
+                "name": f"AI Proposed Flow for {goal_name}",
+                "steps": [
+                    {"action": "navigate", "target": "/", "value": "/", "description": "Navigate to home"},
+                    {"action": "assert", "target": "page_loaded", "value": "/", "description": f"Verify entry for {goal_name}"},
+                ],
+                "confidence": 0.75,
+                "reasoning": f"Heuristic flow proposal for unresolved goal '{goal_name}'",
+            }
+        ]
 
 
 # ── Semantic helpers (§7: no exact-string matching) ─────────────────

@@ -159,6 +159,11 @@ class FlowCreate(BaseModel):
     goal_id: uuid.UUID | None = None
     persona_id: uuid.UUID | None = None
     page_ids: list[str] = Field(default_factory=list)
+    source: Literal["legacy", "deterministic", "ai_proposal", "user_provided"] = "deterministic"
+    confidence: float = 1.0
+    active: bool = False
+    json_repr: dict | None = None
+    gherkin_repr: str | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -188,6 +193,11 @@ class FlowUpdate(BaseModel):
     goal_id: uuid.UUID | None = None
     persona_id: uuid.UUID | None = None
     page_ids: list[str] | None = None
+    source: Literal["legacy", "deterministic", "ai_proposal", "user_provided"] | None = None
+    confidence: float | None = None
+    active: bool | None = None
+    json_repr: dict | None = None
+    gherkin_repr: str | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -220,6 +230,11 @@ class FlowRead(BaseModel):
     goal_id: uuid.UUID | None = None
     persona_id: uuid.UUID | None = None
     page_ids: list[str] = Field(default_factory=list)
+    source: str = "legacy"
+    confidence: float = 1.0
+    active: bool = True
+    json_repr: dict | None = None
+    gherkin_repr: str | None = None
     created_at: datetime
     updated_at: datetime
 

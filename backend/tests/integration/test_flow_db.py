@@ -114,3 +114,54 @@ async def test_flow_state_contract_roundtrip(db_session, project):
 
     updated = await repo.update(flow.id, state_contract={"requires": [], "produces": [], "cost": 1})
     assert updated.state_contract == {"requires": [], "produces": [], "cost": 1}
+
+
+@pytest.mark.asyncio
+async def test_generated_flow_columns_roundtrip(db_session, project):
+    from app.modules.flows.schemas import FlowRead
+
+    repo = FlowRepository(db_session)
+    json_repr = {
+        "name": "Generated Checkout Flow",
+        "steps": [{"action": "navigate", "value": "/checkout"}],
+        "state_contract": {"requires": [], "produces": []},
+        "source": "deterministic",
+        "confidence": 0.95,
+    }
+    gherkin = 'Feature: Generated Checkout Flow\n  Scenario: Execute\n    Given the user navigates to "/checkout"\n'
+
+    flow = await repo.create(
+        project_id=project.id,
+        name="Generated Checkout Flow",
+        source="deterministic",
+        confidence=0.95,
+        active=False,
+        json_repr=json_repr,
+        gherkin_repr=gherkin,
+    )
+    assert flow.source == "deterministic"
+    assert flow.confidence == 0.95
+    assert flow.active is False
+    assert flow.json_repr == json_repr
+    assert flow.gherkin_repr == gherkin
+
+    found = await repo.get_by_id(flow.id)
+    assert found is not None
+    assert found.source == "deterministic"
+    assert found.confidence == 0.95
+    assert found.active is False
+    assert found.json_repr == json_repr
+    assert found.gherkin_repr == gherkin
+
+    flow_read = FlowRead.model_validate(found)
+    assert flow_read.source == "deterministic"
+    assert flow_read.confidence == 0.95
+    assert flow_read.active is False
+    assert flow_read.json_repr == json_repr
+    assert flow_read.gherkin_repr == gherkin
+
+    # Update active to True upon review
+    updated = await repo.update(flow.id, active=True, confidence=1.0)
+    assert updated.active is True
+    assert updated.confidence == 1.0
+

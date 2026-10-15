@@ -32,6 +32,11 @@ class FlowRepository:
         goal_id: uuid.UUID | None = None,
         persona_id: uuid.UUID | None = None,
         page_ids: list[str] | None = None,
+        source: str = "legacy",
+        confidence: float = 1.0,
+        active: bool = True,
+        json_repr: dict | None = None,
+        gherkin_repr: str | None = None,
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -54,6 +59,11 @@ class FlowRepository:
             goal_id=goal_id,
             persona_id=persona_id,
             page_ids=page_ids or [],
+            source=source,
+            confidence=confidence,
+            active=active,
+            json_repr=json_repr,
+            gherkin_repr=gherkin_repr,
         )
         self.db.add(flow)
         await self.db.flush()
@@ -96,11 +106,16 @@ class FlowRepository:
         goal_id: uuid.UUID | None = None,
         persona_id: uuid.UUID | None = None,
         page_ids: list[str] | None = None,
+        source: str | None = None,
+        confidence: float | None = None,
+        active: bool | None = None,
+        json_repr: dict | None = None,
+        gherkin_repr: str | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
-        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality, state_contract, goal_id, persona_id, page_ids))
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality, state_contract, goal_id, persona_id, page_ids, source, confidence, active, json_repr, gherkin_repr))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -139,6 +154,16 @@ class FlowRepository:
             flow.persona_id = persona_id
         if page_ids is not None:
             flow.page_ids = page_ids
+        if source is not None:
+            flow.source = source
+        if confidence is not None:
+            flow.confidence = confidence
+        if active is not None:
+            flow.active = active
+        if json_repr is not None:
+            flow.json_repr = json_repr
+        if gherkin_repr is not None:
+            flow.gherkin_repr = gherkin_repr
         if changed:
             flow.version += 1
         await self.db.flush()
