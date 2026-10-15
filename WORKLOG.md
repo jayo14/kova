@@ -151,3 +151,31 @@
   - `pytest backend/tests/unit/test_runner_dynamic_planning.py backend/tests/unit/test_state_machine.py backend/tests/unit/test_execution_recovery.py -v` (55 passed)
   - `pytest backend/tests/integration/test_state_aware_execution.py -v` (3 passed)
 
+## Chunk 10: Real Change Impact Analyzer (git diff -> flows)
+- **Status:** Complete
+- **Changes:**
+  - Upgraded `ChangeImpactAnalyzer` (`backend/app/modules/validation/impact_analysis.py`) to a graph-traversal engine connecting git diffs to affected flows, downstream state consumers, dependency downstream flows, affected business invariants, and minimal valid execution plans.
+  - Created `backend/app/modules/validation/graph_traverser.py` with pure deterministic graph-traversal primitives:
+    - `capabilities_for_files`: maps modified files to capabilities by source files, Next.js page routes, and page source files.
+    - `flows_touching_capabilities`: identifies flows whose page IDs, capability, routes, or provider flow IDs touch target capabilities.
+    - `flows_consuming_states`: finds active flows whose state contract or preconditions require given state keys.
+    - `flows_producing_states`: finds active flows whose state contract produces or mutates given state keys.
+    - `downstream_flows`: performs BFS through dependency edges across flows.
+    - `state_downstream_flows`: performs BFS through state mutations (`produces`/`mutates` -> `requires`).
+    - `invariants_for_capabilities`: finds invariants whose assertions reference states produced by affected capabilities.
+    - `minimum_execution_plan`: computes minimal execution path using `DependencyResolver` with prerequisite de-duplication.
+  - Implemented `EntitySet` collection in `graph_traverser.py` supporting seamless set operations (`|`, `&`, `in`) across dictionaries, SQLAlchemy ORM models, and Pydantic models.
+  - Extended `backend/app/modules/validation/schemas.py`:
+    - Added `FlowRef` (id, name, reason, role).
+    - Added `InvariantRef` (id, name, assertion, reason).
+    - Added `affected_flows`, `affected_invariants`, `minimal_execution_plan`, and `graph_traversal_log` to `ImpactReport`.
+  - Updated `ValidationService.analyze_impact` (`backend/app/modules/validation/service.py`) to load the latest `ProductGraphVersion` snapshot from `ProductGraphRepository`.
+  - Updated `backend/app/modules/flows/dependency_resolver.py` to transparently extract state contracts and flow attributes from both model instances and dictionaries.
+  - Enforced strict isolation: target flow prerequisites (e.g. `authenticate_as_student`) are sequenced in `minimal_execution_plan` but omitted from `affected_flows`.
+  - Enforced inactive flow filtering: unreviewed or inactive flows (`active == False` or `status != "active"`) are excluded from CI plans.
+  - Handled missing Product Graph gracefully: reports `confidence = 0.0`, `recommended_scope = "full"`, `minimal_execution_plan = None` without raising.
+  - Added full test suite in `backend/tests/unit/test_continuous_validation.py` with a realistic LMS Product Graph fixture (~10 flows) testing direct match, state downstream, dependency downstream, invariant detection, prerequisite de-duplication, inactive filtering, and traversal audit logging.
+  - Added end-to-end database integration test suite in `backend/tests/integration/test_impact_analysis_integration.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_impact_analysis_integration.py -v` (19 passed)
+

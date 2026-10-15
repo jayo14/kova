@@ -70,8 +70,13 @@ class ExecutionPlan:
 
 
 def _extract_contract(flow: Any) -> FlowStateContract:
-    """Extract or construct a FlowStateContract from a flow object."""
-    raw_contract = getattr(flow, "state_contract", None)
+    """Extract or construct a FlowStateContract from a flow object or dict."""
+    def _val(attr: str, default: Any = None) -> Any:
+        if isinstance(flow, dict):
+            return flow.get(attr, default)
+        return getattr(flow, attr, default)
+
+    raw_contract = _val("state_contract")
     if isinstance(raw_contract, FlowStateContract):
         contract = raw_contract.model_copy(deep=True)
     elif isinstance(raw_contract, dict) and raw_contract:
@@ -79,23 +84,28 @@ def _extract_contract(flow: Any) -> FlowStateContract:
     else:
         contract = FlowStateContract()
 
-    # Legacy provides_capabilities
+    # Flow capability and legacy provides_capabilities
     existing_prod_keys = {p.key for p in contract.produces}
-    for cap in getattr(flow, "provides_capabilities", []) or []:
+    flow_cap = _val("capability")
+    if flow_cap and str(flow_cap) not in existing_prod_keys:
+        contract.produces.append(StateAssertion(key=str(flow_cap), value=True))
+        existing_prod_keys.add(str(flow_cap))
+
+    for cap in _val("provides_capabilities", []) or []:
         cap_str = str(cap)
         if cap_str not in existing_prod_keys:
             contract.produces.append(StateAssertion(key=cap_str, value=True))
             existing_prod_keys.add(cap_str)
 
     # Always produce self flow presence
-    flow_id_str = str(getattr(flow, "id", ""))
+    flow_id_str = str(_val("id", ""))
     flow_key = f"flow:{flow_id_str}"
     if flow_key not in existing_prod_keys and flow_id_str:
         contract.produces.append(StateAssertion(key=flow_key, value=True))
 
     # Legacy dependencies
     existing_req_keys = {r.key for r in contract.requires}
-    for dep in getattr(flow, "dependencies", []) or []:
+    for dep in _val("dependencies", []) or []:
         kind = dep.get("kind")
         val = dep.get("value")
         if kind == "flow":
@@ -110,20 +120,22 @@ def _extract_contract(flow: Any) -> FlowStateContract:
                 existing_req_keys.add(k)
 
     # Cost
-    if hasattr(flow, "cost") and isinstance(getattr(flow, "cost"), int):
-        contract.cost = getattr(flow, "cost")
+    cost_val = _val("cost")
+    if isinstance(cost_val, int):
+        contract.cost = cost_val
 
     # Persona
-    if not contract.persona and hasattr(flow, "persona") and getattr(flow, "persona"):
-        p = getattr(flow, "persona")
-        if isinstance(p, str):
-            contract.persona = p
-        elif isinstance(p, dict):
-            contract.persona = p.get("role") or p.get("name")
+    persona_val = _val("persona")
+    if not contract.persona and persona_val:
+        if isinstance(persona_val, str):
+            contract.persona = persona_val
+        elif isinstance(persona_val, dict):
+            contract.persona = persona_val.get("role") or persona_val.get("name")
 
     # Reset strategy
-    if contract.reset_strategy == "none" and hasattr(flow, "reset_strategy") and getattr(flow, "reset_strategy"):
-        rs = str(getattr(flow, "reset_strategy"))
+    rs_val = _val("reset_strategy")
+    if contract.reset_strategy == "none" and rs_val:
+        rs = str(rs_val)
         if rs in {"none", "re_establish", "create_new", "skip_if_exists"}:
             contract.reset_strategy = rs  # type: ignore[assignment]
         else:
@@ -144,6 +156,18 @@ def _keys_collide(mutated_key: str, required_key: str) -> bool:
     return False
 
 
+def _flow_id(f: Any) -> str:
+    if isinstance(f, dict):
+        return str(f.get("id", ""))
+    return str(getattr(f, "id", ""))
+
+
+def _flow_name(f: Any) -> str:
+    if isinstance(f, dict):
+        return str(f.get("name", ""))
+    return str(getattr(f, "name", ""))
+
+
 def resolve_execution_plan(
     target: Any | list[Any],
     flows: list[Any],
@@ -153,16 +177,18 @@ def resolve_execution_plan(
 ) -> ExecutionPlan:
     """Deterministically plan the minimal valid execution path to reach the required state."""
     targets: list[Any] = target if isinstance(target, list) else [target]
-    by_id: dict[str, Any] = {str(f.id): f for f in flows if hasattr(f, "id")}
-    by_name: dict[str, Any] = {str(f.name): f for f in flows if hasattr(f, "name") and f.name}
+    by_id: dict[str, Any] = {_flow_id(f): f for f in flows if _flow_id(f)}
+    by_name: dict[str, Any] = {_flow_name(f): f for f in flows if _flow_name(f)}
     for t in targets:
-        if hasattr(t, "id") and str(t.id) not in by_id:
-            by_id[str(t.id)] = t
-        if hasattr(t, "name") and t.name and str(t.name) not in by_name:
-            by_name[str(t.name)] = t
+        tid = _flow_id(t)
+        tname = _flow_name(t)
+        if tid and tid not in by_id:
+            by_id[tid] = t
+        if tname and tname not in by_name:
+            by_name[tname] = t
 
     all_flows: list[Any] = list(by_id.values())
-    contracts: dict[str, FlowStateContract] = {str(f.id): _extract_contract(f) for f in all_flows}
+    contracts: dict[str, FlowStateContract] = {_flow_id(f): _extract_contract(f) for f in all_flows}
 
     steps: list[ExecutionStep] = []
     unresolved: list[StateAssertion] = []
@@ -176,7 +202,7 @@ def resolve_execution_plan(
     def find_providers(req: StateAssertion) -> list[Any]:
         matches: list[Any] = []
         for cand in all_flows:
-            c_contract = contracts[str(cand.id)]
+            c_contract = contracts[_flow_id(cand)]
             for prod in c_contract.produces:
                 if req.is_satisfied_by_assertion(prod):
                     matches.append(cand)
@@ -185,7 +211,7 @@ def resolve_execution_plan(
 
     def rank_candidates(candidates: list[Any]) -> list[Any]:
         def sort_key(cand: Any) -> tuple[int, int, int, str]:
-            c_contract = contracts[str(cand.id)]
+            c_contract = contracts[_flow_id(cand)]
             cost = c_contract.cost
             persona_penalty = 0
             if persona and c_contract.persona and c_contract.persona != persona:
@@ -194,9 +220,10 @@ def resolve_execution_plan(
             if c_contract.requires_credential:
                 if available_credentials is not None:
                     # If persona or flow name not in credentials
-                    has_cred = (c_contract.persona in available_credentials) or (getattr(cand, "name", "") in available_credentials)
+                    cand_name = _flow_name(cand)
+                    has_cred = (c_contract.persona in available_credentials) or (cand_name in available_credentials)
                     cred_penalty = 0 if has_cred else 1
-            return (cost, persona_penalty, cred_penalty, getattr(cand, "name", str(cand.id)))
+            return (cost, persona_penalty, cred_penalty, _flow_name(cand) or _flow_id(cand))
 
         return sorted(candidates, key=sort_key)
 
@@ -220,10 +247,10 @@ def resolve_execution_plan(
         ranked = rank_candidates(candidates)
         chosen = ranked[0]
         if len(ranked) > 1:
-            alt_names = [getattr(c, "name", str(c.id)) for c in ranked[1:]]
+            alt_names = [_flow_name(c) or _flow_id(c) for c in ranked[1:]]
             warnings.append(f"Alternative capability providers available: {', '.join(alt_names)}")
 
-        cid = str(chosen.id)
+        cid = _flow_id(chosen)
         if cid in visiting_flows:
             cycle = visiting_flows[visiting_flows.index(cid):] + [cid]
             unresolved.append(req)
@@ -239,7 +266,7 @@ def resolve_execution_plan(
 
         all_ok = True
         for sub_req in c_contract.requires:
-            if not resolve_state(sub_req, getattr(chosen, "name", cid)):
+            if not resolve_state(sub_req, _flow_name(chosen) or cid):
                 all_ok = False
 
         visiting_flows.pop()
@@ -255,7 +282,7 @@ def resolve_execution_plan(
                 establishes=list(c_contract.produces),
                 reason=f"required by flow '{needed_by_name}' for state '{req.key}'",
                 cost=c_contract.cost,
-                flow_name=getattr(chosen, "name", ""),
+                flow_name=_flow_name(chosen) or cid,
             )
         )
         visited_flows.add(cid)
@@ -265,9 +292,9 @@ def resolve_execution_plan(
 
     # Plan for each target
     for target_flow in targets:
-        tid = str(target_flow.id)
+        tid = _flow_id(target_flow)
         t_contract = contracts[tid]
-        t_name = getattr(target_flow, "name", tid)
+        t_name = _flow_name(target_flow) or tid
 
         all_ok = True
         for req in t_contract.requires:

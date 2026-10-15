@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -58,7 +58,23 @@ class ProductModelRead(BaseModel):
     updated_at: datetime
 
 
+class FlowRef(BaseModel):
+    id: str
+    name: str
+    reason: str | None = None
+    role: str = "target"
+
+
+class InvariantRef(BaseModel):
+    id: str
+    name: str
+    assertion: str | None = None
+    reason: str | None = None
+
+
 class ImpactReport(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     changed_files: list[str] = Field(default_factory=list)
     affected_capabilities: list[str] = Field(default_factory=list)
     affected_routes: list[str] = Field(default_factory=list)
@@ -69,6 +85,10 @@ class ImpactReport(BaseModel):
     downstream_effects: list[str] = Field(default_factory=list)
     product_graph_consulted: bool = False
     unmatched_files: list[str] = Field(default_factory=list)
+    affected_flows: list[FlowRef] = Field(default_factory=list)
+    affected_invariants: list[InvariantRef] = Field(default_factory=list)
+    minimal_execution_plan: Any | None = None
+    graph_traversal_log: list[str] = Field(default_factory=list)
 
     @property
     def uncertainties(self) -> list[str]:

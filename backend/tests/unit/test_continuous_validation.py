@@ -280,3 +280,341 @@ def test_baseline_diff_computation():
     assert "flow-4" in diff.unchanged_passing
     assert "flow-3" in diff.blocked
     assert len(diff.status_changed) >= 2
+
+
+@pytest.fixture
+def lms_product_graph():
+    """Realistic LMS product graph fixture with ~10 flows, dependencies, state contracts, and invariants."""
+    f_auth_id = str(uuid.uuid4())
+    f_browse_id = str(uuid.uuid4())
+    f_enroll_id = str(uuid.uuid4())
+    f_submit_id = str(uuid.uuid4())
+    f_grade_id = str(uuid.uuid4())
+    f_discuss_id = str(uuid.uuid4())
+    f_profile_id = str(uuid.uuid4())
+    f_inactive_id = str(uuid.uuid4())
+
+    p_courses_id = str(uuid.uuid4())
+    p_enroll_id = str(uuid.uuid4())
+    p_assignment_id = str(uuid.uuid4())
+    p_grades_id = str(uuid.uuid4())
+    p_discuss_id = str(uuid.uuid4())
+
+    return {
+        "capabilities": [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "authentication",
+                "kind": "shared",
+                "source_files": ["src/components/AuthProvider.tsx", "src/auth/login.ts"],
+                "routes": ["/login"],
+                "produces_state": [{"key": "authenticated:student"}],
+                "provider_flow_ids": [f_auth_id],
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "course_browsing",
+                "kind": "primary",
+                "source_files": ["src/pages/Course.tsx", "src/components/CourseList.tsx"],
+                "routes": ["/courses"],
+                "provider_flow_ids": [f_browse_id],
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "course_enrollment",
+                "kind": "primary",
+                "source_files": ["src/api/enrollment.ts", "src/pages/Enroll.tsx"],
+                "routes": ["/courses/enroll"],
+                "produces_state": [{"key": "enrolled:course_X"}],
+                "provider_flow_ids": [f_enroll_id],
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "assignment_submission",
+                "kind": "primary",
+                "source_files": ["src/pages/Assignment.tsx"],
+                "routes": ["/assignments"],
+                "produces_state": [{"key": "assignment:submitted"}],
+                "provider_flow_ids": [f_submit_id],
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "grade_viewing",
+                "kind": "primary",
+                "source_files": ["src/pages/Grades.tsx"],
+                "routes": ["/grades"],
+                "produces_state": [{"key": "grade:viewed"}],
+                "provider_flow_ids": [f_grade_id],
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "discussions",
+                "kind": "primary",
+                "source_files": ["src/pages/Discussion.tsx"],
+                "routes": ["/discussions"],
+                "provider_flow_ids": [f_discuss_id],
+            },
+        ],
+        "pages": [
+            {"id": p_courses_id, "url_pattern": "/courses", "source_files": ["src/pages/Course.tsx"]},
+            {"id": p_enroll_id, "url_pattern": "/courses/enroll", "source_files": ["src/pages/Enroll.tsx"]},
+            {"id": p_assignment_id, "url_pattern": "/assignments", "source_files": ["src/pages/Assignment.tsx"]},
+            {"id": p_grades_id, "url_pattern": "/grades", "source_files": ["src/pages/Grades.tsx"]},
+            {"id": p_discuss_id, "url_pattern": "/discussions", "source_files": ["src/pages/Discussion.tsx"]},
+        ],
+        "flows": [
+            {
+                "id": f_auth_id,
+                "name": "authenticate_as_student",
+                "capability": "authentication",
+                "routes": ["/login"],
+                "status": "active",
+                "active": True,
+                "state_contract": {
+                    "produces": [{"key": "authenticated:student", "value": True}],
+                },
+            },
+            {
+                "id": f_browse_id,
+                "name": "browse_courses",
+                "capability": "course_browsing",
+                "page_ids": [p_courses_id],
+                "routes": ["/courses"],
+                "status": "active",
+                "active": True,
+                "dependencies": [{"kind": "capability", "value": "authentication"}],
+                "state_contract": {
+                    "requires": [{"key": "authenticated:student", "value": True}],
+                },
+            },
+            {
+                "id": f_enroll_id,
+                "name": "enroll_in_course",
+                "capability": "course_enrollment",
+                "page_ids": [p_courses_id, p_enroll_id],
+                "routes": ["/courses/enroll"],
+                "status": "active",
+                "active": True,
+                "dependencies": [{"kind": "capability", "value": "authentication"}],
+                "state_contract": {
+                    "requires": [{"key": "authenticated:student", "value": True}],
+                    "produces": [{"key": "enrolled:course_X", "value": True}],
+                    "mutates": ["enrolled:course_X"],
+                },
+            },
+            {
+                "id": f_submit_id,
+                "name": "submit_assignment",
+                "capability": "assignment_submission",
+                "page_ids": [p_assignment_id],
+                "routes": ["/assignments"],
+                "status": "active",
+                "active": True,
+                "dependencies": [
+                    {"kind": "capability", "value": "authentication"},
+                    {"kind": "flow", "value": f_enroll_id},
+                ],
+                "state_contract": {
+                    "requires": [
+                        {"key": "authenticated:student", "value": True},
+                        {"key": "enrolled:course_X", "value": True},
+                    ],
+                    "produces": [{"key": "assignment:submitted", "value": True}],
+                    "mutates": ["assignment.status"],
+                },
+            },
+            {
+                "id": f_grade_id,
+                "name": "view_grade",
+                "capability": "grade_viewing",
+                "page_ids": [p_grades_id],
+                "routes": ["/grades"],
+                "status": "active",
+                "active": True,
+                "dependencies": [{"kind": "capability", "value": "authentication"}],
+                "state_contract": {
+                    "requires": [
+                        {"key": "authenticated:student", "value": True},
+                        {"key": "enrolled:course_X", "value": True},
+                        {"key": "assignment:submitted", "value": True},
+                    ],
+                    "produces": [{"key": "grade:viewed", "value": True}],
+                },
+            },
+            {
+                "id": f_discuss_id,
+                "name": "participate_in_discussion",
+                "capability": "discussions",
+                "page_ids": [p_discuss_id],
+                "routes": ["/discussions"],
+                "status": "active",
+                "active": True,
+                "dependencies": [{"kind": "capability", "value": "authentication"}],
+                "state_contract": {
+                    "requires": [{"key": "authenticated:student", "value": True}],
+                },
+            },
+            {
+                "id": f_profile_id,
+                "name": "view_student_profile",
+                "capability": "authentication",
+                "routes": ["/profile"],
+                "status": "active",
+                "active": True,
+                "dependencies": [{"kind": "capability", "value": "authentication"}],
+                "state_contract": {
+                    "requires": [{"key": "authenticated:student", "value": True}],
+                },
+            },
+            {
+                "id": f_inactive_id,
+                "name": "draft_unreviewed_flow",
+                "capability": "course_browsing",
+                "status": "inactive",
+                "active": False,
+                "state_contract": {},
+            },
+        ],
+        "dependencies": [
+            {
+                "id": str(uuid.uuid4()),
+                "flow_id": f_browse_id,
+                "depends_on_kind": "flow",
+                "depends_on_id": f_auth_id,
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "flow_id": f_submit_id,
+                "depends_on_kind": "flow",
+                "depends_on_id": f_enroll_id,
+            },
+        ],
+        "invariants": [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Enrolled courses appear on dashboard",
+                "assertion": {"key": "enrolled:course_X", "predicate": "eq", "value": True},
+                "checked_by_flow_ids": [f_enroll_id],
+            }
+        ],
+    }
+
+
+def test_graph_traversal_direct_match(lms_product_graph):
+    """Direct match: change src/pages/Course.tsx -> affected_flows includes browse_courses and enroll_in_course."""
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/pages/Course.tsx"])
+
+    assert "course_browsing" in report.affected_capabilities
+    affected_flow_names = {f.name for f in report.affected_flows}
+    assert "browse_courses" in affected_flow_names
+    assert "enroll_in_course" in affected_flow_names
+    # Inactive flows must never be included
+    assert "draft_unreviewed_flow" not in affected_flow_names
+
+
+def test_graph_traversal_state_downstream(lms_product_graph):
+    """State downstream: change src/api/enrollment.ts -> affected_flows includes enroll_in_course,
+
+    submit_assignment, and view_grade (because they consume enrolled:course_X).
+    Target's prerequisites (authenticate_as_student) must NOT be in affected_flows.
+    """
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/api/enrollment.ts"])
+
+    affected_flow_names = {f.name for f in report.affected_flows}
+    assert "enroll_in_course" in affected_flow_names
+    assert "submit_assignment" in affected_flow_names
+    assert "view_grade" in affected_flow_names
+
+    # Crucial anti-pattern check: authenticate_as_student is a prerequisite, NOT an affected flow!
+    assert "authenticate_as_student" not in affected_flow_names
+
+    # However, authenticate_as_student MUST be sequenced in minimal_execution_plan
+    assert report.minimal_execution_plan is not None
+    plan_step_names = [s.flow_name for s in report.minimal_execution_plan.steps]
+    assert "authenticate_as_student" in plan_step_names
+    assert plan_step_names[0] == "authenticate_as_student"
+
+
+def test_graph_traversal_dependency_downstream_shared_component(lms_product_graph):
+    """Dependency downstream: change src/components/AuthProvider.tsx (shared component)
+
+    -> affected_flows includes every authenticated flow depending on the shared capability.
+    """
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/components/AuthProvider.tsx"])
+
+    assert "authentication" in report.affected_capabilities
+    assert report.recommended_scope == "expanded"
+    assert report.confidence <= 0.85
+
+    affected_flow_names = {f.name for f in report.affected_flows}
+    assert "browse_courses" in affected_flow_names
+    assert "enroll_in_course" in affected_flow_names
+    assert "submit_assignment" in affected_flow_names
+    assert "view_grade" in affected_flow_names
+    assert "participate_in_discussion" in affected_flow_names
+    assert "view_student_profile" in affected_flow_names
+
+
+def test_graph_traversal_invariants(lms_product_graph):
+    """Invariants: changing enrollment code affects invariant referencing enrolled:course_X."""
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/api/enrollment.ts"])
+
+    assert len(report.affected_invariants) > 0
+    inv_names = {inv.name for inv in report.affected_invariants}
+    assert "Enrolled courses appear on dashboard" in inv_names
+
+
+def test_graph_traversal_minimum_plan_deduplicates_prerequisites(lms_product_graph):
+    """Minimum plan de-duplicates: affected_flows includes submit_assignment and view_grade,
+
+    both requiring authenticated:student -> minimal_execution_plan includes authenticate_as_student once.
+    """
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    # Changing enrollment triggers both submit_assignment and view_grade downstream
+    report = analyzer.analyze(changed_files=["src/api/enrollment.ts"])
+
+    assert report.minimal_execution_plan is not None
+    plan_steps = report.minimal_execution_plan.steps
+    auth_steps = [s for s in plan_steps if s.flow_name == "authenticate_as_student"]
+    assert len(auth_steps) == 1, "authenticate_as_student must appear exactly once in the plan"
+
+
+def test_graph_traversal_missing_graph_graceful():
+    """Missing graph: empty Product Graph -> minimal_execution_plan == None, confidence == 0.0, scope == full."""
+    analyzer = ChangeImpactAnalyzer(product_graph={})
+    report = analyzer.analyze(changed_files=["src/components/Foo.tsx"])
+
+    assert report.minimal_execution_plan is None
+    assert report.confidence == 0.0
+    assert report.recommended_scope == "full"
+    assert "No Product Graph available" in report.uncertainty[0]
+    assert len(report.graph_traversal_log) > 0
+
+
+def test_graph_traversal_audit_log(lms_product_graph):
+    """Graph traversal audit log contains human-readable entries recording traversal decisions."""
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/api/enrollment.ts"])
+
+    log = report.graph_traversal_log
+    assert any("enrollment" in entry for entry in log)
+    assert any("produces state" in entry for entry in log)
+    assert any("State downstream traversal added" in entry for entry in log)
+    assert any("Minimum execution plan:" in entry for entry in log)
+
+
+def test_graph_traversal_filters_inactive_flows(lms_product_graph):
+    """Unreviewed or inactive flows must never be included in affected flows or execution plan."""
+    analyzer = ChangeImpactAnalyzer(product_graph=lms_product_graph)
+    report = analyzer.analyze(changed_files=["src/pages/Course.tsx"])
+
+    affected_flow_names = {f.name for f in report.affected_flows}
+    assert "draft_unreviewed_flow" not in affected_flow_names
+
+    if report.minimal_execution_plan:
+        plan_flow_names = {s.flow_name for s in report.minimal_execution_plan.steps}
+        assert "draft_unreviewed_flow" not in plan_flow_names
