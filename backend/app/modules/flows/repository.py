@@ -28,6 +28,7 @@ class FlowRepository:
         capability: str | None = None,
         routes: list[str] | None = None,
         criticality: str = "medium",
+        state_contract: dict | None = None,
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -46,6 +47,7 @@ class FlowRepository:
             capability=capability,
             routes=routes or [],
             criticality=criticality,
+            state_contract=state_contract or {},
         )
         self.db.add(flow)
         await self.db.flush()
@@ -84,11 +86,12 @@ class FlowRepository:
         capability: str | None = None,
         routes: list[str] | None = None,
         criticality: str | None = None,
+        state_contract: dict | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
-        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality))
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality, state_contract))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -119,6 +122,8 @@ class FlowRepository:
             flow.routes = routes
         if criticality is not None:
             flow.criticality = criticality
+        if state_contract is not None:
+            flow.state_contract = state_contract
         if changed:
             flow.version += 1
         await self.db.flush()

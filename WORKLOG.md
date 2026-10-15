@@ -24,3 +24,19 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_semantic_auth_discovery.py` (9 passed)
   - `pytest backend/tests/integration/test_agent_robustness.py -k test_non_standard_spa_keycloak_auth_classification` (1 passed)
+
+## Chunk 03 — Real dependency resolver with State/Capability/Prerequisite semantics
+- **Status:** Done
+- **Changes:**
+  - Added schemas in `backend/app/modules/flows/schemas.py`: `StateAssertion`, `State`, `StateMutation`, `Prerequisite`, `Capability`, `FlowStateContract`, and `ResetStrategy`.
+  - Extended `FlowCreate`, `FlowUpdate`, and `FlowRead` with `state_contract` plus convenience properties `requires_state`, `produces_state`, `mutates_state`, `cost`.
+  - Added `state_contract` column to `Flow` ORM model in `backend/app/modules/flows/models.py`.
+  - Added Alembic migration `backend/alembic/versions/013_add_state_contract_to_flows.py`.
+  - Updated `FlowRepository` in `backend/app/modules/flows/repository.py` to support `state_contract` on `create` and `update`.
+  - Rewrote `backend/app/modules/flows/dependency_resolver.py` implementing `resolve_execution_plan` with state matching, capability provider ranking (cost, persona, credentials), cycle detection (state-key and flow-id graphs), fail-closed handling of unresolved states, state contamination detection, and reset strategy execution (`teardown` step insertion, `skip_if_exists`, `re_establish`).
+  - Preserved backward-compatible shim `resolve_dependency_plan` returning `PlannedFlow` dicts for legacy callers.
+  - Added unit test suite in `backend/tests/unit/test_flow_dependencies.py` for linear, reusable capability, state contamination, unsatisfiable, cycle, and cost/current_state skip plans.
+  - Added `test_flow_state_contract_roundtrip` to `backend/tests/integration/test_flow_db.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_flow_dependencies.py backend/tests/integration/test_flow_db.py -v` (17 passed)
+  - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_resolver.py -v` (29 passed)
