@@ -56,8 +56,19 @@ class ValidationService:
             name=f"{project.name if project else 'Application'} Model",
             purpose=project.description if project else None,
             capabilities=[
-                {"name": "authentication", "description": "User login, signup, and session handling", "routes": ["/login", "/signup"]},
-                {"name": "navigation", "description": "Top-level application routing and header navigation", "routes": ["/", "/dashboard"]},
+                {
+                    "name": "authentication",
+                    "description": "User login, signup, and session handling",
+                    "routes": ["/login", "/signup"],
+                    "source_files": ["app/auth/*", "backend/app/auth/*"],
+                    "kind": "shared",
+                },
+                {
+                    "name": "navigation",
+                    "description": "Top-level application routing and header navigation",
+                    "routes": ["/", "/dashboard"],
+                    "source_files": ["frontend/components/Navbar.*"],
+                },
             ],
             routes=[
                 {"path": "/", "purpose": "Home page"},
@@ -127,6 +138,8 @@ class ValidationService:
         graph_dict = latest_graph.snapshot if (latest_graph and latest_graph.snapshot) else None
 
         model = await self.get_product_model(project_id)
+        if not latest_graph and not model:
+            model = await self.get_latest_product_model(project_id)
         flows_stmt = select(Flow).where(Flow.project_id == project_id)
         flows_res = await self.db.execute(flows_stmt)
         flows = list(flows_res.scalars().all())

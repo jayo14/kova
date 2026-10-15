@@ -45,3 +45,134 @@ class ExecutionService:
     async def get_events(self, execution_id: uuid.UUID, skip: int = 0, limit: int = 1000):
         """Get events for an execution."""
         return await self.event_repo.list_by_execution(execution_id, skip=skip, limit=limit)
+
+    async def batch_execute(
+        self,
+        project_id: uuid.UUID,
+        plan: Any,
+        base_url: str | None = None,
+        timeout_seconds: int = 1800,
+    ) -> list[dict[str, Any]]:
+        """Run an execution plan as a single batch with shared session and prerequisite tracking."""
+        import time
+        from sqlalchemy import select
+        from app.modules.flows.models import Flow
+        from app.modules.executions.evidence_model import Evidence
+
+        results: list[dict[str, Any]] = []
+        steps = getattr(plan, "steps", []) or []
+        prereq_failed = False
+        prereq_failure_reason = None
+
+        for step in steps:
+            flow_id_str = getattr(step, "flow_id", str(step))
+            flow_name = getattr(step, "flow_name", "") or flow_id_str
+            role = getattr(step, "role", "target")
+            establishes = getattr(step, "establishes", []) or []
+            state_changes = {getattr(e, "key", str(e)): getattr(e, "value", True) for e in establishes}
+
+            try:
+                flow_uuid = uuid.UUID(flow_id_str)
+            except (ValueError, TypeError):
+                flow_uuid = None
+
+            flow = None
+            if flow_uuid:
+                flow_res = await self.repo.db.execute(select(Flow).where(Flow.id == flow_uuid))
+                flow = flow_res.scalar_one_or_none()
+                if flow and not flow_name:
+                    flow_name = flow.name
+
+            # If a prior prerequisite failed, skip remaining targets
+            if prereq_failed:
+                results.append(
+                    {
+                        "flow_id": str(flow_uuid or uuid.uuid4()),
+                        "flow_name": flow_name,
+                        "role": role,
+                        "status": "skipped",
+                        "duration_ms": 0,
+                        "evidence_ids": [],
+                        "failure_reason": f"Skipped because prerequisite failed: {prereq_failure_reason}",
+                        "state_changes": {},
+                    }
+                )
+                continue
+
+            # Create execution row in DB
+            execution = None
+            if flow:
+                execution = await self.create_execution(
+                    ExecutionCreate(flow_id=flow.id),
+                    flow_version=getattr(flow, "version", 1),
+                    flow_snapshot=getattr(flow, "json_repr", None),
+                )
+                await self.repo.update_status(execution.id, ExecutionStatus.PLANNING)
+                await self.repo.update_status(execution.id, ExecutionStatus.RUNNING)
+                await self.repo.db.commit()
+
+            start_t = time.monotonic()
+            step_status = "passed"
+            failure_reason = None
+            evidence_ids: list[uuid.UUID] = []
+
+            # Execute via FlowRunner if steps exist and not mocked
+            if flow and getattr(flow, "steps", None):
+                try:
+                    from app.engine.execution.runner import FlowRunner
+                    runner = FlowRunner()
+                    res = await runner.execute(
+                        execution_id=execution.id,
+                        flow_steps=flow.steps,
+                        success_condition=getattr(flow, "success_condition", None),
+                        preconditions=getattr(flow, "preconditions", None),
+                        target_url=base_url or "",
+                        timeout_seconds=min(300, timeout_seconds),
+                    )
+                    if res.get("success"):
+                        step_status = "passed"
+                        if execution:
+                            await self.repo.update_status(execution.id, ExecutionStatus.COMPLETED)
+                    elif res.get("error_code") == "UNVERIFIED":
+                        step_status = "unverified"
+                        failure_reason = res.get("error", "Verification condition unverified")
+                        if execution:
+                            await self.repo.update_status(execution.id, ExecutionStatus.UNVERIFIED)
+                    else:
+                        step_status = "failed"
+                        failure_reason = res.get("error", "Flow step failed")
+                        if execution:
+                            await self.repo.update_status(execution.id, ExecutionStatus.FAILED)
+                except Exception as ex:
+                    step_status = "failed"
+                    failure_reason = str(ex)
+                    if execution:
+                        await self.repo.update_status(execution.id, ExecutionStatus.FAILED)
+
+            duration_ms = int((time.monotonic() - start_t) * 1000)
+
+            # Query any evidence records created for this execution
+            if execution:
+                ev_res = await self.repo.db.execute(
+                    select(Evidence.id).where(Evidence.execution_id == execution.id)
+                )
+                evidence_ids = list(ev_res.scalars().all())
+
+            if role == "prerequisite" and step_status in ("failed", "error"):
+                prereq_failed = True
+                prereq_failure_reason = failure_reason or f"Prerequisite {flow_name} failed"
+
+            results.append(
+                {
+                    "flow_id": str(flow_uuid or (flow.id if flow else uuid.uuid4())),
+                    "flow_name": flow_name,
+                    "role": role,
+                    "status": step_status,
+                    "duration_ms": duration_ms,
+                    "evidence_ids": evidence_ids,
+                    "failure_reason": failure_reason,
+                    "state_changes": state_changes,
+                }
+            )
+
+        return results

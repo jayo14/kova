@@ -90,3 +90,30 @@ class ValidationRun(Base):
 
     project = relationship("Project", backref=backref("validation_runs", passive_deletes=True))
     baseline_run = relationship("ValidationRun", remote_side=[id])
+
+
+class ValidationReportModel(Base):
+    __tablename__ = "validation_reports"
+    __table_args__ = (
+        Index("ix_validation_reports_project_id", "project_id"),
+        Index("ix_validation_reports_overall_status", "overall_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    overall_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    request: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    impact_report: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    results: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    evidence_summary: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    signed_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    project = relationship("Project", backref=backref("validation_reports", passive_deletes=True))
