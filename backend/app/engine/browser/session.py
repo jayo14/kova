@@ -28,7 +28,37 @@ from app.engine.browser.observer import PageObserver
 from app.engine.browser.resolver import ResolutionStrategy, TargetResolver
 from app.engine.browser.executor import ActionExecutor
 
+from dataclasses import dataclass, field
+import time
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SessionState:
+    """Serializable browser session state (cookies, localStorage, sessionStorage)."""
+    cookies: list[dict[str, Any]] = field(default_factory=list)
+    local_storage: dict[str, str] = field(default_factory=dict)
+    session_storage: dict[str, str] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cookies": self.cookies,
+            "local_storage": self.local_storage,
+            "session_storage": self.session_storage,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SessionState":
+        return cls(
+            cookies=data.get("cookies") or [],
+            local_storage=data.get("local_storage") or {},
+            session_storage=data.get("session_storage") or {},
+            created_at=data.get("created_at") or time.time(),
+        )
+
 
 DEFAULT_VIEWPORT = {"width": 1280, "height": 720}
 DEFAULT_USER_AGENT = (
@@ -493,7 +523,71 @@ class BrowserSession:
             or {"success": False, "error": {...}}
         """
         executor = ActionExecutor(self.page, event_recorder)
-        return await executor.execute(raw_action, execution_id)
+    # --- Session State Persistence ---
+
+    async def save_session_state(self) -> "SessionState":
+        """Capture cookies, localStorage, and sessionStorage from the current browser session."""
+        cookies = []
+        if self.context:
+            try:
+                cookies = await self.context.cookies()
+            except Exception as e:
+                logger.debug("Failed to extract cookies: %s", e)
+
+        local_storage: dict[str, str] = {}
+        session_storage: dict[str, str] = {}
+        if self.page and not self.page.is_closed():
+            try:
+                local_storage = await self.page.evaluate("() => Object.assign({}, window.localStorage)")
+            except Exception as e:
+                logger.debug("Failed to extract localStorage: %s", e)
+            try:
+                session_storage = await self.page.evaluate("() => Object.assign({}, window.sessionStorage)")
+            except Exception as e:
+                logger.debug("Failed to extract sessionStorage: %s", e)
+
+        return SessionState(
+            cookies=cookies,
+            local_storage=local_storage,
+            session_storage=session_storage,
+            created_at=time.time(),
+        )
+
+    async def restore_session_state(self, state: "SessionState") -> None:
+        """Restore cookies, localStorage, and sessionStorage into the current browser session."""
+        if not state:
+            return
+        if self.context and state.cookies:
+            try:
+                await self.context.add_cookies(state.cookies)
+            except Exception as e:
+                logger.warning("Failed to restore cookies: %s", e)
+
+        if self.page and not self.page.is_closed():
+            if state.local_storage:
+                try:
+                    await self.page.evaluate(
+                        """(entries) => {
+                            for (const [k, v] of Object.entries(entries)) {
+                                window.localStorage.setItem(k, v);
+                            }
+                        }""",
+                        state.local_storage,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to restore localStorage: %s", e)
+            if state.session_storage:
+                try:
+                    await self.page.evaluate(
+                        """(entries) => {
+                            for (const [k, v] of Object.entries(entries)) {
+                                window.sessionStorage.setItem(k, v);
+                            }
+                        }""",
+                        state.session_storage,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to restore sessionStorage: %s", e)
 
     # --- Context manager ---
 

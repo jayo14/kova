@@ -23,6 +23,10 @@ class Credential(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     password: Mapped[str] = mapped_column(Text, nullable=False)
+    persona: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    auth_strategy: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, default="password_form", server_default="password_form"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

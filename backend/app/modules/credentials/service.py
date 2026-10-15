@@ -20,6 +20,20 @@ class CredentialService:
             name=data.name,
             email=data.email,
             password=data.password,
+            persona=data.persona,
+            auth_strategy=data.auth_strategy,
+        )
+
+    async def update_credential(
+        self, credential_id: uuid.UUID, data: "CredentialUpdate"
+    ):
+        return await self.repo.update(
+            credential_id=credential_id,
+            name=data.name,
+            email=data.email,
+            password=data.password,
+            persona=data.persona,
+            auth_strategy=data.auth_strategy,
         )
 
     async def get_credential(self, credential_id: uuid.UUID):

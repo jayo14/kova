@@ -314,3 +314,66 @@ async def test_non_standard_spa_keycloak_auth_classification():
         submit_btn = await find_submit_button(page)
         assert submit_btn is not None
         assert (await submit_btn.inner_text()).strip() == "Submit"
+
+
+@pytest.mark.asyncio
+async def test_multi_flow_session_reuse():
+    """Assert running two flows requiring the same persona's auth reuses the session without re-authenticating."""
+    from unittest.mock import AsyncMock, MagicMock
+    from app.engine.browser.session import SessionState
+    from app.modules.flows.auth import Authenticator, SessionManager
+    from app.modules.product_graph.schemas import AuthCapability
+
+    exec_id = f"exec-{uuid.uuid4().hex[:8]}"
+    session_mgr = SessionManager()
+
+    cap = AuthCapability(
+        project_id=uuid.uuid4(),
+        name="auth_student",
+        persona="student",
+        login_url="http://127.0.0.1:8000/login",
+    )
+
+    mock_authenticator = MagicMock(spec=Authenticator)
+    mock_browser = MagicMock()
+    mock_browser.restore_session_state = AsyncMock()
+
+    established_state = SessionState(
+        cookies=[{"name": "session_token", "value": "student_session_abc"}],
+        local_storage={"user_role": "student"},
+    )
+
+    from app.modules.flows.auth.strategies.base import AuthResult
+    mock_authenticator.authenticate = AsyncMock(
+        return_value=AuthResult(success=True, session_state=established_state)
+    )
+
+    # 1. Flow A runs and establishes auth session
+    state_a, was_reused_a = await session_mgr.get_or_establish(
+        execution_id=exec_id,
+        persona="student",
+        capability=cap,
+        browser=mock_browser,
+        credential=MagicMock(),
+        authenticator=mock_authenticator,
+    )
+    assert was_reused_a is False
+    assert state_a.cookies[0]["value"] == "student_session_abc"
+    assert mock_authenticator.authenticate.call_count == 1
+
+    # 2. Flow B runs in same execution requiring same student persona
+    state_b, was_reused_b = await session_mgr.get_or_establish(
+        execution_id=exec_id,
+        persona="student",
+        capability=cap,
+        browser=mock_browser,
+        credential=MagicMock(),
+        authenticator=mock_authenticator,
+    )
+    assert was_reused_b is True
+    assert state_b.cookies[0]["value"] == "student_session_abc"
+    # Authenticator was NOT called again!
+    assert mock_authenticator.authenticate.call_count == 1
+    # Browser restore was called for flow B
+    mock_browser.restore_session_state.assert_called_with(established_state)
+

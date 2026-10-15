@@ -105,7 +105,7 @@ class Capability(BaseModel):
     requires_capabilities: list[str] = Field(default_factory=list)
     requires_state: list[StateAssertion] = Field(default_factory=list)
     produces_state: list[StateMutation] = Field(default_factory=list)
-    kind: Literal["primary", "setup", "shared"] = "primary"
+    kind: Literal["primary", "setup", "shared", "auth"] = "primary"
     source_files: list[str] = Field(default_factory=list)
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     provider_flow_ids: list[str] = Field(default_factory=list)
@@ -113,6 +113,24 @@ class Capability(BaseModel):
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AuthCapability(Capability):
+    """Specialized reusable authentication capability in the Product Graph."""
+    kind: Literal["auth"] = "auth"
+    auth_strategy: Literal["password_form", "magic_link", "oauth", "otp"] = "password_form"
+    login_url: str = "/login"
+    success_url_pattern: str | None = None
+    success_state_assertion: StateAssertion = Field(
+        default_factory=lambda: StateAssertion(key="authenticated", value=True, predicate="eq")
+    )
+    persona: str = "default"
+    credential_id: uuid.UUID | None = None
+    session_ttl_seconds: int = 1800
+
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(from_attributes=True)
