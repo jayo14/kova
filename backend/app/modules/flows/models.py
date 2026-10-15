@@ -32,6 +32,7 @@ class Flow(Base):
     capability: Mapped[str | None] = mapped_column(String(128), nullable=True)
     routes: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     criticality: Mapped[str] = mapped_column(String(32), nullable=False, default="medium", server_default="medium")
+    state_contract: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True, default=dict, server_default="{}")
     version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

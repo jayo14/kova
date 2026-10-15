@@ -75,3 +75,42 @@ async def test_delete_flow(db_session, project):
     assert deleted is True
     found = await repo.get_by_id(flow.id)
     assert found is None
+
+
+@pytest.mark.asyncio
+async def test_flow_state_contract_roundtrip(db_session, project):
+    from app.modules.flows.schemas import FlowRead
+
+    repo = FlowRepository(db_session)
+    contract_data = {
+        "requires": [{"key": "authenticated", "value": True, "predicate": "eq"}],
+        "produces": [{"key": "enrolled:course_101", "value": True, "predicate": "eq"}],
+        "consumes": ["course_seat"],
+        "mutates": ["course_roster"],
+        "reset_strategy": "create_new",
+        "cost": 5,
+        "persona": "student",
+        "requires_credential": True,
+    }
+    flow = await repo.create(
+        project_id=project.id,
+        name="EnrollFlow",
+        state_contract=contract_data,
+    )
+    assert flow.state_contract == contract_data
+
+    found = await repo.get_by_id(flow.id)
+    assert found is not None
+    assert found.state_contract == contract_data
+
+    flow_read = FlowRead.model_validate(found)
+    assert flow_read.state_contract is not None
+    assert len(flow_read.requires_state) == 1
+    assert flow_read.requires_state[0].key == "authenticated"
+    assert len(flow_read.produces_state) == 1
+    assert flow_read.produces_state[0].key == "enrolled:course_101"
+    assert flow_read.cost == 5
+    assert flow_read.mutates_state == ["course_roster"]
+
+    updated = await repo.update(flow.id, state_contract={"requires": [], "produces": [], "cost": 1})
+    assert updated.state_contract == {"requires": [], "produces": [], "cost": 1}
