@@ -28,9 +28,22 @@ const statusColors: Record<string, string> = {
 };
 
 export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
-  if (evidence.length === 0) {
+  const isDev = process.env.NODE_ENV !== "production";
+  const orphanScreenshots = evidence.filter(
+    (item) => item.type === "SCREENSHOT" && !item.stepId && !item.purpose && item.purpose !== "legacy"
+  );
+  const validEvidence = evidence.filter(
+    (item) => item.type !== "SCREENSHOT" || Boolean(item.stepId || item.purpose || item.purpose === "legacy")
+  );
+
+  if (validEvidence.length === 0) {
     return (
       <div className="text-center py-8">
+        {isDev && orphanScreenshots.length > 0 && (
+          <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 text-caption mb-4">
+            Found {orphanScreenshots.length} orphan screenshot(s) — capture path bug.
+          </div>
+        )}
         <MaterialIcon
           name="folder_open"
           size={32}
@@ -46,17 +59,34 @@ export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
     );
   }
 
-  // Sort: verification first, then screenshot, then artifact; newest first within type
-  const sorted = [...evidence].sort((a, b) => {
-    const typeOrder = { VERIFICATION: 0, SCREENSHOT: 1, ARTIFACT: 2 };
-    const aOrder = typeOrder[a.type as keyof typeof typeOrder] ?? 3;
-    const bOrder = typeOrder[b.type as keyof typeof typeOrder] ?? 3;
-    if (aOrder !== bOrder) return aOrder - bOrder;
+  // Sort: group by stepId, then purpose, then newest
+  const sorted = [...validEvidence].sort((a, b) => {
+    const stepA = a.stepId || "";
+    const stepB = b.stepId || "";
+    if (stepA !== stepB) return stepA.localeCompare(stepB);
+
+    const purposeOrder: Record<string, number> = {
+      verification: 0,
+      failure: 1,
+      step_evidence: 2,
+      discovery: 3,
+      legacy: 4,
+    };
+    const pA = purposeOrder[a.purpose || ""] ?? 5;
+    const pB = purposeOrder[b.purpose || ""] ?? 5;
+    if (pA !== pB) return pA - pB;
+
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
+      {isDev && orphanScreenshots.length > 0 && (
+        <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 text-caption mb-3">
+          Found {orphanScreenshots.length} orphan screenshot(s) — capture path bug.
+        </div>
+      )}
+      <div className="space-y-1.5">
       {sorted.map((item) => (
         <button
           key={item.id}

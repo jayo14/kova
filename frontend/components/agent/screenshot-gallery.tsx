@@ -18,6 +18,10 @@ export function ScreenshotGallery({
   open,
   onClose,
 }: ScreenshotGalleryProps) {
+  const isDev = process.env.NODE_ENV !== "production";
+  const orphanCount = screenshots.filter((s) => !s.url || (!s.label && !s.timestamp)).length;
+  const validScreenshots = screenshots.filter((s) => Boolean(s.url && (s.label || s.timestamp || isDev)));
+
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
 
   useEffect(() => {
@@ -25,12 +29,14 @@ export function ScreenshotGallery({
   }, [initialIndex, open]);
 
   const goNext = useCallback(() => {
-    setCurrentIndex((i) => (i + 1) % screenshots.length);
-  }, [screenshots.length]);
+    if (validScreenshots.length === 0) return;
+    setCurrentIndex((i) => (i + 1) % validScreenshots.length);
+  }, [validScreenshots.length]);
 
   const goPrev = useCallback(() => {
-    setCurrentIndex((i) => (i - 1 + screenshots.length) % screenshots.length);
-  }, [screenshots.length]);
+    if (validScreenshots.length === 0) return;
+    setCurrentIndex((i) => (i - 1 + validScreenshots.length) % validScreenshots.length);
+  }, [validScreenshots.length]);
 
   useEffect(() => {
     if (!open) return;
@@ -43,9 +49,9 @@ export function ScreenshotGallery({
     return () => window.removeEventListener("keydown", handler);
   }, [open, goNext, goPrev, onClose]);
 
-  if (!open || screenshots.length === 0) return null;
+  if (!open || validScreenshots.length === 0) return null;
 
-  const current = screenshots[currentIndex];
+  const current = validScreenshots[currentIndex] || validScreenshots[0];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -56,7 +62,7 @@ export function ScreenshotGallery({
           <div className="flex items-center gap-2">
             <MaterialIcon name="photo_library" size={18} className="text-muted-foreground" />
             <span className="text-body-sm font-medium text-foreground">
-              Screenshot {currentIndex + 1} of {screenshots.length}
+              Screenshot {currentIndex + 1} of {validScreenshots.length}
             </span>
             {current.label && (
               <span className="text-caption text-muted-foreground">— {current.label}</span>
@@ -69,6 +75,12 @@ export function ScreenshotGallery({
             <MaterialIcon name="close" size={18} />
           </button>
         </div>
+
+        {isDev && orphanCount > 0 && (
+          <div className="w-full mb-3 p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-500 text-caption text-center">
+            Found {orphanCount} orphan screenshot(s) — capture path bug.
+          </div>
+        )}
 
         {/* Image */}
         <div className="relative flex-1 w-full rounded-xl overflow-hidden border border-border bg-black">

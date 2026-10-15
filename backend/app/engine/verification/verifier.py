@@ -34,7 +34,7 @@ The verifier rejects:
 
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -328,6 +328,7 @@ class VerificationCheck:
     expected: Any = None
     actual: Any = None
     message: str = ""
+    evidence_id: str | None = None
 
     def to_dict(self) -> dict:
         d = {
@@ -340,6 +341,8 @@ class VerificationCheck:
             d["actual"] = self.actual
         if self.message:
             d["message"] = self.message
+        if self.evidence_id:
+            d["evidence_id"] = self.evidence_id
         return d
 
 
@@ -349,11 +352,14 @@ class VerificationResult:
 
     passed: bool
     checks: list[VerificationCheck]
+    evidence_ids: list[str] = field(default_factory=list)
+    screenshot_bytes: bytes | None = None
 
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
             "checks": [c.to_dict() for c in self.checks],
+            "evidence_ids": self.evidence_ids,
         }
 
 

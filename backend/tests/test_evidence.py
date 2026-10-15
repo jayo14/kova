@@ -34,11 +34,12 @@ class TestEvidenceModel:
         assert evidence.type == "SCREENSHOT"
         assert evidence.title == "Test screenshot"
         assert evidence.status == "CAPTURED"
+        assert evidence.purpose in {None, "legacy"}
+        assert evidence.step_id is None
         assert evidence.extra_data == {}
         assert evidence.description is None
         assert evidence.storage_key is None
         assert evidence.mime_type is None
-        assert evidence.extra_data == {}
 
     def test_evidence_create_full(self):
         eid = uuid.uuid4()
@@ -46,6 +47,8 @@ class TestEvidenceModel:
             execution_id=eid,
             type=EvidenceType.VERIFICATION.value,
             title="Dashboard verified",
+            purpose="verification",
+            step_id="step_final",
             description="Welcome text was visible",
             status=EvidenceStatus.VERIFIED.value,
             storage_key="exec/123/evidence/abc.png",
@@ -54,6 +57,8 @@ class TestEvidenceModel:
         )
         assert evidence.execution_id == eid
         assert evidence.type == "VERIFICATION"
+        assert evidence.purpose == "verification"
+        assert evidence.step_id == "step_final"
         assert evidence.storage_key == "exec/123/evidence/abc.png"
         assert evidence.extra_data["checks"][0]["passed"] is True
 
@@ -164,10 +169,23 @@ class TestEvidenceService:
                 execution_id=uuid.uuid4(),
                 screenshot_bytes=b"fake-png-data",
                 title="Verified browser state",
+                purpose="verification",
+                step_id="step_1",
             )
 
             mock_storage.upload.assert_called_once()
             mock_repo.create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_missing_purpose_and_step_id(self):
+        mock_db = AsyncMock()
+        service = EvidenceService(mock_db)
+        with pytest.raises(ValueError, match="Evidence must specify at least purpose or step_id"):
+            await service.create(
+                execution_id=uuid.uuid4(),
+                type="SCREENSHOT",
+                title="Test orphan",
+            )
 
     @pytest.mark.asyncio
     async def test_create_verification_evidence(self):

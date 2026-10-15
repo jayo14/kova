@@ -1050,10 +1050,15 @@ class FlowRunner:
         ctx: ExecutionContext,
         title: str = "Evidence",
         description: str = "",
+        purpose: str = "step_evidence",
+        step_id: str | None = None,
     ) -> dict[str, Any]:
         """Capture and persist an evidence screenshot (separate from live frames)."""
+        eff_step_id = step_id or getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
         snapshot_payload: dict[str, Any] = {
             "url": browser.page.url,
+            "purpose": purpose,
+            "step_id": eff_step_id,
         }
         try:
             ss_bytes = await browser.page.screenshot(type="jpeg", quality=70)
@@ -1063,6 +1068,8 @@ class FlowRunner:
                     screenshot_bytes=ss_bytes,
                     url=browser.page.url,
                     content_type="image/jpeg",
+                    purpose=purpose,
+                    step_id=eff_step_id,
                 )
                 if storage_res.get("screenshot_url"):
                     snapshot_payload["screenshot_url"] = storage_res["screenshot_url"]
@@ -1833,12 +1840,17 @@ class FlowRunner:
                         description = "; ".join(check_descriptions) if check_descriptions else "All checks passed"
 
                         try:
+                            step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                             verification_evidence = await evidence_service.create_verification_evidence(
                                 execution_id=execution_id,
                                 title=title,
                                 description=description,
+                                purpose="verification",
+                                step_id=step_id_val,
                                 checks=[c.to_dict() for c in verification.checks],
                             )
+                            if verification_evidence and "id" in verification_evidence:
+                                verification.evidence_ids.append(verification_evidence["id"])
                             evidence_written = verification_evidence is not None
                         except Exception as e:
                             logger.warning("Could not persist verification evidence: %s", e)
@@ -1847,22 +1859,28 @@ class FlowRunner:
                 try:
                     screenshot_bytes = await browser.page.screenshot(type="png")
                     if screenshot_bytes:
-                        await evidence_service.capture_screenshot(
+                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
+                        screenshot_evidence = await evidence_service.capture_screenshot(
                             execution_id=execution_id,
                             screenshot_bytes=screenshot_bytes,
                             title="Verified browser state",
                             description="Browser state after successful verification",
+                            purpose="verification",
+                            step_id=step_id_val,
                             extra_data={
                                 "step_index": ctx.current_step_index,
-                                "step_id": getattr(ctx, "current_step_id", None),
+                                "step_id": step_id_val,
                                 "checkpoint": "verification",
                             },
                         )
+                        if screenshot_evidence and "id" in screenshot_evidence:
+                            verification.evidence_ids.append(screenshot_evidence["id"])
                         ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {
                             "title": "Verified browser state",
                             "step_index": ctx.current_step_index,
-                            "step_id": getattr(ctx, "current_step_id", None),
+                            "step_id": step_id_val,
                             "checkpoint": "verification",
+                            "purpose": "verification",
                         })
                         await self._emit_events(ctx, event_recorder)
                 except Exception as e:
@@ -1935,14 +1953,17 @@ class FlowRunner:
                 try:
                     screenshot_bytes = await browser.page.screenshot(type="png", timeout=5000)
                     if screenshot_bytes:
+                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                         await evidence_service.capture_screenshot(
                             execution_id=execution_id,
                             screenshot_bytes=screenshot_bytes,
                             title="Execution failed",
                             description=f"Browser state at failure: {error_message}",
+                            purpose="failure",
+                            step_id=step_id_val,
                             extra_data={
                                 "step_index": ctx.current_step_index,
-                                "step_id": getattr(ctx, "current_step_id", None),
+                                "step_id": step_id_val,
                                 "checkpoint": "failure",
                             },
                         )

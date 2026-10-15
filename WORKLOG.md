@@ -40,3 +40,22 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_flow_dependencies.py backend/tests/integration/test_flow_db.py -v` (17 passed)
   - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_resolver.py -v` (29 passed)
+
+## Chunk 04 — Eliminate demo/mock/stub data and enforce evidence purpose
+- **Status:** Done
+- **Changes:**
+  - Added `purpose` and `step_id` columns to `Evidence` model in `backend/app/modules/executions/evidence_model.py`.
+  - Added migration `014_add_evidence_purpose.py` backfilling existing evidence rows with `purpose="legacy"`.
+  - Updated `EvidenceRead` schema in `backend/app/modules/executions/evidence_schemas.py`.
+  - Updated `EvidenceRepository` and `EvidenceService` to strictly enforce `purpose` and `step_id`, rejecting unattached orphan rows with `ValueError`.
+  - Updated browser `screenshot_storage.py` and `evidence_storage.py` to accept and propagate `purpose` and `step_id`.
+  - Updated execution `runner.py` to pass `purpose="step_evidence"` and active `step_id` for every screenshot.
+  - Updated `verifier.py` to capture screenshots with `purpose="verification"` and link `evidence_ids` in verification results.
+  - Updated frontend evidence viewer and screenshot gallery components to group screenshots by `step_id` and `purpose`, suppressing orphans and showing dev warnings.
+  - Renamed `fake_route` to `inferred_route` in explorer.py with `confidence: 0.0` and `source: "heuristic"`.
+  - Gated CLI diagnostic scripts (`diagnose_agent.py`, `diagnose_ai_providers.py`) behind `settings.DEBUG`.
+  - Created `docs/phase-0-audit.md` documenting decisions across all demo/mock/stub surfaces.
+  - Created `backend/tests/integration/test_evidence_integrity.py` and updated `backend/tests/test_evidence.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/test_evidence.py backend/tests/integration/test_evidence_integrity.py -v` (13 passed)
+  - Full suite regression passes.

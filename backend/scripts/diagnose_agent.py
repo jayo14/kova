@@ -2,6 +2,7 @@
 
 import asyncio
 import socket
+import sys
 import uuid
 from contextlib import asynccontextmanager
 
@@ -37,6 +38,12 @@ async def _run_app(app):
 
 
 async def main():
+    # gated behind settings.DEBUG
+    from app.config.settings import settings
+    if not settings.DEBUG:
+        print("Diagnostic scripts are dev-only and gated behind settings.DEBUG")
+        sys.exit(1)
+
     async with _run_app(agent_app) as app_url, _run_app(mail_service) as mail_url:
         store = CredentialStore()
         store.add(Credential(id="agent-password", email="", password="OriginalPass123!"))
