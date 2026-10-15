@@ -3,15 +3,27 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from typing import Any
+
 from app.engine.credentials.store import CredentialStore
 from app.engine.execution.state import ExecutionState, validate_transition
+
+
+@dataclass
+class PrerequisiteResult:
+    """Record of a prerequisite flow execution result."""
+
+    flow_id: str | None
+    established_state: dict[str, Any]
+    success: bool
+    details: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ExecutionContext:
     """Mutable context passed through execution.
 
-    Tracks state, events, observations, and credentials for a single execution.
+    Tracks state, events, observations, credentials, and product state for a single execution.
     """
 
     execution_id: str
@@ -23,6 +35,11 @@ class ExecutionContext:
     events: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     credentials: CredentialStore = field(default_factory=CredentialStore)
+    current_state: dict[str, Any] = field(default_factory=dict)
+    execution_plan: Any | None = None
+    session_manager: Any | None = None
+    prerequisite_results: list[PrerequisiteResult] = field(default_factory=list)
+    persona: str = "default"
     started_at: datetime | None = None
     completed_at: datetime | None = None
     control_state: str = "agent"  # "agent" | "human" | "paused"
@@ -61,6 +78,16 @@ class ExecutionContext:
             "execution_id": self.execution_id,
             "state": self.state.value,
             "current_step_index": self.current_step_index,
+            "current_state": self.current_state,
+            "prerequisite_results": [
+                {
+                    "flow_id": r.flow_id,
+                    "established_state": r.established_state,
+                    "success": r.success,
+                    "details": r.details,
+                }
+                for r in self.prerequisite_results
+            ],
             "events": self.events,
             "observations": self.observations,
             "errors": self.errors,

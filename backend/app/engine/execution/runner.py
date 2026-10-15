@@ -120,7 +120,7 @@ class FlowRunner:
     async def execute(
         self,
         execution_id: uuid.UUID,
-        flow_steps: list[dict],
+        flow_steps: list[dict] | None = None,
         success_condition: dict | None = None,
         preconditions: dict | None = None,
         dependency_plan: list[dict] | None = None,
@@ -131,6 +131,12 @@ class FlowRunner:
         objective: str | None = None,
         expected_outcome: str | None = None,
         fail_on_healed: bool | None = None,
+        target_flow: Any | None = None,
+        flows: list[Any] | None = None,
+        persona: str = "default",
+        current_state: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
+        reset_strategy: str = "none",
     ) -> dict[str, Any]:
         """Execute a flow.
 
@@ -145,9 +151,15 @@ class FlowRunner:
             objective: Optional natural language objective.
             expected_outcome: Optional natural language expected outcome.
             fail_on_healed: Optional flag to fail execution if AI healing was used.
+            target_flow: Optional target Flow domain model.
+            flows: Optional list of available Flow models for planning.
+            persona: Active persona name (defaults to "default").
+            current_state: Initial application state dictionary.
+            session_manager: Optional SessionManager instance.
+            reset_strategy: Contamination reset strategy ("none", "re_establish", "create_new", "skip_if_exists").
 
         Returns:
-            Execution result with events, observations, verification.
+            Execution result with events, observations, verification, and current_state.
         """
         effective_timeout = timeout_seconds or EXECUTION_TIMEOUT_SECONDS
 
@@ -157,6 +169,7 @@ class FlowRunner:
                     execution_id, flow_steps, success_condition,
                     credential_store, target_url, event_recorder, preconditions, dependency_plan,
                     objective, expected_outcome, fail_on_healed,
+                    target_flow, flows, persona, current_state, session_manager, reset_strategy,
                 ),
                 timeout=effective_timeout,
             )
@@ -173,21 +186,35 @@ class FlowRunner:
                 "state": ExecutionState.FAILED.value,
             }
 
+    async def run(self, *args, **kwargs) -> dict[str, Any]:
+        """Execute/run a flow with state-aware planning and prerequisite resolution."""
+        return await self.execute(*args, **kwargs)
+
     async def _execute_inner(
         self,
         execution_id: uuid.UUID,
-        flow_steps: list[dict],
-        success_condition: dict | None,
-        credential_store: CredentialStore | None,
-        target_url: str,
-        event_recorder: Callable | None,
+        flow_steps: list[dict] | None = None,
+        success_condition: dict | None = None,
+        credential_store: CredentialStore | None = None,
+        target_url: str = "",
+        event_recorder: Callable | None = None,
         preconditions: dict | None = None,
         dependency_plan: list[dict] | None = None,
         objective: str | None = None,
         expected_outcome: str | None = None,
         fail_on_healed: bool | None = None,
+        target_flow: Any | None = None,
+        flows: list[Any] | None = None,
+        persona: str = "default",
+        current_state: dict[str, Any] | None = None,
+        session_manager: Any | None = None,
+        reset_strategy: str = "none",
     ) -> dict[str, Any]:
-        """Inner execution logic (without timeout wrapper)."""
+        """Inner execution logic with state-aware planning and prerequisite resolution."""
+        from types import SimpleNamespace
+        from app.modules.flows.schemas import FlowStateContract, StateAssertion
+        from app.modules.flows.dependency_resolver import DependencyResolver, _keys_collide
+
         if fail_on_healed is None:
             try:
                 from app.engine.execution.control import get_execution_fail_on_healed
@@ -207,7 +234,14 @@ class FlowRunner:
             execution_id=str(execution_id),
             target_url=target_url,
             credentials=credential_store or CredentialStore(),
+            persona=persona,
+            current_state=dict(current_state or {}),
+            session_manager=session_manager,
         )
+        if f"authenticated:{persona}" not in ctx.current_state:
+            ctx.current_state[f"authenticated:{persona}"] = False
+        if "authenticated:False" not in ctx.current_state and not ctx.current_state.get(f"authenticated:{persona}"):
+            ctx.current_state["authenticated:False"] = True
 
         # Step 1: QUEUED
         ctx.transition(ExecutionState.QUEUED)
@@ -219,12 +253,134 @@ class FlowRunner:
         ctx.record_event(EventTypes.EXECUTION_INITIALIZING, {})
         await self._emit_events(ctx, event_recorder)
 
+        # Step 3: PLANNING
+        ctx.transition(ExecutionState.PLANNING)
+
+        if target_flow is None:
+            target_contract = FlowStateContract(
+                reset_strategy=reset_strategy if reset_strategy in ("none", "re_establish", "create_new", "skip_if_exists") else "none",
+            )
+            if preconditions:
+                for k, v in preconditions.items():
+                    target_contract.requires.append(StateAssertion(key=str(k), value=v))
+            target_flow_obj = SimpleNamespace(
+                id=execution_id,
+                name="Target Flow",
+                steps=flow_steps,
+                preconditions=preconditions,
+                success_condition=success_condition,
+                dependencies=dependency_plan or [],
+                provides_capabilities=[],
+                state_contract=target_contract,
+            )
+        else:
+            target_flow_obj = target_flow
+            target_contract = getattr(target_flow_obj, "state_contract", None)
+            if not flow_steps and hasattr(target_flow_obj, "steps") and target_flow_obj.steps:
+                flow_steps = list(target_flow_obj.steps)
+            if not success_condition and hasattr(target_flow_obj, "success_condition"):
+                success_condition = target_flow_obj.success_condition
+            if not preconditions and hasattr(target_flow_obj, "preconditions"):
+                preconditions = target_flow_obj.preconditions
+
+        all_flows = list(flows) if flows else [target_flow_obj]
+        if not any(str(getattr(f, "id", "")) == str(getattr(target_flow_obj, "id", "")) for f in all_flows):
+            all_flows.append(target_flow_obj)
+
+        if dependency_plan:
+            for dep in dependency_plan:
+                if not any(str(getattr(f, "id", "")) == str(dep.get("id")) for f in all_flows):
+                    dep_contract = dep.get("state_contract") or FlowStateContract(
+                        produces=[StateAssertion(key=str(c), value=True) for c in dep.get("provides_capabilities", [])]
+                    )
+                    all_flows.append(SimpleNamespace(
+                        id=dep.get("id", uuid.uuid4()),
+                        name=dep.get("name", "Dependency"),
+                        steps=dep.get("steps", []),
+                        preconditions=dep.get("preconditions"),
+                        success_condition=dep.get("success_condition"),
+                        dependencies=dep.get("dependencies", []),
+                        provides_capabilities=dep.get("provides_capabilities", []),
+                        state_contract=dep_contract,
+                    ))
+
+        available_creds = set()
+        for cid in ctx.credentials.list_ids():
+            c = ctx.credentials.get(cid)
+            if c:
+                if hasattr(c, "persona") and c.persona:
+                    available_creds.add(c.persona)
+                if hasattr(c, "email") and c.email:
+                    available_creds.add(c.email)
+                available_creds.add(cid)
+
+        try:
+            plan = DependencyResolver.resolve_execution_plan(
+                target=target_flow_obj,
+                flows=all_flows,
+                current_state=ctx.current_state,
+                persona=persona,
+                available_credentials=available_creds,
+            )
+        except Exception as plan_err:
+            logger.warning("Execution planning failed: %s", plan_err)
+            ctx.transition(ExecutionState.FAILED)
+            ctx.record_event(EventTypes.EXECUTION_FAILED, {"error": str(plan_err)})
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "error": f"Planning failed: {plan_err}",
+                "error_code": "PLANNING_FAILED",
+                "state": ExecutionState.FAILED.value,
+                "current_state": ctx.current_state,
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
+
+        ctx.execution_plan = plan
+
+        # If plan.unresolved is non-empty:
+        if plan.unresolved:
+            ctx.transition(ExecutionState.PREREQUISITE_FAILED)
+            plan_payload = {
+                "steps": [s.__dict__ if hasattr(s, "__dict__") else str(s) for s in plan.steps],
+                "estimated_cost": plan.estimated_cost,
+                "unresolved": [u.model_dump() if hasattr(u, "model_dump") else str(u) for u in plan.unresolved],
+                "warnings": plan.warnings,
+            }
+            ctx.record_event(EventTypes.EXECUTION_PLANNED, plan_payload)
+            ctx.record_event(EventTypes.PREREQUISITE_FAILED, {
+                "unresolved": [u.model_dump() if hasattr(u, "model_dump") else str(u) for u in plan.unresolved],
+            })
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "error": f"Unresolved prerequisites: {', '.join(str(u.key) for u in plan.unresolved)}",
+                "error_code": "PREREQUISITE_FAILED",
+                "unresolved": [u.key for u in plan.unresolved],
+                "current_state": ctx.current_state,
+                "state": "UNVERIFIED",
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
+
+        # Emit EXECUTION_PLANNED event with the plan
+        ctx.record_event(EventTypes.EXECUTION_PLANNED, {
+            "steps": [s.__dict__ if hasattr(s, "__dict__") else str(s) for s in plan.steps],
+            "estimated_cost": plan.estimated_cost,
+            "unresolved": [],
+            "warnings": plan.warnings,
+        })
+        await self._emit_events(ctx, event_recorder)
+
         browser = BrowserSession()
         exec_id = str(execution_id)
         frame_task: asyncio.Task | None = None
         nav_unbind: Callable[[], None] | None = None
         try:
-            # Step 3: Start browser
+            # Step 4: Start browser
             await browser.start()
             ctx.transition(ExecutionState.BROWSER_READY)
             ctx.record_event(EventTypes.BROWSER_STARTED, {"browser": "chromium"})
@@ -240,23 +396,191 @@ class FlowRunner:
 
             browser.on_network_error = _record_network_error
             verifier = Verifier(browser.page)
+            action_executor = ActionExecutor(
+                browser.page,
+                event_recorder=None,
+                credential_store=credential_store,
+            )
 
-            # Observe URL/title changes for the viewport (framenavigated)
+            # Observe URL/title changes for viewport
             nav_unbind = self._bind_nav_observer(browser, exec_id)
-
-            # Continuous frame producer — bounded FPS, cross-process via Redis
             frame_task = asyncio.create_task(
                 self._frame_producer(browser, exec_id)
             )
 
-            # Step 4: RUNNING
+            # Step 5: Prerequisite resolution
+            prereq_steps = [s for s in plan.steps if s.role == "prerequisite"]
+            by_id_map = {str(getattr(f, "id", "")): f for f in all_flows}
+            for f in all_flows:
+                if hasattr(f, "name") and f.name:
+                    by_id_map[str(f.name)] = f
+
+            if prereq_steps:
+                ctx.transition(ExecutionState.RESOLVING_PREREQUISITES)
+                from app.modules.flows.auth import Authenticator, SessionManager
+                from app.modules.product_graph.schemas import AuthCapability
+                if not ctx.session_manager:
+                    ctx.session_manager = SessionManager()
+
+                for p_step in prereq_steps:
+                    is_auth = (
+                        any("auth" in str(getattr(a, "key", "")).lower() or getattr(a, "key", "") in ("authenticated", f"authenticated:{persona}") for a in p_step.establishes)
+                        or "auth" in getattr(p_step, "flow_name", "").lower()
+                    )
+                    if is_auth:
+                        cred = None
+                        for cid in ctx.credentials.list_ids():
+                            c = ctx.credentials.get(cid)
+                            if c:
+                                cred = c
+                                break
+                        auth_cap = AuthCapability(
+                            project_id=getattr(target_flow_obj, "project_id", uuid.uuid4()),
+                            name=p_step.flow_name or "Authenticate",
+                            login_url=target_url or "/login",
+                            persona=persona,
+                        )
+                        try:
+                            session_state, was_reused = await ctx.session_manager.get_or_establish(
+                                execution_id=exec_id,
+                                persona=persona,
+                                capability=auth_cap,
+                                browser=browser,
+                                credential=cred,
+                                authenticator=Authenticator(),
+                                event_recorder=event_recorder,
+                            )
+                            ctx.current_state[f"authenticated:{persona}"] = True
+                            ctx.current_state["authenticated"] = True
+                            ctx.current_state.pop("authenticated:False", None)
+                            for a in p_step.establishes:
+                                ctx.current_state[a.key] = a.value
+                            ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
+                                "flow_id": p_step.flow_id,
+                                "flow_name": p_step.flow_name,
+                                "established_state": dict(ctx.current_state),
+                                "was_reused": was_reused,
+                            })
+                            await self._emit_events(ctx, event_recorder)
+                        except Exception as auth_err:
+                            logger.warning("Auth prerequisite resolution failed: %s", auth_err)
+                            ctx.transition(ExecutionState.PREREQUISITE_FAILED)
+                            ctx.record_event(EventTypes.PREREQUISITE_FAILED, {
+                                "flow_id": p_step.flow_id,
+                                "error": str(auth_err),
+                            })
+                            await self._emit_events(ctx, event_recorder)
+                            return {
+                                "success": False,
+                                "execution_id": str(execution_id),
+                                "error": f"Prerequisite auth failed: {auth_err}",
+                                "error_code": "PREREQUISITE_FAILED",
+                                "state": "UNVERIFIED",
+                                "current_state": ctx.current_state,
+                                "events": ctx.events,
+                                "observations": ctx.observations,
+                            }
+                    else:
+                        prereq_flow = by_id_map.get(p_step.flow_id)
+                        if prereq_flow:
+                            prereq_steps_list = getattr(prereq_flow, "steps", []) or []
+                            for dep_step in prereq_steps_list:
+                                if await is_cancel_requested(exec_id):
+                                    return {
+                                        "success": False,
+                                        "execution_id": str(execution_id),
+                                        "error": "Execution cancelled during prerequisite setup",
+                                        "error_code": ErrorCode.CANCELLED,
+                                        "state": "CANCELLED",
+                                        "current_state": ctx.current_state,
+                                        "events": ctx.events,
+                                        "observations": ctx.observations,
+                                    }
+                                await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
+                                await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, ctx.current_step_index, event_recorder)
+                                ctx.current_step_index += 1
+
+                            prereq_contract = getattr(prereq_flow, "state_contract", None)
+                            if prereq_contract and hasattr(prereq_contract, "produces"):
+                                for prod in prereq_contract.produces:
+                                    ctx.current_state[prod.key] = prod.value
+                            for a in p_step.establishes:
+                                ctx.current_state[a.key] = a.value
+
+                            ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
+                                "flow_id": p_step.flow_id,
+                                "flow_name": p_step.flow_name,
+                                "established_state": dict(ctx.current_state),
+                            })
+                            await self._emit_events(ctx, event_recorder)
+
+            # Step 6: Contamination detection
+            conflicting_keys = []
+            steps_to_check = flow_steps or (getattr(target_flow_obj, "steps", []) or [])
+            all_mutated_keys = set()
+            if target_contract:
+                for m in getattr(target_contract, "mutates", []) + getattr(target_contract, "consumes", []):
+                    all_mutated_keys.add(m.key if hasattr(m, "key") else str(m))
+
+            for st in steps_to_check:
+                if isinstance(st, dict):
+                    for m in st.get("mutates", []) + st.get("consumes", []):
+                        m_key = m.get("key") if isinstance(m, dict) else str(m)
+                        all_mutated_keys.add(m_key)
+
+            for m_key in all_mutated_keys:
+                for curr_key, curr_val in ctx.current_state.items():
+                    if curr_val and _keys_collide(m_key, curr_key):
+                        conflicting_keys.append(m_key)
+
+            steps_to_skip_indices = set()
+            if conflicting_keys:
+                ctx.transition(ExecutionState.CONTAMINATION_DETECTED)
+                ctx.record_event(EventTypes.STATE_CONTAMINATED, {
+                    "conflicting_state_keys": conflicting_keys,
+                    "flow_id": str(getattr(target_flow_obj, "id", execution_id)),
+                })
+                await self._emit_events(ctx, event_recorder)
+
+                r_strategy = getattr(target_contract, "reset_strategy", reset_strategy) or reset_strategy
+                action_taken = "none"
+                if r_strategy == "re_establish":
+                    action_taken = "re_established_prerequisite"
+                    for p_step in prereq_steps:
+                        prereq_flow = by_id_map.get(p_step.flow_id)
+                        if prereq_flow:
+                            for dep_step in (getattr(prereq_flow, "steps", []) or []):
+                                await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, ctx.current_step_index, event_recorder)
+                                ctx.current_step_index += 1
+                elif r_strategy == "create_new":
+                    action_taken = "created_fresh_entity"
+                elif r_strategy == "skip_if_exists":
+                    action_taken = "skipped_existing_steps"
+                    for idx, st in enumerate(steps_to_check):
+                        if isinstance(st, dict):
+                            for m in st.get("mutates", []) + st.get("produces", []):
+                                m_k = m.get("key") if isinstance(m, dict) else str(m)
+                                if any(_keys_collide(m_k, ck) for ck in conflicting_keys):
+                                    steps_to_skip_indices.add(idx)
+                else:
+                    action_taken = "warn_and_proceed"
+                    logger.warning("State contamination detected with reset_strategy='none': %s", conflicting_keys)
+
+                ctx.record_event(EventTypes.STATE_RESET, {
+                    "reset_strategy": r_strategy,
+                    "action_taken": action_taken,
+                    "conflicting_keys": conflicting_keys,
+                })
+                await self._emit_events(ctx, event_recorder)
+
+            # Step 7: RUNNING
             ctx.transition(ExecutionState.RUNNING)
             ctx.started_at = datetime.now(timezone.utc)
             ctx.record_event(EventTypes.EXECUTION_STARTED, {"started_at": ctx.started_at.isoformat()})
             await self._emit_events(ctx, event_recorder)
             await publish_state(exec_id, "executing", browser.page.url, browser.page.url and "")
 
-            # Step 5: Navigate to initial URL
+            # Step 8: Navigate to initial URL
             if target_url:
                 await browser.navigate(target_url)
                 await publish_state(exec_id, "navigating", target_url, "")
@@ -265,158 +589,6 @@ class FlowRunner:
                 ctx.record_event(EventTypes.PAGE_LOADED, page_payload)
                 ctx.record_event(EventTypes.BROWSER_SCREENSHOT, ss_data)
                 await self._emit_events(ctx, event_recorder)
-
-            # Step 6: Execute steps
-            action_executor = ActionExecutor(
-                browser.page,
-                event_recorder=None,
-                credential_store=credential_store,
-            )
-            target_preconditions_met = False
-            if preconditions:
-                prerequisite_result = await verifier.verify(preconditions)
-                target_preconditions_met = prerequisite_result.passed
-                ctx.record_event(EventTypes.VERIFICATION_PASSED if target_preconditions_met else EventTypes.VERIFICATION_FAILED, {
-                    "kind": "preconditions", **prerequisite_result.to_dict(),
-                })
-                await self._emit_events(ctx, event_recorder)
-
-            # Setup flows share this run's isolated context. Skip setup only
-            # when the target's complete declared precondition is already true.
-            if dependency_plan and not target_preconditions_met:
-                setup_step_offset = 0
-                for dependency in dependency_plan:
-                    dep_condition = dependency.get("success_condition")
-                    if dep_condition:
-                        existing_state = await verifier.verify(dep_condition)
-                        if existing_state.passed:
-                            ctx.record_event(EventTypes.VERIFICATION_PASSED, {
-                                "kind": "dependency_already_satisfied",
-                                "flow_id": dependency.get("id"),
-                                "flow_version": dependency.get("version"),
-                                **existing_state.to_dict(),
-                            })
-                            await self._emit_events(ctx, event_recorder)
-                            continue
-
-                    # First-class AuthCapability / authentication dependency handling
-                    is_auth_dep = (
-                        dependency.get("kind") == "auth"
-                        or dependency.get("capability") in ("auth", "authentication")
-                        or "authenticated" in dependency.get("provides_capabilities", [])
-                        or any("auth" in str(p).lower() for p in dependency.get("provides_capabilities", []))
-                    )
-                    if is_auth_dep:
-                        from app.modules.flows.auth import Authenticator, SessionManager
-                        from app.modules.product_graph.schemas import AuthCapability
-                        persona_name = (
-                            dependency.get("persona")
-                            or (persona.get("name") if isinstance(persona, dict) else str(persona or "default"))
-                        )
-                        session_mgr = SessionManager()
-                        cred = None
-                        for cid in ctx.credentials.list_ids():
-                            c = ctx.credentials.get(cid)
-                            if c:
-                                cred = c
-                                break
-                        auth_cap = AuthCapability(
-                            project_id=dependency.get("project_id") or uuid.uuid4(),
-                            name=dependency.get("name") or "Authenticate",
-                            login_url=dependency.get("routes", ["/login"])[0] if dependency.get("routes") else "/login",
-                            persona=persona_name,
-                        )
-                        try:
-                            session_state, was_reused = await session_mgr.get_or_establish(
-                                execution_id=exec_id,
-                                persona=persona_name,
-                                capability=auth_cap,
-                                browser=browser,
-                                credential=cred,
-                                authenticator=Authenticator(),
-                                event_recorder=event_recorder,
-                            )
-                            ctx.record_event("auth_session_established", {
-                                "persona": persona_name,
-                                "was_reused": was_reused,
-                            })
-                            await self._emit_events(ctx, event_recorder)
-                            continue
-                        except Exception as auth_err:
-                            logger.warning("SessionManager get_or_establish failed: %s", auth_err)
-
-                    dep_preconditions = dependency.get("preconditions")
-                    if dep_preconditions:
-                        dep_check = await verifier.verify(dep_preconditions)
-                        if not dep_check.passed:
-                            return {
-                                "success": False, "execution_id": str(execution_id),
-                                "error": f"Prerequisite flow {dependency.get('name')} has unmet preconditions",
-                                "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
-                                "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
-                                "events": ctx.events, "observations": ctx.observations,
-                            }
-                    for dep_step in dependency.get("steps", []):
-                        if await is_cancel_requested(exec_id):
-                            return {
-                                "success": False, "execution_id": str(execution_id),
-                                "error": "Execution cancelled during prerequisite setup",
-                                "error_code": ErrorCode.CANCELLED, "state": "CANCELLED",
-                                "events": ctx.events, "observations": ctx.observations,
-                            }
-                        ctx.current_step_index = setup_step_offset
-                        browser.current_step_index = setup_step_offset
-                        await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
-                        await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, setup_step_offset, event_recorder)
-                        dep_check = await self._verify_step_postcondition(ctx, browser, verifier, dep_step, setup_step_offset, event_recorder)
-                        if dep_check is not None and not dep_check.passed:
-                            return {
-                                "success": False, "execution_id": str(execution_id),
-                                "error": f"Prerequisite step {dep_step.get('step_id')} failed verification",
-                                "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
-                                "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
-                                "events": ctx.events, "observations": ctx.observations,
-                            }
-                        setup_step_offset += 1
-                    if not dep_condition:
-                        return {
-                            "success": False, "execution_id": str(execution_id),
-                            "error": f"Prerequisite flow {dependency.get('name')} has no verifiable postcondition",
-                            "error_code": "PREREQUISITE_UNSATISFIED", "blocked_dependency": dependency.get("id"),
-                            "state": "BLOCKED", "events": ctx.events, "observations": ctx.observations,
-                        }
-                    dep_check = await verifier.verify(dep_condition)
-                    ctx.record_event(EventTypes.VERIFICATION_PASSED if dep_check.passed else EventTypes.VERIFICATION_FAILED, {
-                        "kind": "dependency_postcondition", "flow_id": dependency.get("id"),
-                        "flow_version": dependency.get("version"), **dep_check.to_dict(),
-                    })
-                    await self._emit_events(ctx, event_recorder)
-                    if not dep_check.passed:
-                        return {
-                            "success": False, "execution_id": str(execution_id),
-                            "error": f"Prerequisite flow {dependency.get('name')} did not establish the required state",
-                            "error_code": "PREREQUISITE_UNSATISFIED", "verification": dep_check.to_dict(),
-                            "blocked_dependency": dependency.get("id"), "state": "BLOCKED",
-                            "events": ctx.events, "observations": ctx.observations,
-                        }
-                if preconditions:
-                    prerequisite_result = await verifier.verify(preconditions)
-                    target_preconditions_met = prerequisite_result.passed
-                    if not target_preconditions_met:
-                        return {
-                            "success": False, "execution_id": str(execution_id),
-                            "error": "Setup flows finished but target preconditions remain unsatisfied",
-                            "error_code": "PREREQUISITE_UNSATISFIED", "verification": prerequisite_result.to_dict(),
-                            "state": "BLOCKED", "events": ctx.events, "observations": ctx.observations,
-                        }
-            if preconditions and not target_preconditions_met:
-                return {
-                    "success": False, "execution_id": str(execution_id),
-                    "error": "Required application state could not be verified and no setup flow resolved it",
-                    "error_code": "PREREQUISITE_UNSATISFIED", "state": "BLOCKED",
-                    "verification": prerequisite_result.to_dict() if preconditions else None,
-                    "events": ctx.events, "observations": ctx.observations,
-                }
 
             # If flow has no pre-baked steps but has an objective, dynamically plan actions
             if not flow_steps and objective:
@@ -452,6 +624,10 @@ class FlowRunner:
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
 
             for i, step in enumerate(flow_steps):
+                if i in steps_to_skip_indices:
+                    logger.info("Skipping step %d due to state contamination skip_if_exists strategy", i)
+                    continue
+
                 # Cancellation gate — checked at every step boundary
                 if await is_cancel_requested(exec_id):
                     logger.info("Execution %s cancelled by user at step %d", execution_id, i)
@@ -479,6 +655,7 @@ class FlowRunner:
                         "execution_id": str(execution_id),
                         "error": "Execution cancelled by user",
                         "error_code": ErrorCode.CANCELLED,
+                        "current_state": ctx.current_state,
                         "events": ctx.events,
                         "observations": ctx.observations,
                         "state": "CANCELLED",
@@ -520,6 +697,18 @@ class FlowRunner:
                     unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
                     error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
                     raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
+
+                # Update context.current_state after each step based on produces / mutates
+                if isinstance(step, dict):
+                    for p in step.get("produces", []):
+                        k = p.get("key") if isinstance(p, dict) else str(p)
+                        v = p.get("value", True) if isinstance(p, dict) else True
+                        ctx.current_state[k] = v
+                    for m in step.get("mutates", []):
+                        k = m.get("key") if isinstance(m, dict) else str(m)
+                        v = m.get("value", True) if isinstance(m, dict) else True
+                        ctx.current_state[k] = v
+
                 # Drain any human input queued mid-step
                 await self._process_user_input(browser, exec_id)
                 # Pause gate after step
@@ -529,7 +718,12 @@ class FlowRunner:
                 except Exception:
                     pass
 
-            # Step 7: Verify final success condition
+            # Update context.current_state with target flow produces contract
+            if target_contract and hasattr(target_contract, "produces"):
+                for prod in target_contract.produces:
+                    ctx.current_state[prod.key] = prod.value
+
+            # Step 9: Verify final success condition
             ctx.transition(ExecutionState.VERIFYING)
             ctx.record_event(EventTypes.VERIFICATION_STARTED, {"condition": success_condition})
             await self._emit_events(ctx, event_recorder)
@@ -702,6 +896,7 @@ class FlowRunner:
                         "execution_id": str(execution_id),
                         "error": "Actions completed but no success condition was defined",
                         "error_code": "UNVERIFIED",
+                        "current_state": ctx.current_state,
                         "events": ctx.events,
                         "observations": ctx.observations,
                         "verification": verification.to_dict(),
@@ -790,6 +985,7 @@ class FlowRunner:
             return {
                 "success": True,
                 "execution_id": str(execution_id),
+                "current_state": ctx.current_state,
                 "events": ctx.events,
                 "observations": ctx.observations,
                 "verification": verification.to_dict(),
@@ -833,6 +1029,7 @@ class FlowRunner:
                 "execution_id": str(execution_id),
                 "error": str(e),
                 "error_code": error_code,
+                "current_state": ctx.current_state,
                 "events": ctx.events,
                 "observations": ctx.observations,
                 "state": ctx.state.value,

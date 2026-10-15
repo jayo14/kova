@@ -130,5 +130,24 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_session_manager.py backend/tests/unit/test_auth_evidence.py backend/tests/unit/test_auth.py backend/tests/integration/test_agent_robustness.py` (34 passed)
 
-
+## Chunk 09: Dynamic Prerequisite Resolution & State-Aware Flow Execution
+- **Status:** Complete
+- **Changes:**
+  - Extended execution lifecycle states with `PLANNING`, `RESOLVING_PREREQUISITES`, `PREREQUISITE_FAILED`, `CONTAMINATION_DETECTED`, and `UNVERIFIED` in `ExecutionState` (`backend/app/engine/execution/state.py`) and `ExecutionStatus` (`backend/app/modules/executions/models.py`).
+  - Added Alembic migration `018_add_planning_states.py` to extend database status enum.
+  - Added new event types in `backend/app/modules/executions/event_types.py`: `EXECUTION_PLANNED`, `PREREQUISITE_RESOLVED`, `PREREQUISITE_FAILED`, `STATE_CONTAMINATED`, `STATE_RESET`.
+  - Updated state machine definitions and transition validations in `backend/app/engine/execution/state.py` and `backend/app/modules/executions/state_machine.py`.
+  - Extended `ExecutionContext` (`backend/app/engine/execution/context.py`) with `current_state`, `execution_plan`, `session_manager`, `prerequisite_results`, and `persona`.
+  - Updated zombie recovery worker (`backend/app/workers/recovery.py`) with timeouts for stuck `PLANNING` (>30s) and `RESOLVING_PREREQUISITES` (>300s).
+  - Implemented `DependencyResolver` in `backend/app/modules/flows/dependency_resolver.py` wrapping the capability-based topological planner.
+  - Refactored `FlowRunner` (`backend/app/engine/execution/runner.py`) to enforce state-aware flow execution:
+    - Pre-execution journey planning via `DependencyResolver` before starting browser (fail-closed if prerequisites are unsatisfiable).
+    - Session reuse via `SessionManager` and `Authenticator` for auth prerequisites.
+    - Contamination detection against initial/active state with configurable reset strategies (`re_establish`, `create_new`, `skip_if_exists`, `none`).
+    - Step-by-step state tracking merging `produces` assertions into `current_state`.
+  - Added `fill()` helper to `BrowserSession` with robust fallbacks in `PasswordFormStrategy`.
+  - Added unit test suite `backend/tests/unit/test_runner_dynamic_planning.py` and integration tests in `backend/tests/integration/test_state_aware_execution.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_runner_dynamic_planning.py backend/tests/unit/test_state_machine.py backend/tests/unit/test_execution_recovery.py -v` (55 passed)
+  - `pytest backend/tests/integration/test_state_aware_execution.py -v` (3 passed)
 

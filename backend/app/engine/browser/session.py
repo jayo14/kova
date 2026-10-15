@@ -463,6 +463,10 @@ class BrowserSession:
             await self.page.fill(target, value)
         logger.debug("Typed into %s", target)
 
+    async def fill(self, selector: str, value: str):
+        """Fill an input element by selector."""
+        await self.page.fill(selector, value)
+
     async def clear(self, target: str, *, role: str = "", strategy: ResolutionStrategy | None = None):
         """Clear the content of an input element."""
         resolver = TargetResolver(self.page)
