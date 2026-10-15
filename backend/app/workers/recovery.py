@@ -23,9 +23,17 @@ def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
 
 
+PLANNING_TIMEOUT_SECONDS = 30
+PREREQUISITE_TIMEOUT_SECONDS = 300  # 5 minutes
+
+
 def _recovery_action(status: str, age_seconds: float) -> str | None:
     if status in (ExecutionStatus.CREATED.value, ExecutionStatus.QUEUED.value):
         return "dispatch" if age_seconds >= DISPATCH_GRACE_SECONDS else None
+    if status == ExecutionStatus.PLANNING.value and age_seconds >= PLANNING_TIMEOUT_SECONDS:
+        return "fail_planning"
+    if status == ExecutionStatus.RESOLVING_PREREQUISITES.value and age_seconds >= PREREQUISITE_TIMEOUT_SECONDS:
+        return "fail_prerequisites"
     if status not in TERMINAL_STATES and age_seconds >= ABANDONED_EXECUTION_SECONDS:
         return "timeout"
     return None
@@ -51,6 +59,26 @@ async def reconcile_executions() -> dict[str, int]:
             action = _recovery_action(execution.status, age)
             if action == "dispatch":
                 dispatch_ids.append(str(execution.id))
+            elif action in ("fail_planning", "fail_prerequisites"):
+                try:
+                    is_planning = action == "fail_planning"
+                    await repo.update_status(
+                        execution.id,
+                        ExecutionStatus.FAILED,
+                        error_code="PLANNING_TIMEOUT" if is_planning else "PREREQUISITE_TIMEOUT",
+                        error_message=(
+                            "Execution planning exceeded 30s limit."
+                            if is_planning
+                            else "Prerequisite resolution exceeded 5m limit."
+                        ),
+                        failure_category="recovery_timeout",
+                    )
+                    timed_out += 1
+                except InvalidTransitionError:
+                    continue
+                except Exception:
+                    await db.rollback()
+                    logger.exception("Failed to fail stuck execution %s in state %s", execution.id, execution.status)
             elif action == "timeout":
                 try:
                     await repo.update_status(

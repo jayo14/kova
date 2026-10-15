@@ -17,6 +17,13 @@ class EventTypes:
     EXECUTION_FAILED = "execution.failed"
     EXECUTION_CANCELLED = "execution.cancelled"
 
+    # State-aware execution & Planning lifecycle
+    EXECUTION_PLANNED = "execution.planned"
+    PREREQUISITE_RESOLVED = "prerequisite.resolved"
+    PREREQUISITE_FAILED = "prerequisite.failed"
+    STATE_CONTAMINATED = "state.contaminated"
+    STATE_RESET = "state.reset"
+
     # Browser lifecycle
     BROWSER_STARTED = "browser.started"
     BROWSER_CLOSED = "browser.closed"

@@ -146,9 +146,17 @@ class PasswordFormStrategy:
                     evidence_list.append(pre_ss)
 
                 # 4. Input credentials
+                async def _safe_fill(sel: str, val: str):
+                    if hasattr(browser, "fill"):
+                        await browser.fill(sel, val)
+                    elif hasattr(browser, "page") and hasattr(browser.page, "fill"):
+                        await browser.page.fill(sel, val)
+                    elif hasattr(browser, "type"):
+                        await browser.type(sel, val)
+
                 if email_selector:
-                    await browser.fill(email_selector, email)
-                await browser.fill(pwd_selector, password)
+                    await _safe_fill(email_selector, email)
+                await _safe_fill(pwd_selector, password)
 
                 # 5. Capture network log / submit record evidence (redacting passwords & cookies!)
                 evidence_list.append({

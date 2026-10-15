@@ -54,6 +54,25 @@ class TestValidTransitions:
     def test_waiting_to_timeout(self):
         validate_transition("WAITING", "TIMEOUT")
 
+    def test_planning_to_resolving_prerequisites(self):
+        validate_transition("PLANNING", "RESOLVING_PREREQUISITES")
+
+    def test_planning_to_prerequisite_failed(self):
+        validate_transition("PLANNING", "PREREQUISITE_FAILED")
+
+    def test_planning_to_running(self):
+        validate_transition("PLANNING", "RUNNING")
+
+    def test_resolving_prerequisites_to_running(self):
+        validate_transition("RESOLVING_PREREQUISITES", "RUNNING")
+
+    def test_resolving_prerequisites_to_contamination_detected(self):
+        validate_transition("RESOLVING_PREREQUISITES", "CONTAMINATION_DETECTED")
+
+    def test_contamination_detected_to_running(self):
+        validate_transition("CONTAMINATION_DETECTED", "RUNNING")
+
+
 
 class TestInvalidTransitions:
     def test_created_to_running(self):

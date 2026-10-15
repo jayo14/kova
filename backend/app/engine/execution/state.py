@@ -14,6 +14,10 @@ class ExecutionState(str, enum.Enum):
     QUEUED = "QUEUED"
     INITIALIZING = "INITIALIZING"
     BROWSER_READY = "BROWSER_READY"
+    PLANNING = "PLANNING"
+    RESOLVING_PREREQUISITES = "RESOLVING_PREREQUISITES"
+    PREREQUISITE_FAILED = "PREREQUISITE_FAILED"
+    CONTAMINATION_DETECTED = "CONTAMINATION_DETECTED"
     RUNNING = "RUNNING"
     OBSERVING = "OBSERVING"
     ACTING = "ACTING"
@@ -23,44 +27,93 @@ class ExecutionState(str, enum.Enum):
     VERIFYING = "VERIFYING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    UNVERIFIED = "UNVERIFIED"
 
 
 # Valid state transitions
 VALID_TRANSITIONS: dict[str, list[str]] = {
     ExecutionState.IDLE: [ExecutionState.QUEUED, ExecutionState.FAILED],
-    ExecutionState.QUEUED: [ExecutionState.INITIALIZING, ExecutionState.FAILED],
-    ExecutionState.INITIALIZING: [ExecutionState.BROWSER_READY, ExecutionState.FAILED],
-    ExecutionState.BROWSER_READY: [ExecutionState.RUNNING, ExecutionState.FAILED],
+    ExecutionState.QUEUED: [ExecutionState.INITIALIZING, ExecutionState.PLANNING, ExecutionState.FAILED],
+    ExecutionState.INITIALIZING: [ExecutionState.BROWSER_READY, ExecutionState.PLANNING, ExecutionState.FAILED],
+    ExecutionState.BROWSER_READY: [
+        ExecutionState.PLANNING,
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.CONTAMINATION_DETECTED,
+        ExecutionState.RUNNING,
+        ExecutionState.FAILED,
+    ],
+    ExecutionState.PLANNING: [
+        ExecutionState.BROWSER_READY,
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.RUNNING,
+        ExecutionState.PREREQUISITE_FAILED,
+        ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
+    ],
+    ExecutionState.RESOLVING_PREREQUISITES: [
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.CONTAMINATION_DETECTED,
+        ExecutionState.OBSERVING,
+        ExecutionState.ACTING,
+        ExecutionState.RUNNING,
+        ExecutionState.PREREQUISITE_FAILED,
+        ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
+    ],
+    ExecutionState.PREREQUISITE_FAILED: [
+        ExecutionState.PAUSED,
+        ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
+    ],
+    ExecutionState.CONTAMINATION_DETECTED: [
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.OBSERVING,
+        ExecutionState.ACTING,
+        ExecutionState.RUNNING,
+        ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
+    ],
     ExecutionState.RUNNING: [
         ExecutionState.OBSERVING,
         ExecutionState.ACTING,
         ExecutionState.PAUSED,
         ExecutionState.HUMAN_CONTROLLED,
+        ExecutionState.CONTAMINATION_DETECTED,
         ExecutionState.VERIFYING,
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
     ],
     ExecutionState.OBSERVING: [
         ExecutionState.OBSERVING,
         ExecutionState.ACTING,
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.RUNNING,
         ExecutionState.PAUSED,
         ExecutionState.HUMAN_CONTROLLED,
+        ExecutionState.CONTAMINATION_DETECTED,
         ExecutionState.VERIFYING,
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
     ],
     ExecutionState.ACTING: [
         ExecutionState.ACTING,
         ExecutionState.OBSERVING,
+        ExecutionState.RESOLVING_PREREQUISITES,
+        ExecutionState.RUNNING,
         ExecutionState.PAUSED,
         ExecutionState.HUMAN_CONTROLLED,
+        ExecutionState.CONTAMINATION_DETECTED,
         ExecutionState.VERIFYING,
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
     ],
     ExecutionState.PAUSED: [
         ExecutionState.HUMAN_CONTROLLED,
         ExecutionState.RESUMING,
+        ExecutionState.PREREQUISITE_FAILED,
         ExecutionState.FAILED,
     ],
     ExecutionState.HUMAN_CONTROLLED: [
@@ -70,15 +123,19 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
     ExecutionState.RESUMING: [
         ExecutionState.RUNNING,
         ExecutionState.OBSERVING,
+        ExecutionState.PLANNING,
+        ExecutionState.RESOLVING_PREREQUISITES,
         ExecutionState.FAILED,
     ],
     ExecutionState.VERIFYING: [
         ExecutionState.VERIFYING,
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
+        ExecutionState.UNVERIFIED,
     ],
     ExecutionState.COMPLETED: [],
     ExecutionState.FAILED: [],
+    ExecutionState.UNVERIFIED: [],
 }
 
 
@@ -110,4 +167,8 @@ def validate_transition(from_state: str, to_state: str) -> bool:
 
 def is_terminal(state: str) -> bool:
     """Check if a state is terminal (no further transitions)."""
-    return state in (ExecutionState.COMPLETED.value, ExecutionState.FAILED.value)
+    return state in (
+        ExecutionState.COMPLETED.value,
+        ExecutionState.FAILED.value,
+        ExecutionState.UNVERIFIED.value,
+    )

@@ -16,3 +16,14 @@ def test_recovery_times_out_abandoned_running_records_but_keeps_recent_and_termi
     assert _recovery_action(ExecutionStatus.RUNNING.value, ABANDONED_EXECUTION_SECONDS - 1) is None
     assert _recovery_action(ExecutionStatus.RUNNING.value, ABANDONED_EXECUTION_SECONDS) == "timeout"
     assert _recovery_action(ExecutionStatus.CANCELLED.value, ABANDONED_EXECUTION_SECONDS * 2) is None
+
+
+def test_recovery_fails_stuck_planning_and_prerequisites():
+    from app.workers.recovery import PLANNING_TIMEOUT_SECONDS, PREREQUISITE_TIMEOUT_SECONDS
+
+    assert _recovery_action(ExecutionStatus.PLANNING.value, PLANNING_TIMEOUT_SECONDS - 1) is None
+    assert _recovery_action(ExecutionStatus.PLANNING.value, PLANNING_TIMEOUT_SECONDS) == "fail_planning"
+
+    assert _recovery_action(ExecutionStatus.RESOLVING_PREREQUISITES.value, PREREQUISITE_TIMEOUT_SECONDS - 1) is None
+    assert _recovery_action(ExecutionStatus.RESOLVING_PREREQUISITES.value, PREREQUISITE_TIMEOUT_SECONDS) == "fail_prerequisites"
+

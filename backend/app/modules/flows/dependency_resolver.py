@@ -439,3 +439,28 @@ def resolve_dependency_plan(target: Any, flows: list[Any]) -> list[dict]:
         for step in plan.steps
         if step.role == "prerequisite" and step.flow_id in by_id
     ]
+
+
+class DependencyResolver:
+    """Namespace wrapper for deterministic dependency and execution plan resolution."""
+
+    @staticmethod
+    def resolve_execution_plan(
+        target: Any | list[Any],
+        flows: list[Any],
+        current_state: dict[str, Any] | None = None,
+        persona: str | None = None,
+        available_credentials: set[str] | None = None,
+    ) -> ExecutionPlan:
+        return resolve_execution_plan(
+            target=target,
+            flows=flows,
+            current_state=current_state,
+            persona=persona,
+            available_credentials=available_credentials,
+        )
+
+    @staticmethod
+    def resolve_dependency_plan(target: Any, flows: list[Any]) -> list[dict]:
+        return resolve_dependency_plan(target=target, flows=flows)
+
