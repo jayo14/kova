@@ -12,6 +12,7 @@ from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.schemas import ExecutionCreate
 from app.modules.executions.service import ExecutionService
 from app.modules.flows.models import Flow
+from app.modules.product_graph.repository import ProductGraphRepository
 from app.modules.projects.models import Project
 from app.modules.validation.impact_analysis import ChangeImpactAnalyzer
 from app.modules.validation.models import ProductModel, ValidationRun, ValidationScope, ValidationStatus
@@ -121,6 +122,10 @@ class ValidationService:
         diff_content: str | None = None,
         commit_message: str | None = None,
     ) -> ImpactReport:
+        repo = ProductGraphRepository(self.db)
+        latest_graph = await repo.get_latest_version(project_id)
+        graph_dict = latest_graph.snapshot if (latest_graph and latest_graph.snapshot) else None
+
         model = await self.get_product_model(project_id)
         flows_stmt = select(Flow).where(Flow.project_id == project_id)
         flows_res = await self.db.execute(flows_stmt)
@@ -136,7 +141,8 @@ class ValidationService:
 
         analyzer = ChangeImpactAnalyzer(
             product_model=product_model_dict,
-            flows=[{"id": str(f.id), "name": f.name, "capability": f.capability, "routes": f.routes} for f in flows],
+            flows=flows,
+            product_graph=graph_dict,
         )
         return analyzer.analyze(
             changed_files=changed_files,
