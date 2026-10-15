@@ -33,6 +33,13 @@ class Flow(Base):
     routes: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     criticality: Mapped[str] = mapped_column(String(32), nullable=False, default="medium", server_default="medium")
     state_contract: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True, default=dict, server_default="{}")
+    goal_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("product_goals.id", ondelete="SET NULL"), nullable=True
+    )
+    persona_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("product_personas.id", ondelete="SET NULL"), nullable=True
+    )
+    page_ids: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
     version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

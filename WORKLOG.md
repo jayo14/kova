@@ -59,3 +59,22 @@
 - **Tests Passing:**
   - `pytest backend/tests/test_evidence.py backend/tests/integration/test_evidence_integrity.py -v` (13 passed)
   - Full suite regression passes.
+
+## Chunk 05 — Build the Product Graph data model
+- **Status:** Done
+- **Changes:**
+  - Created `backend/app/modules/product_graph/schemas.py` with typed Pydantic models for all nine entities: `Goal`, `Persona`, `Page`, `Action`, `Capability`, `State`, `FlowGraphNode`, `Dependency`, `Invariant`, along with `ProductGraphExport`, `GraphDiff`, and `DiscoveryResult`. Normalized `url_pattern` on `Page` and aligned `Flow.state_contract` with Chunk 03 schemas.
+  - Created `backend/app/modules/product_graph/models.py` with SQLAlchemy ORM tables: `product_goals`, `product_personas`, `product_pages`, `product_actions`, `product_capabilities`, `product_states`, `product_dependencies`, `product_invariants`, and `product_graph_versions`.
+  - Added `product_graph_version` and `product_graph_updated_at` to `Project` model in `backend/app/modules/projects/models.py`.
+  - Added `goal_id`, `persona_id`, and `page_ids` to `Flow` ORM model, `FlowCreate`, `FlowUpdate`, and `FlowRead` schemas, and repository/service methods.
+  - Created migration `backend/alembic/versions/015_product_graph_tables.py` creating the nine tables, version tracking, flow/project extensions, and migrating existing `product_models` data into `product_capabilities`, `product_pages`, and `product_personas`.
+  - Created `ProductGraphRepository` in `backend/app/modules/product_graph/repository.py` providing CRUD for all entities and five graph-traversal helpers: `flows_producing_capability`, `flows_requiring_state`, `pages_touched_by_flow`, `capabilities_produced_by_flow`, `invariants_checked_by_flow`.
+  - Created `ProductGraphService` in `backend/app/modules/product_graph/service.py` implementing `export`, `diff`, `upsert_from_discovery` (preserving user-edited entities), and `merge_user_edit` with automated version bumping and snapshotting.
+  - Added API endpoints in `backend/app/api/routes/projects.py`:
+    - `GET /api/v1/projects/{project_id}/product-graph` (200 for owner, 403 for non-member, 404 if missing)
+    - `PUT /api/v1/projects/{project_id}/product-graph` (allows user edit patches or discovery merges)
+    - `GET /api/v1/projects/{project_id}/product-graph/diff?from=v1&to=v2`
+  - Created unit tests `backend/tests/unit/test_product_graph_schemas.py` and integration tests `backend/tests/integration/test_product_graph_db.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_product_graph_schemas.py backend/tests/integration/test_product_graph_db.py -v` (15 passed)
+  - `pytest backend/tests/integration/test_flow_db.py backend/tests/integration/test_project_db.py backend/tests/unit/test_continuous_validation.py backend/tests/unit/test_flow_dependencies.py -v` (33 passed)

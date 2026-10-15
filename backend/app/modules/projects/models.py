@@ -26,5 +26,11 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    product_graph_version: Mapped[int] = mapped_column(
+        default=1, server_default="1"
+    )
+    product_graph_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user = relationship("User", backref="projects")

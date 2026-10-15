@@ -146,3 +146,70 @@ async def list_project_validations(
 
     val_service = ValidationService(db)
     return await val_service.list_validation_runs(project_id, limit=limit)
+
+
+from fastapi import Query
+from sqlalchemy import select
+from app.modules.projects.models import Project
+from app.modules.product_graph.service import ProductGraphService
+from app.modules.product_graph.schemas import GraphDiff, DiscoveryResult
+
+
+async def _get_project_with_auth(db: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID) -> Project:
+    stmt = select(Project).where(Project.id == project_id)
+    res = await db.execute(stmt)
+    project = res.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: You do not have access to this project")
+    return project
+
+
+@router.get("/{project_id}/product-graph")
+async def get_product_graph(
+    project_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve the full structured Product Graph for a project."""
+    await _get_project_with_auth(db, project_id, user.id)
+    service = ProductGraphService(db)
+    return await service.export(project_id)
+
+
+@router.put("/{project_id}/product-graph")
+async def update_product_graph(
+    project_id: uuid.UUID,
+    data: dict,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Apply manual edits or merge discoveries into the project's Product Graph."""
+    await _get_project_with_auth(db, project_id, user.id)
+    service = ProductGraphService(db)
+    if "entity_type" in data and "entity_id" in data and "patch" in data:
+        await service.merge_user_edit(
+            project_id=project_id,
+            entity_type=data["entity_type"],
+            entity_id=uuid.UUID(str(data["entity_id"])),
+            patch=data["patch"],
+        )
+        return await service.export(project_id)
+    else:
+        disc_result = DiscoveryResult.model_validate(data)
+        return await service.upsert_from_discovery(project_id, disc_result)
+
+
+@router.get("/{project_id}/product-graph/diff", response_model=GraphDiff)
+async def get_product_graph_diff(
+    project_id: uuid.UUID,
+    from_version: int = Query(..., alias="from"),
+    to_version: int = Query(..., alias="to"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Compute structural differences between two versions of the Product Graph."""
+    await _get_project_with_auth(db, project_id, user.id)
+    service = ProductGraphService(db)
+    return await service.diff(from_version, to_version, project_id)
