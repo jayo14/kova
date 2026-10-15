@@ -28,6 +28,10 @@ class FlowService:
             capability=data.capability,
             routes=data.routes,
             criticality=data.criticality,
+            state_contract=data.state_contract.model_dump() if data.state_contract else None,
+            goal_id=data.goal_id,
+            persona_id=data.persona_id,
+            page_ids=data.page_ids,
         )
 
     async def get_flow(self, flow_id: uuid.UUID):
@@ -55,6 +59,10 @@ class FlowService:
             capability=data.capability,
             routes=data.routes,
             criticality=data.criticality,
+            state_contract=data.state_contract.model_dump() if data.state_contract is not None else None,
+            goal_id=data.goal_id,
+            persona_id=data.persona_id,
+            page_ids=data.page_ids,
         )
 
     async def delete_flow(self, flow_id: uuid.UUID):

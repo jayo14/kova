@@ -11,6 +11,7 @@ import app.modules.executions.models  # noqa: F401
 import app.modules.executions.event_model  # noqa: F401
 import app.modules.exploration.models  # noqa: F401
 import app.modules.auth.models  # noqa: F401
+import app.modules.product_graph.models  # noqa: F401
 
 
 @pytest.fixture

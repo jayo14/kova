@@ -29,6 +29,9 @@ class FlowRepository:
         routes: list[str] | None = None,
         criticality: str = "medium",
         state_contract: dict | None = None,
+        goal_id: uuid.UUID | None = None,
+        persona_id: uuid.UUID | None = None,
+        page_ids: list[str] | None = None,
     ) -> Flow:
         flow = Flow(
             project_id=project_id,
@@ -48,6 +51,9 @@ class FlowRepository:
             routes=routes or [],
             criticality=criticality,
             state_contract=state_contract or {},
+            goal_id=goal_id,
+            persona_id=persona_id,
+            page_ids=page_ids or [],
         )
         self.db.add(flow)
         await self.db.flush()
@@ -87,11 +93,14 @@ class FlowRepository:
         routes: list[str] | None = None,
         criticality: str | None = None,
         state_contract: dict | None = None,
+        goal_id: uuid.UUID | None = None,
+        persona_id: uuid.UUID | None = None,
+        page_ids: list[str] | None = None,
     ) -> Flow | None:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return None
-        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality, state_contract))
+        changed = any(value is not None for value in (name, description, persona, objective, steps, success_condition, preconditions, dependencies, provides_capabilities, repeatability, reset_strategy, status, capability, routes, criticality, state_contract, goal_id, persona_id, page_ids))
         if name is not None:
             flow.name = name
         if description is not None:
@@ -124,6 +133,12 @@ class FlowRepository:
             flow.criticality = criticality
         if state_contract is not None:
             flow.state_contract = state_contract
+        if goal_id is not None:
+            flow.goal_id = goal_id
+        if persona_id is not None:
+            flow.persona_id = persona_id
+        if page_ids is not None:
+            flow.page_ids = page_ids
         if changed:
             flow.version += 1
         await self.db.flush()

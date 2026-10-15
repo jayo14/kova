@@ -156,6 +156,9 @@ class FlowCreate(BaseModel):
     routes: list[str] = Field(default_factory=list)
     criticality: Literal["critical", "high", "medium", "low"] = "medium"
     state_contract: FlowStateContract | None = None
+    goal_id: uuid.UUID | None = None
+    persona_id: uuid.UUID | None = None
+    page_ids: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -182,6 +185,9 @@ class FlowUpdate(BaseModel):
     routes: list[str] | None = None
     criticality: Literal["critical", "high", "medium", "low"] | None = None
     state_contract: FlowStateContract | None = None
+    goal_id: uuid.UUID | None = None
+    persona_id: uuid.UUID | None = None
+    page_ids: list[str] | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -211,6 +217,9 @@ class FlowRead(BaseModel):
     routes: list[str] = Field(default_factory=list)
     criticality: str = "medium"
     state_contract: FlowStateContract | None = None
+    goal_id: uuid.UUID | None = None
+    persona_id: uuid.UUID | None = None
+    page_ids: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
