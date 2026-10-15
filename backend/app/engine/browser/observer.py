@@ -63,6 +63,9 @@ class PageObserver:
                 dialogs = await self._observe_dialogs()
                 alerts = await self._observe_alerts()
 
+                from app.engine.browser.auth import observe_auth_signals
+                auth_signals = await observe_auth_signals(self.page, url)
+
                 return {
                     "url": url,
                     "title": title,
@@ -72,6 +75,7 @@ class PageObserver:
                     "headings": headings,
                     "dialogs": dialogs,
                     "alerts": alerts,
+                    "auth_signals": auth_signals,
                 }
             except Exception as e:
                 if ("Execution context was destroyed" in str(e) or "navigating" in str(e).lower()) and attempt < 2:

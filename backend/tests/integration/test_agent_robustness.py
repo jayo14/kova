@@ -274,3 +274,43 @@ async def test_multi_link_scoring_and_distractor_filtering():
 
     chosen = executor._select_relevant_link(msg, memory=memory)
     assert chosen == "https://example.com/reset-password?token=safe123"
+
+
+@pytest.mark.asyncio
+async def test_non_standard_spa_keycloak_auth_classification():
+    from app.engine.browser.auth import classify_auth_page, find_submit_button, observe_auth_signals
+    from app.engine.browser.session import BrowserSession
+
+    async with BrowserSession() as session:
+        page = session.page
+        keycloak_url = "https://idp.example.com/auth/realms/account/login"
+        await page.set_content(
+            """
+            <!DOCTYPE html>
+            <html>
+            <head><title>Keycloak Auth</title></head>
+            <body>
+                <div id="kc-form-login">
+                    <form id="kc-form" method="post">
+                        <input id="username" name="username" type="text" placeholder="Username" />
+                        <input id="password" name="password" type="password" placeholder="Password" />
+                        <button class="submit">Submit</button>
+                    </form>
+                </div>
+            </body>
+            </html>
+            """
+        )
+
+        bundle = await observe_auth_signals(page, url=keycloak_url)
+        assert bundle.visible_password_input_count == 1
+        assert bundle.visible_email_input_count == 1
+        assert "Submit" in bundle.submit_button_texts
+
+        classification = classify_auth_page(bundle)
+        assert classification.kind == "login"
+        assert classification.confidence >= 0.9
+
+        submit_btn = await find_submit_button(page)
+        assert submit_btn is not None
+        assert (await submit_btn.inner_text()).strip() == "Submit"

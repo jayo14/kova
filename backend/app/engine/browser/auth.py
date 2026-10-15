@@ -6,10 +6,14 @@ logging in using available test account credentials.
 """
 
 import asyncio
+from dataclasses import dataclass, field
+import inspect
 import logging
 import re
 from urllib.parse import urlparse
 from typing import Any
+
+from app.engine.ai.schemas import AuthPageClassification
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,49 @@ AUTH_URL_PATTERNS = [
     r"/app/login\b",
 ]
 
+OAUTH_KEYWORDS = ["google", "github", "apple", "microsoft", "facebook", "twitter", "sso", "saml", "okta"]
+COMMON_SUBMIT_TERMS = [
+    "sign in", "signin", "log in", "login",
+    "sign up", "signup", "create account", "register",
+    "continue", "submit", "next",
+]
+
+
+def _levenshtein_distance(s1: str, s2: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    s1 = s1.strip().lower()
+    s2 = s2.strip().lower()
+    if s1 == s2:
+        return 0
+    if len(s1) < len(s2):
+        return _levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (c1 != c2)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
+
+
+@dataclass
+class AuthSignalBundle:
+    url_path_is_auth: bool
+    visible_password_input_count: int
+    visible_email_input_count: int
+    visible_otp_input_count: int
+    has_remember_me_checkbox: bool
+    has_forgot_password_link: bool
+    oauth_button_texts: list[str] = field(default_factory=list)
+    magic_link_form_markers: list[str] = field(default_factory=list)
+    submit_button_texts: list[str] = field(default_factory=list)
+    url: str = ""
+
 
 def is_auth_url(url: str | None) -> bool:
     """Return True if the URL path matches common authentication endpoints."""
@@ -35,31 +82,237 @@ def is_auth_url(url: str | None) -> bool:
     return any(re.search(pat, path) for pat in AUTH_URL_PATTERNS)
 
 
+async def observe_auth_signals(page: Any, url: str | None = None) -> AuthSignalBundle:
+    """Observe multi-signal auth indicators from URL and DOM deterministically."""
+    current_url = url or getattr(page, "url", "") or ""
+    url_is_auth = is_auth_url(current_url)
+
+    pwd_count = 0
+    email_count = 0
+    otp_count = 0
+    has_remember = False
+    has_forgot = False
+    oauth_button_texts: list[str] = []
+    magic_link_form_markers: list[str] = []
+    submit_button_texts: list[str] = []
+
+    if page is not None and hasattr(page, "locator"):
+        # Password inputs
+        try:
+            pwd_loc = page.locator('input[type="password"]')
+            count = pwd_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = pwd_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    pwd_count += 1
+        except Exception:
+            pass
+
+        # Email / username inputs
+        try:
+            email_loc = page.locator(
+                'input[type="email"], input[name*="email" i], input[id*="email" i], '
+                'input[placeholder*="email" i], input[name*="username" i], input[id*="username" i]'
+            )
+            count = email_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = email_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    email_count += 1
+        except Exception:
+            pass
+
+        # OTP inputs
+        try:
+            otp_loc = page.locator(
+                'input[name*="otp" i], input[name*="code" i], input[id*="otp" i], '
+                'input[autocomplete="one-time-code"], input[inputmode="numeric"][maxlength="6"]'
+            )
+            count = otp_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = otp_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    otp_count += 1
+        except Exception:
+            pass
+
+        # Remember me checkbox
+        try:
+            rem_loc = page.locator('input[type="checkbox"][name*="remember" i], input[type="checkbox"][id*="remember" i]')
+            count = rem_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = rem_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    has_remember = True
+                    break
+        except Exception:
+            pass
+
+        # Forgot password links
+        try:
+            forgot_loc = page.locator('a[href*="forgot" i], a[href*="reset" i], a:has-text("Forgot"), button:has-text("Forgot")')
+            count = forgot_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = forgot_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    has_forgot = True
+                    break
+        except Exception:
+            pass
+
+        # Buttons and submit markers
+        try:
+            btn_loc = page.locator('button, [role="button"], input[type="submit"]')
+            count = btn_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = btn_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if not vis:
+                    continue
+                txt_call = el.inner_text(timeout=300)
+                if inspect.isawaitable(txt_call):
+                    txt_raw = await txt_call
+                else:
+                    txt_raw = txt_call or ""
+                txt = (txt_raw or "").strip()
+                lower = txt.lower()
+
+                if any(oa in lower for oa in OAUTH_KEYWORDS):
+                    oauth_button_texts.append(txt)
+                else:
+                    if txt:
+                        submit_button_texts.append(txt)
+                    if any(ml in lower for ml in ["magic", "email me a link", "send link", "send login link"]):
+                        magic_link_form_markers.append(txt)
+        except Exception:
+            pass
+
+    return AuthSignalBundle(
+        url_path_is_auth=url_is_auth,
+        visible_password_input_count=pwd_count,
+        visible_email_input_count=email_count,
+        visible_otp_input_count=otp_count,
+        has_remember_me_checkbox=has_remember,
+        has_forgot_password_link=has_forgot,
+        oauth_button_texts=oauth_button_texts,
+        magic_link_form_markers=magic_link_form_markers,
+        submit_button_texts=submit_button_texts,
+        url=current_url,
+    )
+
+
+def classify_auth_page(bundle: AuthSignalBundle) -> AuthPageClassification:
+    """Classify authentication page type deterministically from multi-signal bundle."""
+    # 1. OTP Verification
+    if bundle.visible_otp_input_count > 0 and bundle.visible_password_input_count == 0:
+        return AuthPageClassification(
+            kind="otp_verification",
+            confidence=1.0,
+            reasoning="OTP or verification code input visible without standard password form.",
+        )
+
+    # 2. Magic Link
+    if bundle.visible_password_input_count == 0 and bundle.visible_email_input_count > 0:
+        has_magic_text = any(
+            any(ml in t.lower() for ml in ["magic", "email me a link", "send link", "email link"])
+            for t in bundle.submit_button_texts
+        ) or bool(bundle.magic_link_form_markers)
+        if has_magic_text:
+            return AuthPageClassification(
+                kind="magic_link",
+                confidence=1.0,
+                reasoning="Email input with magic link submission marker present.",
+            )
+
+    # 3. OAuth redirect / SSO-only gate
+    if bundle.oauth_button_texts and bundle.visible_password_input_count == 0 and bundle.visible_email_input_count == 0:
+        return AuthPageClassification(
+            kind="oauth_redirect",
+            confidence=1.0,
+            reasoning="Third-party OAuth/SSO buttons present with no native credentials form.",
+        )
+
+    # 4. Signup form
+    if bundle.visible_password_input_count > 0:
+        signup_btn = any(
+            any(sw in t.lower() for sw in ["sign up", "signup", "register", "create account", "join"])
+            for t in bundle.submit_button_texts
+        )
+        url_lower = bundle.url.lower()
+        signup_url = any(sw in url_lower for sw in ["signup", "sign-up", "register"])
+        if signup_btn or signup_url:
+            return AuthPageClassification(
+                kind="signup",
+                confidence=1.0,
+                reasoning="Password and credential inputs accompanied by registration signals.",
+            )
+
+        # 5. Login form (DOM signal wins over URL)
+        return AuthPageClassification(
+            kind="login",
+            confidence=1.0,
+            reasoning="Visible password input and credential form elements detected.",
+        )
+
+    # 6. Ambiguous state (URL says auth, but page has 0 inputs — still loading or blank)
+    if bundle.url_path_is_auth and bundle.visible_password_input_count == 0 and bundle.visible_email_input_count == 0:
+        return AuthPageClassification(
+            kind="ambiguous",
+            confidence=0.4,
+            reasoning="URL path matches auth endpoint but no form inputs are visible in DOM (page may still be loading).",
+        )
+
+    # 7. Not an auth page
+    return AuthPageClassification(
+        kind="not_auth",
+        confidence=1.0,
+        reasoning="No authentication inputs, credentials, or auth endpoint patterns detected.",
+    )
+
+
 async def is_auth_page(page: Any, url: str | None = None) -> bool:
     """Return True if the page URL or DOM indicates an authentication barrier."""
     current_url = url or getattr(page, "url", "")
-    if is_auth_url(current_url):
+    bundle = await observe_auth_signals(page, current_url)
+    classification = classify_auth_page(bundle)
+    if classification.kind in {"login", "signup", "magic_link", "otp_verification", "oauth_redirect"}:
         return True
-
-    # Check for visible password input
-    try:
-        pwd_count = await page.locator('input[type="password"]').count()
-        if pwd_count > 0:
-            first_pwd = page.locator('input[type="password"]').first
-            if await first_pwd.is_visible(timeout=500):
-                return True
-    except Exception:
-        pass
-
+    if classification.kind == "ambiguous":
+        return bundle.url_path_is_auth or bundle.visible_password_input_count > 0
     return False
 
 
 def is_auth_barrier(expected_url: str | None, current_url: str | None) -> bool:
-    """Detect whether a navigation was redirected to an auth wall.
-
-    True when the expected destination was NOT an auth page, but the actual
-    resulting URL is an auth page.
-    """
+    """Detect whether a navigation was redirected to an auth wall."""
     if not current_url:
         return False
     expected_is_auth = is_auth_url(expected_url)
@@ -69,38 +322,117 @@ def is_auth_barrier(expected_url: str | None, current_url: str | None) -> bool:
 
 async def find_submit_button(page: Any, password_input: Any = None) -> Any:
     """Locate the authentic form submit button, avoiding OAuth/SSO buttons."""
-    oauth_keywords = ["google", "github", "apple", "microsoft", "facebook", "twitter", "sso", "saml", "okta"]
-    submit_selectors = [
+    # 1. Semantic submit selectors first
+    semantic_selectors = [
         'button[type="submit"]',
         'input[type="submit"]',
-        'button:has-text("Sign in")',
-        'button:has-text("Sign In")',
-        'button:has-text("Log in")',
-        'button:has-text("Log In")',
-        'button:has-text("Sign up")',
-        'button:has-text("Sign Up")',
-        'button:has-text("Create account")',
-        'button:has-text("Create Account")',
-        'button:has-text("Register")',
-        'button:has-text("Continue")',
-        'button:has-text("Submit")',
+        'button[form]',
+        'button[data-action="submit"]',
+        'button[data-testid*="submit" i]',
+        'button[data-testid*="login" i]',
+        'button[data-testid*="signin" i]',
     ]
 
-    for sel in submit_selectors:
+    for sel in semantic_selectors:
         try:
-            buttons = await page.locator(sel).all()
-            for btn in buttons:
-                try:
-                    if not await btn.is_visible(timeout=500):
-                        continue
-                    txt = (await btn.inner_text(timeout=500) or "").lower()
-                    if any(oa in txt for oa in oauth_keywords):
-                        continue
-                    return btn
-                except Exception:
+            buttons = page.locator(sel)
+            count = buttons.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                btn = buttons.nth(i)
+                vis = btn.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if not vis:
                     continue
+                txt_call = btn.inner_text(timeout=300)
+                txt = (await txt_call if inspect.isawaitable(txt_call) else txt_call) or ""
+                if any(oa in txt.lower() for oa in OAUTH_KEYWORDS):
+                    continue
+                return btn
         except Exception:
             continue
+
+    # 2. Check within ancestor form of password_input if provided
+    if password_input is not None:
+        try:
+            form = password_input.locator("xpath=ancestor::form").first
+            form_count = form.count()
+            if inspect.isawaitable(form_count):
+                form_count = await form_count
+            if form_count > 0:
+                for sel in ['button[type="submit"]', 'input[type="submit"]', 'button']:
+                    btns = form.locator(sel)
+                    cnt = btns.count()
+                    if inspect.isawaitable(cnt):
+                        cnt = await cnt
+                    for i in range(cnt):
+                        b = btns.nth(i)
+                        vis = b.is_visible(timeout=300)
+                        if inspect.isawaitable(vis):
+                            vis = await vis
+                        if not vis:
+                            continue
+                        txt_call = b.inner_text(timeout=300)
+                        txt = (await txt_call if inspect.isawaitable(txt_call) else txt_call) or ""
+                        if any(oa in txt.lower() for oa in OAUTH_KEYWORDS):
+                            continue
+                        return b
+        except Exception:
+            pass
+
+    # 3. Levenshtein text matching against observed visible buttons
+    try:
+        all_buttons = page.locator('button, [role="button"], input[type="button"], a[role="button"]')
+        cnt = all_buttons.count()
+        if inspect.isawaitable(cnt):
+            cnt = await cnt
+        for i in range(cnt):
+            btn = all_buttons.nth(i)
+            vis = btn.is_visible(timeout=300)
+            if inspect.isawaitable(vis):
+                vis = await vis
+            if not vis:
+                continue
+            txt_call = btn.inner_text(timeout=300)
+            txt = (await txt_call if inspect.isawaitable(txt_call) else txt_call) or ""
+            lower = txt.strip().lower()
+            if not lower or any(oa in lower for oa in OAUTH_KEYWORDS):
+                continue
+            # Exact or distance <= 2 match
+            if any(_levenshtein_distance(lower, target) <= 2 or target in lower for target in COMMON_SUBMIT_TERMS):
+                return btn
+    except Exception:
+        pass
+
+    # 4. Fallback: query AI Reasoner if provider is available
+    try:
+        from app.engine.ai.settings import ai_settings
+        if ai_settings.ai_enabled:
+            from app.engine.ai.provider import get_ai_provider
+            from app.engine.ai.reasoner import AgentReasoner
+            from app.engine.ai.validator import validate_action
+            provider = get_ai_provider()
+            if provider:
+                reasoner = AgentReasoner(provider)
+                observer = None
+                if hasattr(page, "observe"):
+                    obs = await page.observe()
+                else:
+                    from app.engine.browser.observer import PageObserver
+                    obs = await PageObserver(page).observe()
+                proposed_selector = await reasoner.propose_submit_button(obs)
+                if proposed_selector and validate_action({"type": "click", "target": {"css": proposed_selector}}):
+                    proposed_btn = page.locator(proposed_selector).first
+                    vis = proposed_btn.is_visible(timeout=500)
+                    if inspect.isawaitable(vis):
+                        vis = await vis
+                    if vis:
+                        return proposed_btn
+    except Exception as e:
+        logger.debug("AI propose_submit_button fallback failed: %s", e)
+
     return None
 
 

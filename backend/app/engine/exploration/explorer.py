@@ -387,7 +387,19 @@ class ExplorationEngine:
                 })
 
                 # 3. Check for authentication requirement
-                is_auth_required = await self._detect_authentication(page, observation)
+                from app.engine.browser.auth import classify_auth_page, observe_auth_signals
+                auth_bundle = await observe_auth_signals(page, page.url)
+                auth_classification = classify_auth_page(auth_bundle)
+                await self._emit("auth_classified", {
+                    "kind": auth_classification.kind,
+                    "confidence": auth_classification.confidence,
+                    "reasoning": auth_classification.reasoning,
+                    "url": page.url,
+                })
+                is_auth_required = (
+                    auth_classification.kind in {"login", "signup", "magic_link", "otp_verification", "oauth_redirect"}
+                    or await self._detect_authentication(page, observation)
+                )
 
                 if is_auth_required and not credential:
                     should_close_browser = False
