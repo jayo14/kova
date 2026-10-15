@@ -676,11 +676,13 @@ class FlowRunner:
                 from app.engine.browser.auth import is_auth_url, is_auth_page
                 current_p_url = getattr(browser.page, "url", "")
                 step_target_url = self._extract_step_target_url(step, base_url=ctx.target_url or current_p_url)
-                step_is_intended_auth = (
-                    (step_target_url and is_auth_url(step_target_url))
-                    or (isinstance(step, dict) and any(ak in str(step.get("type", "") or step.get("action", "")).lower() for ak in ["auth", "login", "signup"]))
+                # Only trigger if the step was aiming for a non-auth destination but got redirected to an auth page
+                step_was_redirected_to_auth = (
+                    bool(step_target_url)
+                    and not is_auth_url(step_target_url)
+                    and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url))
                 )
-                if not step_is_intended_auth and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url)):
+                if step_was_redirected_to_auth:
                     healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or ctx.target_url or current_p_url, event_recorder)
                     dest_to_nav = step_target_url or ctx.target_url
                     if healed and dest_to_nav and not is_auth_url(browser.page.url):
@@ -1059,6 +1061,50 @@ class FlowRunner:
                 ctx.record_event(EventTypes.BROWSER_CLOSED, {})
             except Exception as e:
                 logger.warning("Error closing browser: %s", e)
+
+            # Upload video and/or trace if captured, and link to execution evidence
+            video_url = None
+            trace_url = None
+            try:
+                import os
+                if getattr(browser, "video_path", None) and os.path.exists(browser.video_path):
+                    from app.engine.browser.evidence_storage import evidence_storage
+                    video_url = evidence_storage.upload_file(
+                        execution_id=exec_id,
+                        file_path=browser.video_path,
+                        content_type="video/webm",
+                        purpose="execution_video",
+                    )
+            except Exception as vid_err:
+                logger.warning("Failed to upload execution video: %s", vid_err)
+
+            try:
+                import os
+                if getattr(browser, "trace_path", None) and os.path.exists(browser.trace_path):
+                    from app.engine.browser.evidence_storage import evidence_storage
+                    trace_url = evidence_storage.upload_file(
+                        execution_id=exec_id,
+                        file_path=browser.trace_path,
+                        content_type="application/zip",
+                        purpose="execution_trace",
+                    )
+            except Exception as tr_err:
+                logger.warning("Failed to upload execution trace: %s", tr_err)
+
+            if (video_url or trace_url) and event_recorder is not None:
+                try:
+                    from app.infrastructure.database.session import async_session_factory
+                    from app.modules.executions.evidence_service import EvidenceService
+
+                    async with async_session_factory() as db:
+                        await EvidenceService(db).attach_execution_artifacts(
+                            execution_id=execution_id,
+                            video_url=video_url,
+                            trace_url=trace_url,
+                        )
+                        await db.commit()
+                except Exception as art_err:
+                    logger.warning("Failed to attach video/trace artifacts: %s", art_err)
 
     async def _frame_producer(
         self,
@@ -1506,6 +1552,10 @@ class FlowRunner:
                 from app.infrastructure.database.session import async_session_factory
                 from app.modules.executions.evidence_service import EvidenceService
 
+                dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
+                check_msgs = [c.message for c in result.checks if c.message]
+                note_str = f"Verification {'passed' if result.passed else 'failed'}: {'; '.join(check_msgs) if check_msgs else 'Checked state'}"
+
                 async with async_session_factory() as db:
                     evidence = await EvidenceService(db).create_verification_evidence(
                         execution_id=uuid.UUID(ctx.execution_id),
@@ -1513,6 +1563,8 @@ class FlowRunner:
                         description="Step postcondition passed" if result.passed else "Step postcondition failed",
                         checks=[check.to_dict() for check in result.checks],
                         extra_data={"step_id": step.get("step_id"), "step_index": step_index, "expected": condition},
+                        dom_snapshot=dom_snap or None,
+                        note=note_str,
                     )
                     if evidence is None:
                         raise RuntimeError("verification evidence was not persisted")
@@ -1644,6 +1696,16 @@ class FlowRunner:
         })
         await self._emit_events(ctx, event_recorder)
 
+        # Evidence pipeline: capture DOM before action and start step network capture
+        dom_before = ""
+        try:
+            if hasattr(browser, "get_dom_snapshot"):
+                dom_before = await browser.get_dom_snapshot()
+        except Exception:
+            pass
+        if hasattr(browser, "start_step_network_capture"):
+            browser.start_step_network_capture()
+
         result = await action_executor.execute(
             raw_action,
             execution_id=uuid.UUID(ctx.execution_id) if ctx.execution_id else None,
@@ -1771,10 +1833,6 @@ class FlowRunner:
                     error_code=error_code,
                 )
 
-        # No per-action screenshot — evidence screenshots are captured at
-        # verification.passed, verification.failed, execution.completed, and
-        # execution.failed in _capture_evidence. Action completed payload
-        # includes the current URL for lightweight state tracking.
         action_completed_payload: dict[str, Any] = {
             "step": step_index,
             "step_id": ctx.current_step_id,
@@ -1788,6 +1846,96 @@ class FlowRunner:
 
         ctx.record_event(EventTypes.ACTION_COMPLETED, action_completed_payload)
         await self._emit_events(ctx, event_recorder)
+
+        # Evidence pipeline: capture DOM after, a11y tree, network logs, and screenshot
+        dom_after = ""
+        try:
+            if hasattr(browser, "get_dom_snapshot"):
+                dom_after = await browser.get_dom_snapshot()
+        except Exception:
+            pass
+
+        a11y_tree = None
+        try:
+            if hasattr(browser, "get_a11y_tree"):
+                a11y_tree = await browser.get_a11y_tree()
+        except Exception:
+            pass
+
+        step_network = []
+        if hasattr(browser, "stop_step_network_capture"):
+            step_network = browser.stop_step_network_capture()
+
+        # Format target locator string
+        raw_target = raw_action.get("target")
+        locator_str = None
+        if isinstance(raw_target, dict):
+            locator_str = raw_target.get("css") or raw_target.get("test_id") or raw_target.get("name") or raw_target.get("text") or str(raw_target)
+        elif isinstance(raw_target, str) and raw_target.strip():
+            locator_str = raw_target.strip()
+
+        # Non-fatal screenshot capture: never let screenshot failure abort execution
+        ss_bytes = None
+        ss_note = None
+        try:
+            ss_bytes = await browser.page.screenshot(type="png")
+        except Exception as ss_err:
+            ss_note = f"Screenshot capture failed: {ss_err}"
+            logger.debug("Step screenshot capture failed: %s", ss_err)
+
+        import json
+        dom_snapshot_val = None
+        if dom_before or dom_after:
+            dom_snapshot_val = json.dumps({"before": dom_before, "after": dom_after})
+
+        if event_recorder is not None and ctx.execution_id:
+            try:
+                from app.infrastructure.database.session import async_session_factory
+                from app.modules.executions.evidence_service import EvidenceService
+                from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
+
+                async with async_session_factory() as db:
+                    ev_svc = EvidenceService(db)
+                    step_id_val = ctx.current_step_id or f"step_{step_index}"
+                    if ss_bytes:
+                        await ev_svc.capture_screenshot(
+                            execution_id=uuid.UUID(ctx.execution_id),
+                            screenshot_bytes=ss_bytes,
+                            title=f"Step {step_index} execution",
+                            description=f"Action {action_type} on {raw_action.get('target', '')}",
+                            purpose="step_evidence",
+                            step_id=step_id_val,
+                            extra_data={
+                                "step_index": step_index,
+                                "step_id": step_id_val,
+                                "action_type": action_type,
+                            },
+                            dom_snapshot=dom_snapshot_val,
+                            a11y_tree=a11y_tree,
+                            network_log=step_network if step_network else None,
+                            element_locator=locator_str,
+                            timestamp_range=[action_started_clock, time.monotonic()],
+                            note=ss_note,
+                        )
+                    else:
+                        await ev_svc.create(
+                            execution_id=uuid.UUID(ctx.execution_id),
+                            type=EvidenceType.SCREENSHOT.value,
+                            title=f"Step {step_index} execution",
+                            purpose="step_evidence",
+                            step_id=step_id_val,
+                            description=f"Action {action_type} on {raw_action.get('target', '')}",
+                            status=EvidenceStatus.CAPTURED.value,
+                            dom_snapshot=dom_snapshot_val,
+                            a11y_tree=a11y_tree,
+                            network_log=step_network if step_network else None,
+                            element_locator=locator_str,
+                            timestamp_range=[action_started_clock, time.monotonic()],
+                            note=ss_note or "Screenshot not captured",
+                        )
+                    await db.commit()
+            except Exception as ev_err:
+                logger.warning("Step %d evidence capture failed (non-fatal): %s", step_index, ev_err)
 
     def _normalize_step(self, step: dict | str, target_url: str = "") -> dict:
         """Normalize step format to action executor format.
@@ -2085,6 +2233,7 @@ class FlowRunner:
 
                         try:
                             step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
+                            dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
                             verification_evidence = await evidence_service.create_verification_evidence(
                                 execution_id=execution_id,
                                 title=title,
@@ -2092,6 +2241,8 @@ class FlowRunner:
                                 purpose="verification",
                                 step_id=step_id_val,
                                 checks=[c.to_dict() for c in verification.checks],
+                                dom_snapshot=dom_snap or None,
+                                note=f"Verification passed: {description}",
                             )
                             if verification_evidence and "id" in verification_evidence:
                                 verification.evidence_ids.append(verification_evidence["id"])
@@ -2102,8 +2253,9 @@ class FlowRunner:
                 # 2. Capture screenshot of final verified state
                 try:
                     screenshot_bytes = await browser.page.screenshot(type="png")
+                    step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
+                    dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
                     if screenshot_bytes:
-                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                         screenshot_evidence = await evidence_service.capture_screenshot(
                             execution_id=execution_id,
                             screenshot_bytes=screenshot_bytes,
@@ -2116,6 +2268,8 @@ class FlowRunner:
                                 "step_id": step_id_val,
                                 "checkpoint": "verification",
                             },
+                            dom_snapshot=dom_snap or None,
+                            note="Browser state after successful verification",
                         )
                         if screenshot_evidence and "id" in screenshot_evidence:
                             verification.evidence_ids.append(screenshot_evidence["id"])
@@ -2133,6 +2287,21 @@ class FlowRunner:
                         "type": "SCREENSHOT",
                         "error": "Screenshot capture failed",
                     })
+                    try:
+                        from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
+                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
+                        await evidence_service.create(
+                            execution_id=execution_id,
+                            type=EvidenceType.SCREENSHOT.value,
+                            title="Verified browser state",
+                            purpose="verification",
+                            step_id=step_id_val,
+                            description="Browser state after successful verification",
+                            status=EvidenceStatus.CAPTURED.value,
+                            note=f"Screenshot capture failed: {e}",
+                        )
+                    except Exception:
+                        pass
 
                 try:
                     await db.commit()
@@ -2194,10 +2363,11 @@ class FlowRunner:
                 evidence_service = EvidenceService(db)
 
                 # Screenshot of failure state
+                step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
+                dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
                 try:
                     screenshot_bytes = await browser.page.screenshot(type="png", timeout=5000)
                     if screenshot_bytes:
-                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                         await evidence_service.capture_screenshot(
                             execution_id=execution_id,
                             screenshot_bytes=screenshot_bytes,
@@ -2210,9 +2380,39 @@ class FlowRunner:
                                 "step_id": step_id_val,
                                 "checkpoint": "failure",
                             },
+                            dom_snapshot=dom_snap or None,
+                            note=f"Failure: {error_message}",
+                        )
+                    else:
+                        from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
+                        await evidence_service.create(
+                            execution_id=execution_id,
+                            type=EvidenceType.SCREENSHOT.value,
+                            title="Execution failed",
+                            purpose="failure",
+                            step_id=step_id_val,
+                            description=f"Browser state at failure: {error_message}",
+                            status=EvidenceStatus.CAPTURED.value,
+                            dom_snapshot=dom_snap or None,
+                            note=f"Screenshot not captured: {error_message}",
                         )
                 except Exception as e:
                     logger.warning("Failure screenshot capture failed: %s", e)
+                    try:
+                        from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
+                        await evidence_service.create(
+                            execution_id=execution_id,
+                            type=EvidenceType.SCREENSHOT.value,
+                            title="Execution failed",
+                            purpose="failure",
+                            step_id=step_id_val,
+                            description=f"Browser state at failure: {error_message}",
+                            status=EvidenceStatus.CAPTURED.value,
+                            dom_snapshot=dom_snap or None,
+                            note=f"Screenshot capture failed: {e}",
+                        )
+                    except Exception:
+                        pass
 
                 try:
                     await db.commit()

@@ -240,16 +240,34 @@ class BrowserSession:
         self.network_errors: list[dict[str, Any]] = []
         self.current_step_index: int = 0
         self.on_network_error: Callable[[dict[str, Any]], Any] | None = None
+        self.video_path: str | None = None
+        self.trace_path: str | None = None
+        self._step_network_logs: list[dict[str, Any]] = []
+        self._capturing_step_network: bool = False
 
     async def start(self):
         """Launch browser and create isolated context + page."""
+        import os
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=self._headless)
-        self._context = await self._browser.new_context(
-            viewport=DEFAULT_VIEWPORT,
-            user_agent=DEFAULT_USER_AGENT,
-            service_workers="block",
-        )
+        context_kwargs: dict[str, Any] = {
+            "viewport": DEFAULT_VIEWPORT,
+            "user_agent": DEFAULT_USER_AGENT,
+            "service_workers": "block",
+        }
+        if getattr(settings, "EVIDENCE_CAPTURE_VIDEO", False):
+            video_dir = getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_videos")
+            os.makedirs(video_dir, exist_ok=True)
+            context_kwargs["record_video_dir"] = video_dir
+            context_kwargs["record_video_size"] = {"width": 1280, "height": 720}
+
+        self._context = await self._browser.new_context(**context_kwargs)
+        if getattr(settings, "EVIDENCE_CAPTURE_TRACE", False):
+            try:
+                await self._context.tracing.start(screenshots=True, snapshots=True, sources=True)
+            except Exception as e:
+                logger.debug("Failed to start tracing: %s", e)
+
         self._page = await self._context.new_page()
 
         # Check every browser request, including subresources and redirects.
@@ -282,6 +300,30 @@ class BrowserSession:
         # Record same-origin responses >= 400, request failures, and page errors
         async def _on_response(response):
             try:
+                if self._capturing_step_network:
+                    req = response.request
+                    try:
+                        req_headers = dict(req.headers) if req and hasattr(req, "headers") else {}
+                        resp_headers = dict(response.headers) if hasattr(response, "headers") else {}
+                        safe_req_headers = {
+                            k: ("[REDACTED]" if k.lower() in ("authorization", "cookie", "proxy-authorization", "x-api-key") else v)
+                            for k, v in req_headers.items()
+                        }
+                        safe_resp_headers = {
+                            k: ("[REDACTED]" if k.lower() in ("set-cookie",) else v)
+                            for k, v in resp_headers.items()
+                        }
+                        self._step_network_logs.append({
+                            "url": _redact_url(response.url),
+                            "method": req.method if req else "GET",
+                            "status": response.status,
+                            "status_text": response.status_text if hasattr(response, "status_text") else "",
+                            "request_headers": safe_req_headers,
+                            "response_headers": safe_resp_headers,
+                        })
+                    except Exception as ex:
+                        logger.debug("Error recording step network log: %s", ex)
+
                 if response.status >= 400:
                     page_url = self._page.url if self._page else ""
                     page_parsed = urlparse(page_url)
@@ -365,6 +407,25 @@ class BrowserSession:
 
         Safe to call multiple times. Handles partial initialization.
         """
+        import os
+        import uuid
+
+        if self._page and hasattr(self._page, "video") and self._page.video:
+            try:
+                self.video_path = await self._page.video.path()
+            except Exception as e:
+                logger.debug("Failed to get video path: %s", e)
+
+        if self._context and getattr(settings, "EVIDENCE_CAPTURE_TRACE", False):
+            try:
+                video_dir = getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_videos")
+                os.makedirs(video_dir, exist_ok=True)
+                trace_file = os.path.join(video_dir, f"trace_{uuid.uuid4().hex}.zip")
+                await self._context.tracing.stop(path=trace_file)
+                self.trace_path = trace_file
+            except Exception as e:
+                logger.debug("Failed to stop tracing: %s", e)
+
         try:
             if self._context:
                 await self._context.close()
@@ -527,6 +588,72 @@ class BrowserSession:
             or {"success": False, "error": {...}}
         """
         executor = ActionExecutor(self.page, event_recorder)
+        return await executor.execute(raw_action, execution_id=execution_id)
+
+    # --- Evidence Capture Helpers ---
+
+    def start_step_network_capture(self) -> None:
+        """Start capturing network requests/responses for the current step."""
+        self._step_network_logs = []
+        self._capturing_step_network = True
+
+    def stop_step_network_capture(self) -> list[dict[str, Any]]:
+        """Stop capturing network requests and return the list of recorded network logs."""
+        self._capturing_step_network = False
+        logs = list(self._step_network_logs)
+        self._step_network_logs = []
+        return logs
+
+    async def get_dom_snapshot(self) -> str:
+        """Capture the current page DOM HTML snapshot."""
+        if not self._page or self._page.is_closed():
+            return ""
+        try:
+            return await self._page.content()
+        except Exception as e:
+            logger.debug("Failed to capture DOM snapshot: %s", e)
+            return ""
+
+    async def get_a11y_tree(self) -> str:
+        """Capture the current page accessibility tree as a serialized JSON string."""
+        if not self._page or self._page.is_closed():
+            return ""
+        try:
+            if hasattr(self._page, "accessibility") and hasattr(self._page.accessibility, "snapshot"):
+                snap = await self._page.accessibility.snapshot()
+                if snap is not None:
+                    import json
+                    return json.dumps(snap)
+        except Exception as e:
+            logger.debug("Failed to capture accessibility tree: %s", e)
+        return ""
+
+    async def get_element_screenshot(self, target: Any) -> bytes | None:
+        """Capture a screenshot of a specific target element if resolvable."""
+        if not self._page or self._page.is_closed():
+            return None
+        try:
+            resolver = TargetResolver(self._page)
+            loc = None
+            if isinstance(target, dict):
+                # Try CSS first, then test_id, label, text
+                if target.get("css"):
+                    loc = await resolver.resolve(target["css"], strategy=ResolutionStrategy.CSS)
+                elif target.get("test_id"):
+                    loc = await resolver.resolve(target["test_id"], strategy=ResolutionStrategy.TEST_ID)
+                elif target.get("role") and target.get("name"):
+                    loc = await resolver.resolve(target["name"], role=target["role"], strategy=ResolutionStrategy.ROLE_NAME)
+                elif target.get("text"):
+                    loc = await resolver.resolve(target["text"], strategy=ResolutionStrategy.TEXT)
+            elif isinstance(target, str) and target.strip():
+                loc = await resolver.resolve(target.strip())
+
+            if loc:
+                return await loc.screenshot()
+        except Exception as e:
+            logger.debug("Failed to capture element screenshot: %s", e)
+        return None
+
     # --- Session State Persistence ---
 
     async def save_session_state(self) -> "SessionState":

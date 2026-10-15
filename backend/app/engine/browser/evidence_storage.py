@@ -141,4 +141,38 @@ class EvidenceStorage:
             return False
 
 
+    def upload_file(
+        self,
+        execution_id: str,
+        file_path: str,
+        content_type: str = "video/webm",
+        purpose: str = "execution_artifact",
+    ) -> str | None:
+        """Upload a file from disk to S3 and return its signed URL or fallback URI."""
+        import os
+        import uuid
+        if not os.path.exists(file_path):
+            return None
+
+        if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
+            return f"file://{file_path}"
+
+        try:
+            with open(file_path, "rb") as f:
+                data = f.read()
+            artifact_id = f"artifact_{uuid.uuid4().hex[:8]}"
+            res = self.upload(
+                execution_id=execution_id,
+                evidence_id=artifact_id,
+                data=data,
+                content_type=content_type,
+                purpose=purpose,
+            )
+            if res and res.get("storage_key"):
+                return self.create_signed_url(res["storage_key"], execution_id)
+        except Exception as e:
+            logger.warning("Failed to upload file %s to S3: %s", file_path, e)
+        return f"file://{file_path}"
+
+
 evidence_storage = EvidenceStorage()

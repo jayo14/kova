@@ -201,7 +201,31 @@
     - `POST /api/v1/ci/run`: backward-compatible dual-path supporting both legacy `flow_ids` (`CIRunResponse`) and diff-based execution (`ValidationReport`).
   - Added unit test suite in `backend/tests/unit/test_continuous_validation.py` covering planner with populated/empty graphs, runner pass/fail/unverified/no-graph/no-flows/prereq-failure.
   - Added end-to-end integration test suite in `backend/tests/integration/test_ci_and_reports.py` testing `/ci/validate`, `/ci/run`, fail-closed `no_graph`, and `no_flows`.
+## Chunk 12 — Evidence pipeline overhaul (linked DOM, a11y, video)
+- **Status:** Complete
+- **Changes:**
+  - Added Alembic migration `backend/alembic/versions/020_extend_evidence_table.py` adding columns: `dom_snapshot`, `a11y_tree`, `network_log`, `video_url`, `trace_url`, `element_locator`, `timestamp_range`, and `note`.
+  - Added configuration settings in `backend/app/config/settings.py`: `EVIDENCE_CAPTURE_VIDEO` (default True), `EVIDENCE_CAPTURE_TRACE` (default False), and `EVIDENCE_VIDEO_DIR` (default `/tmp/kova_videos`).
+  - Extended `Evidence` SQLAlchemy model (`evidence_model.py`) and schemas (`evidence_schemas.py`) with all 8 new fields and validation.
+  - Updated `EvidenceRepository` and `EvidenceService`:
+    - Updated `create` to persist extended evidence metadata.
+    - Added `attach_execution_artifacts` to attach execution video and trace URLs across all evidence records for a run.
+    - Added `get_evidence_list_grouped_by_step` to retrieve structured evidence grouped by step ID with step index sorting.
+  - Extended API route `GET /api/v1/executions/{execution_id}/evidence` with `grouped: bool = False` query parameter.
+  - Upgraded browser session `backend/app/engine/browser/session.py`:
+    - Added video recording via Playwright context `record_video_dir` and `record_video_size` (1280x720).
+    - Added tracing start/stop support.
+    - Added step network logging listener redacting sensitive headers (`Authorization`, `Cookie`, `Set-Cookie`, `x-api-key`).
+    - Added DOM snapshot, a11y snapshot tree extraction, and element-level screenshots (`get_element_screenshot`).
+  - Added `upload_file` in `evidence_storage.py` to upload video and trace artifacts to S3 with local fallback on credentials error.
+  - Integrated rich evidence capture into `FlowRunner` (`backend/app/engine/execution/runner.py`):
+    - Non-fatal capture of pre/post DOM snapshots, a11y trees, redacted network calls, element locator, element screenshot, and video/trace artifact attachment.
+    - Verified step postconditions capture verification note and DOM snapshot.
+    - Fixed auth-barrier gate hijacking during intentional authentication flows.
+  - Upgraded frontend components:
+    - `frontend/lib/api/evidence.ts`: Added typed interfaces and `getGroupedExecutionEvidence`.
+    - `frontend/components/executions/evidence-list.tsx`: Added grouped step timeline layout with DOM, A11Y, NET, and VIDEO tags.
+    - `frontend/components/executions/evidence-viewer.tsx`: Added comprehensive tabbed viewer for Screenshot, DOM (before/after diff), A11y tree, Network log, Video player with timestamp seek, and Verification details.
+  - Added unit and regression tests in `backend/tests/test_evidence.py`.
 - **Tests Passing:**
-  - `pytest backend/tests/unit/test_continuous_validation.py backend/tests/integration/test_ci_and_reports.py backend/tests/unit/test_ci_cli_and_api.py -v` (31 passed)
-
-
+  - `pytest backend/tests/test_evidence.py backend/tests/integration/test_e2e.py -v` (16 passed)

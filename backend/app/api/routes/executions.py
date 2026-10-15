@@ -397,10 +397,11 @@ async def stream_execution_events(
 @router.get("/{execution_id}/evidence")
 async def list_execution_evidence(
     execution_id: str,
+    grouped: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """List all evidence for an execution.
+    """List all evidence for an execution, optionally grouped by step_id.
 
     Returns evidence metadata with signed URLs for artifact access.
     """
@@ -415,9 +416,9 @@ async def list_execution_evidence(
 
     from app.modules.executions.evidence_service import EvidenceService
     evidence_service = EvidenceService(db)
-    evidence_list = await evidence_service.get_evidence_list(exec_uuid)
-
-    return evidence_list
+    if grouped:
+        return await evidence_service.get_evidence_list_grouped_by_step(exec_uuid)
+    return await evidence_service.get_evidence_list(exec_uuid)
 
 
 @router.get("/{execution_id}/evidence/{evidence_id}")

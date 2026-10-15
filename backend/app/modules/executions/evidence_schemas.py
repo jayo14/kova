@@ -16,6 +16,14 @@ class EvidenceRead(BaseModel):
     description: str | None
     status: str
     mime_type: str | None
+    dom_snapshot: str | None = None
+    a11y_tree: str | None = None
+    network_log: list | dict | None = None
+    video_url: str | None = None
+    trace_url: str | None = None
+    element_locator: str | None = None
+    timestamp_range: list[float] | None = None
+    note: str | None = None
     metadata: dict
     created_at: datetime
 
