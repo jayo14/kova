@@ -85,8 +85,10 @@ async def client(db_session):
     async def override_get_current_user():
         return test_user
 
+    from app.modules.auth.dependencies import get_optional_current_user
     app.dependency_overrides[get_session] = override_get_db
     app.dependency_overrides[get_current_user] = override_get_current_user
+    app.dependency_overrides[get_optional_current_user] = override_get_current_user
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
@@ -202,3 +204,80 @@ async def test_e2e_login_and_verify_dashboard(client, test_server):
 
     # 8. Assert final URL is dashboard
     assert "/dashboard" in result["final_url"]
+
+
+@pytest.mark.asyncio
+async def test_e2e_validation_to_report_to_signed_url(client, db_session):
+    """Full E2E: validation run → validation report (HTML/JSON) → signed URL access → diff mode."""
+    # 1. Create project
+    proj_resp = await client.post(
+        "/api/v1/projects/",
+        json={"name": "E2E Report Project", "base_url": "https://example.com"},
+    )
+    assert proj_resp.status_code == 201
+    project_id = proj_resp.json()["id"]
+
+    # 2. Trigger validation via CI endpoint
+    val_resp = await client.post(
+        "/api/v1/ci/validate",
+        json={
+            "project_id": project_id,
+            "changed_files": ["src/checkout.ts"],
+            "diff_content": "--- a/src/checkout.ts\n+++ b/src/checkout.ts\n@@ -1 +1 @@\n-old\n+new",
+        },
+    )
+    assert val_resp.status_code == 200
+    report_data = val_resp.json()
+    report_id = report_data["id"]
+    assert "overall_status" in report_data
+
+    # 3. Retrieve authenticated HTML report
+    html_resp = await client.get(f"/api/v1/validations/{report_id}/report?format=html")
+    assert html_resp.status_code == 200
+    assert "text/html" in html_resp.headers["content-type"]
+    assert "E2E Report Project" in html_resp.text
+    assert "Impact Summary" in html_resp.text
+
+    # 4. Check signed URL creation in DB
+    from app.modules.validation.models import SignedUrlModel
+    from sqlalchemy import select
+
+    su_stmt = select(SignedUrlModel).where(SignedUrlModel.validation_id == uuid.UUID(report_id))
+    su_res = await db_session.execute(su_stmt)
+    signed_url_rec = su_res.scalars().first()
+    assert signed_url_rec is not None
+    assert signed_url_rec.signature is not None
+    sig = signed_url_rec.signature
+
+    # 5. Access report unauthenticated via signed URL
+    unauth_resp = await client.get(
+        f"/api/v1/validations/{report_id}/report?signature={sig}&format=html"
+    )
+    assert unauth_resp.status_code == 200
+    assert "text/html" in unauth_resp.headers["content-type"]
+    assert "E2E Report Project" in unauth_resp.text
+
+    # 6. Retrieve JSON report
+    json_resp = await client.get(f"/api/v1/validations/{report_id}/report?format=json")
+    assert json_resp.status_code == 200
+    json_data = json_resp.json()
+    assert json_data["id"] == report_id
+    assert json_data["overall_status"] == report_data["overall_status"]
+
+    # 7. Create a second validation run and verify diff mode
+    val_resp_2 = await client.post(
+        "/api/v1/ci/validate",
+        json={
+            "project_id": project_id,
+            "changed_files": ["src/login.ts"],
+        },
+    )
+    assert val_resp_2.status_code == 200
+    report_id_2 = val_resp_2.json()["id"]
+
+    diff_resp = await client.get(
+        f"/api/v1/validations/{report_id_2}/report?compare_to={report_id}"
+    )
+    assert diff_resp.status_code == 200
+    assert "text/html" in diff_resp.headers["content-type"]
+    assert "Validation Comparison (Diff Mode)" in diff_resp.text

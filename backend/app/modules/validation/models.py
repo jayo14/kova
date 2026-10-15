@@ -117,3 +117,27 @@ class ValidationReportModel(Base):
     )
 
     project = relationship("Project", backref=backref("validation_reports", passive_deletes=True))
+
+
+class SignedUrlModel(Base):
+    __tablename__ = "signed_urls"
+    __table_args__ = (
+        Index("ix_signed_urls_validation_id", "validation_id"),
+        Index("ix_signed_urls_url", "url"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    validation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("validation_reports.id", ondelete="CASCADE"), nullable=True
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    validation_report = relationship("ValidationReportModel", backref=backref("signed_urls", passive_deletes=True))

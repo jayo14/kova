@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kova Validation Report - {{ project_name or 'Project' }}</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --border: #1f2937;
+      --border-light: #374151;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --accent: #38bdf8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --info: #6366f1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      margin: 0;
+      padding: 32px 16px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 1040px;
+      margin: 0 auto;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 24px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+    .logo-badge {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .logo-text {
+      font-size: 24px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #38bdf8 0%, #818cf8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 4px 10px;
+      border-radius: 9999px;
+    }
+    .badge-passed { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }
+    .badge-failed { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; }
+    .badge-unverified { background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid #f59e0b; }
+    .badge-no_graph, .badge-no_flows { background: rgba(156, 163, 175, 0.2); color: #9ca3af; border: 1px solid #6b7280; }
+    .badge-role-target { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid #0284c7; }
+    .badge-role-prerequisite { background: rgba(129, 140, 248, 0.15); color: #a5b4fc; border: 1px solid #6366f1; }
+    .badge-role-teardown { background: rgba(244, 63, 94, 0.15); color: #fda4af; border: 1px solid #e11d48; }
+    .section {
+      margin-bottom: 28px;
+    }
+    .section-title {
+      font-size: 16px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .card {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .log-box {
+      background: #030712;
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      padding: 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: #94a3b8;
+      max-height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+    .gherkin-pre {
+      background: #030712;
+      border: 1px solid #1f2937;
+      border-radius: 6px;
+      padding: 14px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      color: #e2e8f0;
+      overflow-x: auto;
+      margin: 8px 0;
+    }
+    .diff-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 768px) {
+      .diff-grid { grid-template-columns: 1fr; }
+    }
+    .footer {
+      margin-top: 32px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <!-- Header -->
+  <div class="header">
+    <div class="logo-badge">
+      <div class="logo-text">KOVA</div>
+      <div style="font-size: 14px; color: var(--text-muted);">Continuous Validation Report</div>
+    </div>
+    <div>
+      {% set status_class = 'badge-' ~ (report.overall_status | lower) %}
+      <span class="badge {{ status_class }}">{{ report.overall_status }}</span>
+    </div>
+  </div>
+
+  <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 24px;">
+    <strong>Project:</strong> <span style="color: var(--text);">{{ project_name or 'Default' }}</span> &bull;
+    <strong>Validation ID:</strong> <span style="font-family: monospace; color: var(--text);">{{ report.id }}</span> &bull;
+    <strong>Duration:</strong> <span style="color: var(--text);">{{ report.duration_ms }}ms</span> &bull;
+    <strong>Timestamp:</strong> <span style="color: var(--text);">{{ report.finished_at }}</span>
+  </div>
+
+  {% if is_diff %}
+    <!-- DIFF MODE -->
+    <div class="section">
+      <div class="section-title">Validation Comparison (Diff Mode)</div>
+      <div class="card" style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <strong>Before:</strong> <span style="font-family: monospace;">{{ diff.report_before.id }}</span>
+            <span class="badge badge-{{ diff.report_before.overall_status | lower }}" style="margin-left: 6px;">{{ diff.report_before.overall_status }}</span>
+          </div>
+          <div style="font-size: 18px; color: var(--text-muted);">&rarr;</div>
+          <div>
+            <strong>After:</strong> <span style="font-family: monospace;">{{ diff.report_after.id }}</span>
+            <span class="badge badge-{{ diff.report_after.overall_status | lower }}" style="margin-left: 6px;">{{ diff.report_after.overall_status }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Flows Changed -->
+      {% if diff.flows_changed %}
+        <div style="margin-bottom: 20px;">
+          <div style="font-weight: 600; color: #f59e0b; margin-bottom: 8px;">Flows Changed ({{ diff.flows_changed|length }})</div>
+          {% for fc in diff.flows_changed %}
+            <div class="card" style="margin-bottom: 12px; border-left: 3px solid #f59e0b;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <span style="font-weight: 600;">{{ fc.flow_name }}</span>
+                <div>
+                  <span class="badge badge-{{ fc.status_before | lower }}">{{ fc.status_before }}</span>
+                  &rarr;
+                  <span class="badge badge-{{ fc.status_after | lower }}">{{ fc.status_after }}</span>
+                </div>
+              </div>
+              <div style="font-size: 12px; color: var(--text-muted);">
+                Evidence: +{{ fc.new_evidence_count }} new, -{{ fc.removed_evidence_count }} removed
+                {% if fc.failure_reason_changed %}
+                  <div style="color: #f87171; margin-top: 4px;">
+                    Failure Reason: {{ fc.failure_reason_before or 'None' }} &rarr; {{ fc.failure_reason_after or 'None' }}
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <!-- Flows Added -->
+      {% if diff.flows_added %}
+        <div style="margin-bottom: 20px;">
+          <div style="font-weight: 600; color: #10b981; margin-bottom: 8px;">Flows Added ({{ diff.flows_added|length }})</div>
+          {% for fa in diff.flows_added %}
+            <div class="card" style="margin-bottom: 8px; border-left: 3px solid #10b981;">
+              <strong>{{ fa.flow_name }}</strong> — <span class="badge badge-{{ fa.status | lower }}">{{ fa.status }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <!-- Flows Removed -->
+      {% if diff.flows_removed %}
+        <div style="margin-bottom: 20px;">
+          <div style="font-weight: 600; color: #ef4444; margin-bottom: 8px;">Flows Removed ({{ diff.flows_removed|length }})</div>
+          {% for fr in diff.flows_removed %}
+            <div class="card" style="margin-bottom: 8px; border-left: 3px solid #ef4444;">
+              <strong>{{ fr.flow_name }}</strong> — was <span class="badge badge-{{ fr.status | lower }}">{{ fr.status }}</span>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <!-- Flows Unchanged -->
+      {% if diff.flows_unchanged %}
+        <div>
+          <div style="font-weight: 600; color: var(--text-muted); margin-bottom: 8px;">Flows Unchanged ({{ diff.flows_unchanged|length }})</div>
+          {% for fu in diff.flows_unchanged %}
+            <div style="padding: 6px 12px; font-size: 12px; color: var(--text-muted); border-bottom: 1px solid var(--border);">
+              {{ fu.flow_name }} ({{ fu.status }})
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <!-- Impact Summary -->
+  <div class="section">
+    <div class="section-title">Impact Summary</div>
+    <div class="card">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 14px;">
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Changed Files</div>
+          <div style="font-weight: 700; font-size: 16px;">{{ report.impact_report.changed_files|length }}</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Affected Capabilities</div>
+          <div style="font-weight: 700; font-size: 16px;">{{ report.impact_report.affected_capabilities|length }}</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Target Flows</div>
+          <div style="font-weight: 700; font-size: 16px;">{{ report.impact_report.affected_flows|length }}</div>
+        </div>
+        <div>
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">Recommended Scope</div>
+          <div style="font-weight: 700; font-size: 16px; color: var(--accent);">{{ report.impact_report.recommended_scope }}</div>
+        </div>
+      </div>
+
+      {% if report.impact_report.changed_files %}
+        <details style="margin-bottom: 12px;">
+          <summary style="font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 500;">View Changed Files</summary>
+          <ul style="font-family: monospace; font-size: 12px; color: var(--text-muted); margin: 6px 0; padding-left: 20px;">
+            {% for f in report.impact_report.changed_files %}
+              <li>{{ f }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endif %}
+
+      <!-- Graph Traversal Log -->
+      {% if report.impact_report.graph_traversal_log %}
+        <div style="margin-top: 10px;">
+          <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Graph Traversal Audit Log</div>
+          <div class="log-box">
+{% for entry in report.impact_report.graph_traversal_log %}{{ entry }}
+{% endfor %}</div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Execution Plan -->
+  {% if report.impact_report.minimal_execution_plan %}
+    <div class="section">
+      <div class="section-title">Execution Plan (Minimal Valid Path)</div>
+      <div class="card">
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          {% for step in (report.impact_report.minimal_execution_plan.steps or []) %}
+            <div style="display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: #030712; border-radius: 4px; font-size: 12px;">
+              <div>
+                <span style="color: var(--text-muted); margin-right: 8px;">#{{ loop.index }}</span>
+                <span style="font-weight: 600;">{{ step.flow_name or step.flow_id }}</span>
+              </div>
+              <div>
+                <span class="badge badge-role-{{ step.role or 'target' }}">{{ step.role or 'target' }}</span>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  {% endif %}
+
+  <!-- Flow Results & Gherkin Representation & Evidence -->
+  <div class="section">
+    <div class="section-title">Flow Validation Results ({{ report.results|length }})</div>
+    {% for res in report.results %}
+      <div class="card" style="margin-bottom: 16px; border-left: 4px solid {{ '#10b981' if res.status == 'passed' else ('#ef4444' if res.status == 'failed' else '#f59e0b') }};">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px;">
+          <div>
+            <span style="font-size: 15px; font-weight: 700;">{{ res.flow_name }}</span>
+            <span class="badge badge-role-{{ res.role }}" style="margin-left: 8px;">{{ res.role }}</span>
+          </div>
+          <div>
+            <span class="badge badge-{{ res.status }}">{{ res.status }}</span>
+            <span style="font-size: 12px; color: var(--text-muted); margin-left: 8px;">{{ res.duration_ms }}ms</span>
+          </div>
+        </div>
+
+        {% if res.failure_reason %}
+          <div style="background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; color: #fca5a5; font-size: 13px;">
+            <strong>Failure reason:</strong> {{ res.failure_reason }}
+          </div>
+        {% endif %}
+
+        <!-- Gherkin Specification -->
+        {% set gherkin = gherkin_by_flow.get(res.flow_id|string, '') %}
+        {% if gherkin %}
+          <details open style="margin-bottom: 12px;">
+            <summary style="font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 600;">Gherkin Specification</summary>
+            <pre class="gherkin-pre"><code>{{ gherkin }}</code></pre>
+          </details>
+        {% endif %}
+
+        <!-- Embedded Evidence Viewer -->
+        {% set flow_evidence = evidence_by_flow.get(res.flow_id|string, []) %}
+        <details open>
+          <summary style="font-size: 12px; color: var(--accent); cursor: pointer; font-weight: 600;">Evidence Bundle ({{ flow_evidence|length }} captured)</summary>
+          {% with flow_id=res.flow_id, evidence_items=flow_evidence %}
+            {% include '_evidence_embed.html' %}
+          {% endwith %}
+        </details>
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Evidence Summary -->
+  <div class="section">
+    <div class="section-title">Evidence Summary</div>
+    <div class="card" style="display: flex; gap: 20px; flex-wrap: wrap;">
+      {% if report.evidence_summary %}
+        {% for k, v in report.evidence_summary.items() %}
+          <div>
+            <div style="font-size: 11px; text-transform: uppercase; color: var(--text-muted);">{{ k }}</div>
+            <div style="font-weight: 700; font-size: 16px;">{{ v }}</div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div style="font-size: 13px; color: var(--text-muted);">No evidence count metrics available.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div>
+      Generated by <strong>Kova Continuous Validation Engine</strong> &bull;
+      Signing Key ID: <span style="font-family: monospace;">{{ signing_key_id or 'kova-hmac-v1' }}</span>
+    </div>
+    {% if report.signed_url %}
+      <div>
+        <a href="{{ report.signed_url }}" style="color: var(--accent); text-decoration: none; word-break: break-all;">Shareable Signed URL</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>
