@@ -24,6 +24,7 @@ from app.engine.ai.schemas import (
     AIGeneratedJourneyList,
     AuthEntranceSemanticResult,
     AuthFormSemanticResult,
+    AuthPageClassification,
     GoalInterpretation,
     JourneyPlan,
     ProposedStep,
@@ -806,6 +807,60 @@ class AgentReasoner:
     def _requirement_covered(self, requirement: str, facts_blob: str) -> bool:
         req_words = [w for w in requirement.lower().split() if len(w) > 3]
         return any(w in facts_blob for w in req_words)
+
+    async def classify_auth_page(self, observation: dict[str, Any]) -> AuthPageClassification:
+        """Classify an ambiguous page into an auth kind using LLM semantic reasoning."""
+        if self._provider is None:
+            return AuthPageClassification(
+                kind="ambiguous",
+                confidence=0.4,
+                reasoning="No AI provider available; preserving ambiguous classification",
+            )
+        system_prompt = (
+            "You are a web test agent analyzing an ambiguous page to determine if it is an authentication "
+            "or gated access page. Return an AuthPageClassification with kind in "
+            "['login', 'signup', 'magic_link', 'oauth_redirect', 'otp_verification', 'not_auth', 'ambiguous'] "
+            "and a confidence score between 0.0 and 1.0."
+        )
+        user_prompt = f"Page observation:\n{json.dumps(observation, default=str)[:4000]}"
+        try:
+            res = await self._provider.generate_structured(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                schema=AuthPageClassification,
+            )
+            if isinstance(res, AuthPageClassification):
+                return res
+            return AuthPageClassification.model_validate(res)
+        except Exception as e:
+            logger.warning("AI classify_auth_page failed: %s", e)
+            return AuthPageClassification(
+                kind="ambiguous",
+                confidence=0.4,
+                reasoning=f"AI classification failed: {e}",
+            )
+
+    async def propose_submit_button(self, observation: dict[str, Any]) -> str | None:
+        """Propose a CSS selector or locator for a form submit button when deterministic search fails."""
+        if self._provider is None:
+            return None
+        system_prompt = (
+            "Analyze the page elements to identify the form submit button. "
+            "Avoid OAuth/SSO buttons (Google, GitHub, etc.). "
+            "Return a JSON object with 'selector' (CSS selector) and 'confidence'."
+        )
+        user_prompt = f"Page elements:\n{json.dumps(observation.get('elements', []), default=str)[:3000]}"
+        try:
+            res = await self._provider.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            match = re.search(r'"selector":\s*"([^"]+)"', res)
+            if match:
+                return match.group(1)
+        except Exception as e:
+            logger.warning("AI propose_submit_button failed: %s", e)
+        return None
 
 
 # ── Semantic helpers (§7: no exact-string matching) ─────────────────

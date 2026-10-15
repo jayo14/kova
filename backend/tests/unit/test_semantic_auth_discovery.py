@@ -147,3 +147,157 @@ async def test_perform_login_switches_to_signup_view_when_requested_on_signin():
         await perform_login(mock_page, "new@example.com", "SecretPass1!", is_signup=True)
         assert True in opened_signup
 
+
+def test_classify_auth_page_all_kinds():
+    from app.engine.browser.auth import AuthSignalBundle, classify_auth_page
+
+    # 1. Login
+    b_login = AuthSignalBundle(
+        url_path_is_auth=True,
+        visible_password_input_count=1,
+        visible_email_input_count=1,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=True,
+        has_forgot_password_link=True,
+        submit_button_texts=["Sign In"],
+        url="https://example.com/app/login",
+    )
+    res_login = classify_auth_page(b_login)
+    assert res_login.kind == "login"
+    assert res_login.confidence >= 0.9
+
+    # 2. Signup
+    b_signup = AuthSignalBundle(
+        url_path_is_auth=True,
+        visible_password_input_count=1,
+        visible_email_input_count=1,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        submit_button_texts=["Create Account"],
+        url="https://example.com/register",
+    )
+    res_signup = classify_auth_page(b_signup)
+    assert res_signup.kind == "signup"
+    assert res_signup.confidence >= 0.9
+
+    # 3. Magic link
+    b_magic = AuthSignalBundle(
+        url_path_is_auth=True,
+        visible_password_input_count=0,
+        visible_email_input_count=1,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        magic_link_form_markers=["Send magic link"],
+        submit_button_texts=["Send Link"],
+        url="https://example.com/auth",
+    )
+    res_magic = classify_auth_page(b_magic)
+    assert res_magic.kind == "magic_link"
+    assert res_magic.confidence >= 0.9
+
+    # 4. OAuth redirect
+    b_oauth = AuthSignalBundle(
+        url_path_is_auth=False,
+        visible_password_input_count=0,
+        visible_email_input_count=0,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        oauth_button_texts=["Continue with Google", "Sign in with GitHub"],
+        url="https://example.com/oauth/authorize",
+    )
+    res_oauth = classify_auth_page(b_oauth)
+    assert res_oauth.kind == "oauth_redirect"
+    assert res_oauth.confidence >= 0.9
+
+    # 5. OTP verification
+    b_otp = AuthSignalBundle(
+        url_path_is_auth=False,
+        visible_password_input_count=0,
+        visible_email_input_count=0,
+        visible_otp_input_count=1,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        submit_button_texts=["Verify Code"],
+        url="https://example.com/verify-otp",
+    )
+    res_otp = classify_auth_page(b_otp)
+    assert res_otp.kind == "otp_verification"
+    assert res_otp.confidence >= 0.9
+
+    # 6. Not auth
+    b_not_auth = AuthSignalBundle(
+        url_path_is_auth=False,
+        visible_password_input_count=0,
+        visible_email_input_count=0,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        submit_button_texts=["Save Settings"],
+        url="https://example.com/dashboard/analytics",
+    )
+    res_not_auth = classify_auth_page(b_not_auth)
+    assert res_not_auth.kind == "not_auth"
+    assert res_not_auth.confidence >= 0.9
+
+    # 7. Ambiguous (URL is auth but 0 inputs visible yet)
+    b_ambiguous = AuthSignalBundle(
+        url_path_is_auth=True,
+        visible_password_input_count=0,
+        visible_email_input_count=0,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        url="https://example.com/login",
+    )
+    res_ambiguous = classify_auth_page(b_ambiguous)
+    assert res_ambiguous.kind == "ambiguous"
+    assert res_ambiguous.confidence < 0.5
+
+
+def test_classify_auth_page_dom_signal_wins_over_ambiguous_url():
+    from app.engine.browser.auth import AuthSignalBundle, classify_auth_page
+
+    bundle = AuthSignalBundle(
+        url_path_is_auth=False,
+        visible_password_input_count=1,
+        visible_email_input_count=1,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=True,
+        has_forgot_password_link=True,
+        submit_button_texts=["Enter"],
+        url="https://example.com/products/view/123",
+    )
+    res = classify_auth_page(bundle)
+    assert res.kind == "login"
+    assert res.confidence >= 0.9
+
+
+def test_classify_auth_page_loading_ambiguous_state():
+    from app.engine.browser.auth import AuthSignalBundle, classify_auth_page
+
+    bundle = AuthSignalBundle(
+        url_path_is_auth=True,
+        visible_password_input_count=0,
+        visible_email_input_count=0,
+        visible_otp_input_count=0,
+        has_remember_me_checkbox=False,
+        has_forgot_password_link=False,
+        url="https://example.com/accounts/login",
+    )
+    res = classify_auth_page(bundle)
+    assert res.kind == "ambiguous"
+    assert res.confidence < 0.5
+
+
+def test_levenshtein_distance_matching():
+    from app.engine.browser.auth import _levenshtein_distance
+
+    assert _levenshtein_distance("Sign in", "sign in") == 0
+    assert _levenshtein_distance("Sign-in", "sign in") == 1
+    assert _levenshtein_distance("SIGN IN", "sign in") == 0
+    assert _levenshtein_distance("Log in", "log in") == 0
+    assert _levenshtein_distance("Login", "log in") == 1
+

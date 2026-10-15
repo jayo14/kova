@@ -238,3 +238,20 @@ class AuthEntranceSemanticResult(BaseModel):
     reasoning: str = ""
 
 
+class AuthPageClassification(BaseModel):
+    """Semantic classification of an authentication or gated web page."""
+
+    kind: Literal[
+        "login",
+        "signup",
+        "magic_link",
+        "oauth_redirect",
+        "otp_verification",
+        "not_auth",
+        "ambiguous",
+    ]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    proposed_next_action: str | None = None
+    reasoning: str = ""
+
+
