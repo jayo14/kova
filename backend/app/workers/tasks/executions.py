@@ -158,6 +158,20 @@ async def _run_execution_async(task, execution_id: str):
                 await db.commit()
                 return {"status": "failed", "reason": "org_at_capacity"}
 
+        import time
+        from app.observability.metrics import (
+            record_execution_started,
+            record_execution_completed,
+            record_browser_crash,
+        )
+        exec_start_ts = time.perf_counter()
+        org_plan = getattr(primary_org, "plan", "free") if primary_org else "free"
+        record_execution_started(
+            str(org_id or "default"),
+            plan=org_plan,
+            trigger=getattr(execution, "trigger", "manual") or "manual",
+        )
+
         # Honor a cancellation that arrived between dispatch and pickup
         from app.engine.execution.control import is_cancel_requested
         if await is_cancel_requested(execution_id):
@@ -315,6 +329,14 @@ async def _run_execution_async(task, execution_id: str):
             final_execution = await exec_repo.get_by_id(exec_uuid)
             final_status = final_execution.status if final_execution else "FAILED"
 
+            duration = time.perf_counter() - exec_start_ts
+            record_execution_completed(
+                str(org_id or "default"),
+                plan=org_plan,
+                status=final_status.lower(),
+                duration_seconds=duration,
+            )
+
             return {
                 "status": final_status.lower(),
                 "execution_id": execution_id,
@@ -322,6 +344,18 @@ async def _run_execution_async(task, execution_id: str):
 
         except Exception as e:
             logger.error("Execution %s failed with %s", execution_id, type(e).__name__)
+            try:
+                duration = time.perf_counter() - exec_start_ts
+                record_execution_completed(
+                    str(org_id or "default"),
+                    plan=org_plan,
+                    status="failed",
+                    duration_seconds=duration,
+                )
+                if "targetclosed" in type(e).__name__.lower() or "crash" in str(e).lower() or "browser" in type(e).__name__.lower():
+                    record_browser_crash(str(org_id or "default"))
+            except Exception:
+                pass
 
             # Persist unexpected worker failures distinctly from application assertions using a clean session.
             try:

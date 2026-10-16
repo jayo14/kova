@@ -318,4 +318,46 @@
   - `pytest backend/tests/unit/test_auth.py backend/tests/integration/test_security.py -v` (44 passed)
   - `pnpm --prefix frontend build` (17/17 pages static/dynamic compiled successfully)
 
-
+## Chunk 16 — Observability & SRE
+- **Status:** Complete
+- **Changes:**
+  - Redaction Filter & Structured Logging:
+    - Built central recursive redaction filter in `backend/app/observability/redaction.py` (`redact`, `RedactionFilter`) scrubbing passwords, secrets, tokens, api keys, auth headers, and cookies.
+    - Implemented structured JSON logger in `backend/app/observability/logging.py` (`KovaJsonFormatter`, `configure_logging`, `RequestIdMiddleware`) injecting `timestamp`, `level`, `logger`, `message`, `request_id`, `org_id`, `project_id`, `execution_id`, `trace_id`, and `span_id`.
+    - Added `RequestIdMiddleware` generating and propagating UUIDs across requests and response headers (`X-Request-Id`).
+    - Sanitized server exception logging in `backend/app/main.py` CORS and unhandled exception middleware.
+  - Prometheus Metrics:
+    - Built metrics registry in `backend/app/observability/metrics.py` defining:
+      - `http_requests_total` (counter: method, path, status)
+      - `http_request_duration_seconds` (histogram: method, path)
+      - `executions_started_total` (counter: org_id, plan, trigger)
+      - `executions_completed_total` (counter: org_id, plan, status)
+      - `execution_duration_seconds` (histogram: org_id, plan, status)
+      - `worker_queue_depth` (gauge: queue_name)
+      - `worker_concurrent_executions` (gauge: queue_name)
+      - `browser_crashes_total` (counter: org_id)
+      - `evidence_upload_failures_total` (counter: reason)
+      - `ai_invocations_total` (counter: capability, accepted)
+      - `product_graph_entities` (gauge: project_id, entity_type)
+    - Added `PrometheusMiddleware` for automatic request counting and latency tracking with path parameter normalization to avoid label explosion.
+    - Added `GET /metrics` in `backend/app/api/routes/metrics.py` with production IP allowlist restriction (`PROMETHEUS_ALLOWED_IPS`).
+  - OpenTelemetry Tracing:
+    - Implemented OpenTelemetry tracing provider in `backend/app/observability/tracing.py` (`configure_tracing`, `FastAPITracingMiddleware`, `async_trace_span`, `trace_span`).
+    - Added Celery worker signals in `backend/app/workers/celery_app.py` (`task_prerun`, `task_postrun`, `task_failure`) for span creation and concurrent worker gauge tracking.
+    - Instrumented `FlowRunner` in `backend/app/engine/execution/runner.py` with child spans for `plan`, `resolve_prerequisites`, `execute_target`, and `verify`.
+    - Instrumented worker task in `backend/app/workers/tasks/executions.py` to record `executions_started_total`, `executions_completed_total`, and `browser_crashes_total`.
+  - Runbooks, Dashboards, and Alerts:
+    - Created 4 operational runbooks in `docs/runbooks/`:
+      - `docs/runbooks/worker-queue-backup.md`
+      - `docs/runbooks/s3-upload-failures.md`
+      - `docs/runbooks/postgres-connection-exhaustion.md`
+      - `docs/runbooks/browser-crash-loop.md`
+    - Created 2 production Grafana dashboard definitions in `docs/dashboards/`:
+      - `docs/dashboards/kova-overview.json`
+      - `docs/dashboards/kova-execution-detail.json`
+    - Created Prometheus alert rules in `docs/alerts/kova-alerts.yml` (`KovaHighErrorRate`, `KovaQueueBackup`, `KovaWorkerDown`, `KovaBrowserCrashSpike`, `KovaS3UploadFailures`, `KovaHighP95Latency`).
+  - Testing:
+    - Added comprehensive unit test suite in `backend/tests/unit/test_observability.py`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_observability.py -v` (6 passed)
+  - `pytest backend/tests/unit/test_observability.py backend/tests/unit/test_auth.py backend/tests/unit/test_integrations.py -v` (33 passed)

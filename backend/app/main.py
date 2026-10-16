@@ -9,10 +9,17 @@ from redis.asyncio import Redis
 
 import sentry_sdk
 
-from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, organizations, projects, viewport
+from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, metrics, organizations, projects, viewport
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
 from app.modules.auth.rate_limiter import rate_limiter
+from app.observability.logging import RequestIdMiddleware, configure_logging
+from app.observability.metrics import PrometheusMiddleware
+from app.observability.tracing import FastAPITracingMiddleware, configure_tracing
+
+# Initialize structured logging and OpenTelemetry tracing
+configure_logging()
+configure_tracing()
 
 
 # Initialize Sentry SDK before FastAPI app initialization
@@ -52,6 +59,11 @@ app = FastAPI(
     debug=settings.DEBUG and not settings.is_production,
     lifespan=lifespan,
 )
+
+# Core Observability middlewares: Request ID, Tracing, and Prometheus Metrics
+app.add_middleware(RequestIdMiddleware)
+app.add_middleware(FastAPITracingMiddleware)
+app.add_middleware(PrometheusMiddleware)
 
 import logging
 from fastapi.responses import JSONResponse
@@ -95,6 +107,8 @@ def _cors_headers_for_request(request: Request) -> dict[str, str]:
     }
 
 
+from app.observability.redaction import redact
+
 @app.middleware("http")
 async def cors_exception_middleware(request: Request, call_next):
     try:
@@ -109,7 +123,9 @@ async def cors_exception_middleware(request: Request, call_next):
                 content={"detail": exc.detail},
                 headers=headers,
             )
-        logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+        # Never log raw sensitive exception details in production
+        exc_msg = "[hidden in production]" if settings.is_production else redact(str(exc))
+        logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc_msg)
         headers = _cors_headers_for_request(request)
         return JSONResponse(
             status_code=500,
@@ -139,16 +155,17 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             content={"detail": exc.detail},
             headers=headers,
         )
-    logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+    exc_msg = "[hidden in production]" if settings.is_production else redact(str(exc))
+    logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc_msg)
     return await server_error_handler(request, exc)
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    # Exclude health endpoints, docs, and CI endpoints
+    # Exclude health endpoints, docs, metrics, and CI endpoints
     path = request.url.path
     if (
         path.startswith("/health")
-        or path in ("/api/v1/health", "/api/v1/health/ready", "/", "/docs", "/openapi.json", "/redoc")
+        or path in ("/api/v1/health", "/api/v1/health/ready", "/", "/docs", "/openapi.json", "/redoc", "/metrics")
         or path.startswith("/api/v1/ci")
     ):
         return await call_next(request)
@@ -183,6 +200,7 @@ app.include_router(executions.evidence_router, prefix="/api/v1")
 app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(integrations.project_integrations_router, prefix="/api/v1")
 app.include_router(exploration.router, prefix="/api/v1")
+app.include_router(metrics.router)
 app.include_router(viewport.router)
 
 

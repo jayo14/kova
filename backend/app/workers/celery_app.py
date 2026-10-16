@@ -41,3 +41,47 @@ def get_queue_for_plan(plan: str | None) -> str:
         return "kova-pro"
     return "kova-free"
 
+
+# --- Celery Signals for Observability & Metrics ---
+from celery.signals import task_failure, task_postrun, task_prerun
+from app.observability.metrics import WORKER_CONCURRENT_EXECUTIONS
+from app.observability.tracing import get_tracer
+
+_active_spans = {}
+
+
+@task_prerun.connect
+def on_task_prerun(sender=None, task_id=None, task=None, args=None, kwargs=None, **_):
+    queue = getattr(task.request, "delivery_info", {}).get("routing_key", "default") if task and hasattr(task, "request") else "default"
+    WORKER_CONCURRENT_EXECUTIONS.labels(queue_name=queue).inc()
+
+    # Start task tracing span
+    tracer = get_tracer("kova.celery")
+    span_name = f"Celery {task.name if task else sender}"
+    span = tracer.start_span(span_name)
+    span.set_attribute("celery.task_id", str(task_id))
+    span.set_attribute("celery.queue", queue)
+    if task_id:
+        _active_spans[task_id] = span
+
+
+@task_postrun.connect
+def on_task_postrun(sender=None, task_id=None, task=None, retval=None, state=None, **_):
+    queue = getattr(task.request, "delivery_info", {}).get("routing_key", "default") if task and hasattr(task, "request") else "default"
+    WORKER_CONCURRENT_EXECUTIONS.labels(queue_name=queue).dec()
+
+    if task_id and task_id in _active_spans:
+        span = _active_spans.pop(task_id)
+        if state:
+            span.set_attribute("celery.state", str(state))
+        span.end()
+
+
+@task_failure.connect
+def on_task_failure(sender=None, task_id=None, exception=None, **_):
+    if task_id and task_id in _active_spans:
+        span = _active_spans.get(task_id)
+        if span and exception:
+            span.record_exception(exception)
+
+

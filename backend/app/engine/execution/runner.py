@@ -314,14 +314,23 @@ class FlowRunner:
                     available_creds.add(c.email)
                 available_creds.add(cid)
 
+        from app.observability.tracing import async_trace_span
+        target_id_str = str(getattr(target_flow_obj, "id", execution_id))
+        span_attrs = {
+            "flow_id": target_id_str,
+            "step_count": len(flow_steps or []),
+            "persona": str(persona),
+        }
+
         try:
-            plan = DependencyResolver.resolve_execution_plan(
-                target=target_flow_obj,
-                flows=all_flows,
-                current_state=ctx.current_state,
-                persona=persona,
-                available_credentials=available_creds,
-            )
+            async with async_trace_span("plan", span_attrs):
+                plan = DependencyResolver.resolve_execution_plan(
+                    target=target_flow_obj,
+                    flows=all_flows,
+                    current_state=ctx.current_state,
+                    persona=persona,
+                    available_credentials=available_creds,
+                )
         except Exception as plan_err:
             logger.warning("Execution planning failed: %s", plan_err)
             ctx.transition(ExecutionState.FAILED)
@@ -416,13 +425,14 @@ class FlowRunner:
                     by_id_map[str(f.name)] = f
 
             if prereq_steps:
-                ctx.transition(ExecutionState.RESOLVING_PREREQUISITES)
-                from app.modules.flows.auth import Authenticator, SessionManager
-                from app.modules.product_graph.schemas import AuthCapability
-                if not ctx.session_manager:
-                    ctx.session_manager = SessionManager()
+                async with async_trace_span("resolve_prerequisites", span_attrs):
+                    ctx.transition(ExecutionState.RESOLVING_PREREQUISITES)
+                    from app.modules.flows.auth import Authenticator, SessionManager
+                    from app.modules.product_graph.schemas import AuthCapability
+                    if not ctx.session_manager:
+                        ctx.session_manager = SessionManager()
 
-                for p_step in prereq_steps:
+                    for p_step in prereq_steps:
                     is_auth = (
                         any("auth" in str(getattr(a, "key", "")).lower() or getattr(a, "key", "") in ("authenticated", f"authenticated:{persona}") for a in p_step.establishes)
                         or "auth" in getattr(p_step, "flow_name", "").lower()
@@ -623,10 +633,11 @@ class FlowRunner:
                     except Exception as plan_err:
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
 
-            for i, step in enumerate(flow_steps):
-                if i in steps_to_skip_indices:
-                    logger.info("Skipping step %d due to state contamination skip_if_exists strategy", i)
-                    continue
+            async with async_trace_span("execute_target", span_attrs):
+                for i, step in enumerate(flow_steps):
+                    if i in steps_to_skip_indices:
+                        logger.info("Skipping step %d due to state contamination skip_if_exists strategy", i)
+                        continue
 
                 # Cancellation gate — checked at every step boundary
                 if await is_cancel_requested(exec_id):
@@ -744,18 +755,19 @@ class FlowRunner:
                 except Exception as ex:
                     logger.debug("Live compile expectation failed: %s", ex)
 
-            if success_condition:
-                verification = await verifier.verify(success_condition)
-            else:
-                from app.engine.verification.verifier import VerificationResult, VerificationCheck
-                verification = VerificationResult(
-                    passed=False,
-                    checks=[VerificationCheck(
-                        type="no_condition",
+            async with async_trace_span("verify", span_attrs):
+                if success_condition:
+                    verification = await verifier.verify(success_condition)
+                else:
+                    from app.engine.verification.verifier import VerificationResult, VerificationCheck
+                    verification = VerificationResult(
                         passed=False,
-                        message="No success condition defined — mission cannot be verified",
-                    )]
-                )
+                        checks=[VerificationCheck(
+                            type="no_condition",
+                            passed=False,
+                            message="No success condition defined — mission cannot be verified",
+                        )]
+                    )
 
             # --- AI / Self-Healing Auth Barrier Gate ---
             detected_expected_dest = None
