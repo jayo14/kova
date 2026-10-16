@@ -7,9 +7,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-satoshi);
-  --font-mono: var(--font-mono);
-  --font-heading: var(--font-satoshi);
+  --font-sans: var(--font-dm-sans), var(--font-satoshi), sans-serif;
+  --font-heading: var(--font-bricolage), sans-serif;
+  --font-serif: var(--font-instrument-serif), serif;
+  --font-mono: var(--font-dm-mono), monospace;
 
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
@@ -45,42 +46,50 @@
 }
 
 :root {
-  --background: #F9F6F0;
-  --foreground: #1C1917;
+  --bg: #FBF7F0;
+  --ink: #2A170D;
+  --mut: #6B5646;
+  --rust: #8A3513;
+  --clay: #D58A56;
+  --sand: #F1E7D8;
+  --line: rgba(42, 23, 13, 0.1);
 
-  --card: #F9F6F0;
-  --card-foreground: #1C1917;
+  --background: #FBF7F0;
+  --foreground: #2A170D;
 
-  --popover: #F9F6F0;
-  --popover-foreground: #1C1917;
+  --card: #FFFFFF;
+  --card-foreground: #2A170D;
 
-  --primary: #772D08;
-  --primary-foreground: #F9F6F0;
+  --popover: #FFFFFF;
+  --popover-foreground: #2A170D;
 
-  --secondary: #EDE8DF;
-  --secondary-foreground: #1C1917;
+  --primary: #8A3513;
+  --primary-foreground: #FBF7F0;
 
-  --muted: #EDE8DF;
-  --muted-foreground: #78716C;
+  --secondary: #F1E7D8;
+  --secondary-foreground: #2A170D;
 
-  --accent: #F0E6D8;
-  --accent-foreground: #1C1917;
+  --muted: #F1E7D8;
+  --muted-foreground: #6B5646;
+
+  --accent: #D58A56;
+  --accent-foreground: #2A170D;
 
   --destructive: #B91C1C;
-  --border: #E5DFD6;
-  --input: #E5DFD6;
-  --ring: #772D08;
+  --border: rgba(42, 23, 13, 0.1);
+  --input: rgba(42, 23, 13, 0.14);
+  --ring: #8A3513;
 
-  --sidebar: #F9F6F0;
-  --sidebar-foreground: #1C1917;
-  --sidebar-primary: #772D08;
-  --sidebar-primary-foreground: #F9F6F0;
-  --sidebar-accent: #EDE8DF;
-  --sidebar-accent-foreground: #1C1917;
-  --sidebar-border: #E5DFD6;
-  --sidebar-ring: #772D08;
+  --sidebar: #FBF7F0;
+  --sidebar-foreground: #2A170D;
+  --sidebar-primary: #8A3513;
+  --sidebar-primary-foreground: #FBF7F0;
+  --sidebar-accent: #F1E7D8;
+  --sidebar-accent-foreground: #2A170D;
+  --sidebar-border: rgba(42, 23, 13, 0.1);
+  --sidebar-ring: #8A3513;
 
-  --radius: 0.625rem;
+  --radius: 0.875rem;
 }
 
 .dark {
@@ -225,5 +234,173 @@
 ::selection {
   background-color: #772D0820;
   color: var(--foreground);
+}
+
+/* Redesign Design Language Tokens & Animations */
+.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(22px) saturate(1.4);
+  -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 1px 0 #fff inset, 0 30px 60px -30px rgba(90, 40, 10, 0.28);
+  border-radius: 28px;
+}
+
+.glass-subtle {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 0 #fff inset, 0 20px 40px -20px rgba(90, 40, 10, 0.15);
+}
+
+.eye {
+  font-family: var(--font-dm-mono), monospace;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--rust);
+}
+
+.btn-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--ink);
+  color: #FBF7F0;
+  border: 0;
+  border-radius: 999px;
+  padding: 13px 26px;
+  font-family: var(--font-dm-sans), sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  box-shadow: 0 12px 30px -10px rgba(138, 53, 19, 0.6);
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s ease, box-shadow 0.3s ease;
+  cursor: pointer;
+}
+
+.btn-pill:hover {
+  transform: translateY(-3px);
+  background: var(--rust);
+  box-shadow: 0 16px 36px -10px rgba(138, 53, 19, 0.7);
+}
+
+.btn-pill:active {
+  transform: translateY(0);
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.55;
+  animation: orb-fl 14s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+.pill-badge {
+  display: inline-block;
+  padding: 7px 18px;
+  border-radius: 99px;
+  background: #fff;
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 16px -8px rgba(90, 40, 10, 0.3);
+  font-family: var(--font-dm-sans), sans-serif;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.tile-float {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 30px -12px rgba(90, 40, 10, 0.45);
+  display: grid;
+  place-items: center;
+  animation: fl2 6s ease-in-out infinite alternate;
+  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s;
+}
+
+.tile-float:hover {
+  transform: scale(1.15) translateY(-8px) rotate(-4deg);
+  box-shadow: 0 30px 40px -14px rgba(138, 53, 19, 0.55);
+}
+
+.bento-card {
+  border-radius: 28px;
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 26px;
+  position: relative;
+  overflow: hidden;
+  text-align: left;
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s;
+}
+
+.bento-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 40px 60px -35px rgba(90, 40, 10, 0.35);
+}
+
+.bento-ill {
+  height: 170px;
+  border-radius: 20px;
+  background: linear-gradient(150deg, #FBE9D6, #F3C9A3);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.marquee-ticker {
+  display: flex;
+  gap: 56px;
+  width: max-content;
+  animation: marquee-scroll 32s linear infinite;
+  font-family: var(--font-bricolage), sans-serif;
+  font-weight: 700;
+  font-size: 34px;
+  letter-spacing: -0.03em;
+  color: rgba(42, 23, 13, 0.18);
+  white-space: nowrap;
+}
+
+@keyframes orb-fl {
+  to {
+    transform: translate(60px, 40px) scale(1.15);
+  }
+}
+
+@keyframes fl2 {
+  to {
+    transform: translateY(-12px) rotate(4deg);
+  }
+}
+
+@keyframes marquee-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ring-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  to {
+    transform: scale(1.9);
+    opacity: 0;
+  }
 }
 
