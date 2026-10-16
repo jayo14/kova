@@ -40,6 +40,8 @@ class ExecutionContext:
     session_manager: Any | None = None
     prerequisite_results: list[PrerequisiteResult] = field(default_factory=list)
     persona: str = "default"
+    app_host: str | None = None
+    available_credentials: set[str] = field(default_factory=set)
     started_at: datetime | None = None
     completed_at: datetime | None = None
     control_state: str = "agent"  # "agent" | "human" | "paused"
