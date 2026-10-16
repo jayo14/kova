@@ -30,8 +30,10 @@ from app.engine.ai.schemas import (
     AuthPageClassification,
     GoalInterpretation,
     JourneyPlan,
+    ProposedFlowList,
     ProposedStep,
     RecoveryProposal,
+    SubmitButtonProposal,
     VerificationProposal,
 )
 
@@ -285,10 +287,14 @@ class AgentReasoner:
             "and synthesize HIGH-VALUE, PURPOSEFUL user journeys that thoroughly test the core features, "
             "dashboards, workflows, and interactive capabilities of the web application.\n\n"
             "CRITICAL RULES:\n"
-            "1. AUTH IS NOT THE PRODUCT: Authentication/Signup is NEVER a recommended user journey. Do NOT generate 'Sign up and log in' "
-            "or 'Sign up, log in, and verify account' as primary journeys. In modern web testing, auth is a given infrastructure prerequisite "
-            "that Kova handles automatically when hitting an auth wall. The journeys must focus on what the user actually DOES in the app: "
-            "dashboards, features, document management, quizzes, study sets, workflows, data creation, search, analytics, etc.\n"
+            "1. AUTH AS A PREREQUISITE BY DEFAULT, BUT CAN BE A FEATURE WHEN EXPLICITLY REQUESTED:\n"
+            "   - If the user's goal explicitly mentions testing authentication (e.g. 'test login flow',\n"
+            "     'verify signup works', 'test password reset'), generate an auth-focused journey as the\n"
+            "     primary mission.\n"
+            "   - Otherwise, treat auth as a prerequisite. The runtime resolves it automatically via the\n"
+            "     AuthCapability in the Product Graph. Do not include auth steps in feature workflows.\n"
+            "   - Never generate 'sign up and log in' as a primary journey unless the user explicitly\n"
+            "     asks for it. Feature workflows should focus on what the user does AFTER auth.\n"
             "2. UTILITY IS NOT CORE: Settings, user profile, account details, or terms are utility areas and must NEVER be the recommended journey "
             "unless the user explicitly requested it in their goal.\n"
             "3. PURPOSEFUL FEATURE WORKFLOWS: The RECOMMENDED journey MUST test the application's core value proposition (e.g., generating or taking quizzes "
@@ -829,8 +835,8 @@ class AgentReasoner:
         user_prompt = f"Page observation:\n{json.dumps(observation, default=str)[:4000]}"
         try:
             res = await self._provider.generate_structured(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
+                system=system_prompt,
+                prompt=user_prompt,
                 schema=AuthPageClassification,
             )
             if isinstance(res, AuthPageClassification):
@@ -855,13 +861,13 @@ class AgentReasoner:
         )
         user_prompt = f"Page elements:\n{json.dumps(observation.get('elements', []), default=str)[:3000]}"
         try:
-            res = await self._provider.generate(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
+            res = await self._provider.generate_structured(
+                system=system_prompt,
+                prompt=user_prompt,
+                schema=SubmitButtonProposal,
             )
-            match = re.search(r'"selector":\s*"([^"]+)"', res)
-            if match:
-                return match.group(1)
+            if res and res.selector:
+                return res.selector
         except Exception as e:
             logger.warning("AI propose_submit_button failed: %s", e)
         return None
@@ -891,14 +897,18 @@ class AgentReasoner:
                 f"Product Graph context: {json.dumps(product_graph_summary, default=str)[:3000]}\n"
             )
             try:
-                res = await provider.generate(system_prompt=system_prompt, user_prompt=user_prompt)
-                match = re.search(r"\[.*\]", res, re.DOTALL)
-                if match:
-                    parsed = json.loads(match.group(0))
-                    if isinstance(parsed, list):
-                        for p in parsed:
-                            p["confidence"] = min(float(p.get("confidence", 0.8)), 0.9)
-                        return parsed
+                res = await provider.generate_structured(
+                    system=system_prompt,
+                    prompt=user_prompt,
+                    schema=ProposedFlowList,
+                )
+                if res and res.flows:
+                    flow_dicts: list[dict[str, Any]] = []
+                    for f in res.flows:
+                        fd = f.model_dump()
+                        fd["confidence"] = min(float(fd.get("confidence", 0.8)), 0.9)
+                        flow_dicts.append(fd)
+                    return flow_dicts
             except Exception as e:
                 logger.warning("AI propose_flows failed: %s", e)
 
@@ -908,7 +918,7 @@ class AgentReasoner:
                 "name": f"AI Proposed Flow for {goal_name}",
                 "steps": [
                     {"action": "navigate", "target": "/", "value": "/", "description": "Navigate to home"},
-                    {"action": "assert", "target": "page_loaded", "value": "/", "description": f"Verify entry for {goal_name}"},
+                    {"action": "wait", "target": "", "value": "1000", "description": f"Wait for page load for {goal_name}"},
                 ],
                 "confidence": 0.75,
                 "reasoning": f"Heuristic flow proposal for unresolved goal '{goal_name}'",
