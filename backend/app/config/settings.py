@@ -124,6 +124,16 @@ class Settings(BaseSettings):
         val = int(v) if v is not None else 50
         return min(max(val, 1), 200)
 
+    # Observability & SRE (Chunk 16)
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    PROMETHEUS_ENABLED: bool = True
+    PROMETHEUS_ALLOWED_IPS: str = "127.0.0.1,::1"
+    LOG_FORMAT: str = "text"  # "json" or "text"
+
+    @property
+    def prometheus_allowed_ips_list(self) -> list[str]:
+        return [ip.strip() for ip in self.PROMETHEUS_ALLOWED_IPS.split(",") if ip.strip()]
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"
