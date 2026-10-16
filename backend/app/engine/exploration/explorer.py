@@ -84,12 +84,16 @@ class ExplorationEngine:
         event_emitter: Callable[[str, dict], Any] | None = None,
         existing_browser: BrowserSession | None = None,
         credential_id: str | None = None,
+        project_id: uuid.UUID | None = None,
+        db_session: Any | None = None,
     ):
         self.exploration_id = exploration_id
         self.url = url
         self.goal = goal.strip() if goal else None
         self.event_emitter = event_emitter
         self.credential_id = credential_id
+        self.project_id = project_id
+        self._db_session = db_session
         self._browser: BrowserSession | None = existing_browser
         self._is_cancelled = False
         self._visited_urls: set[str] = set()
@@ -1967,12 +1971,15 @@ class ExplorationEngine:
 
         # Step 3a: Goal-directed mission (highest priority when explicitly requested by user)
         if self.goal and mission_count < max_missions:
-            goal_mission = self._build_goal_mission(
-                self.goal, current_url, title, persona_name, interactive_elements
+            goal_missions = await self._build_goal_mission(
+                self.goal, current_url, title, persona_name, interactive_elements, project_id=self.project_id
             )
-            if goal_mission:
-                missions.append(goal_mission)
-                mission_count += 1
+            if goal_missions:
+                for gm in goal_missions:
+                    if mission_count >= max_missions:
+                        break
+                    missions.append(gm)
+                    mission_count += 1
 
         # Step 3b: Attempt AI-powered journey synthesis for feature discovery
         ai_provider = get_ai_provider()
@@ -2053,9 +2060,22 @@ class ExplorationEngine:
             ]
             ordered_features = genuine_features + utility_features
 
+            all_caps: list[Any] = []
+            if self.project_id and self._db_session:
+                try:
+                    from app.modules.product_graph.repository import ProductGraphRepository
+                    pg_repo = ProductGraphRepository(self._db_session)
+                    all_caps = await pg_repo.list_capabilities_by_project(self.project_id)
+                except Exception:
+                    pass
+
             for route in ordered_features[:4]:
                 if mission_count >= max_missions:
                     break
+                if all_caps:
+                    cap = self._find_capability_for_route(route, all_caps)
+                    if not cap:
+                        continue
                 is_settings = any(sk in route["path"].lower() for sk in ["settings", "profile", "account", "preference"])
                 is_first = (mission_count == 0 and not self.goal and not is_settings)
                 feature_mission = self._build_feature_mission(
@@ -2180,7 +2200,7 @@ class ExplorationEngine:
             "crud": 4, "form": 5, "auth": 6, "navigation": 7
         }
         missions.sort(key=lambda m: (
-            0 if (m.recommended and m.category != "auth") else 1,
+            0 if (self.goal and (m.name == self.goal or m.title == self.goal)) else (0 if (m.recommended and m.category != "auth") else 1),
             category_order.get(m.category or "navigation", 9)
         ))
 
@@ -2223,22 +2243,60 @@ class ExplorationEngine:
 
         return discovered_areas, unique
 
-    def _build_goal_mission(
-        self, goal: str, base_url: str, title: str, persona: str, elements: list[dict]
-    ) -> DiscoveredMission | None:
-        """Build a mission from the user's stated goal.
+    def _split_goal_into_criteria(self, goal: str) -> list[dict]:
+        """Split a compound user goal into success criteria.
 
-        The goal is matched deterministically against observed controls. The
-        success condition verifies the goal-relevant control's destination
-        changed the page state — never a vacuous url_matches:.* pattern.
+        Uses deterministic verb-noun matching first, then fallback patterns.
         """
+        if not goal:
+            return []
+
+        patterns = [
+            (["sign up", "signup", "register", "create account"], {"key": "signed_up", "value": True, "predicate": "eq"}),
+            (["log in", "login", "sign in", "signin", "authenticate"], {"key": "authenticated", "value": True, "predicate": "eq"}),
+            (["browse courses", "browse course", "browse", "view courses"], {"key": "courses_browsed", "value": True, "predicate": "eq"}),
+            (["enroll", "join course", "take course"], {"key": "enrolled", "value": True, "predicate": "eq"}),
+            (["complete quiz", "finish quiz", "take quiz", "quiz"], {"key": "quiz_completed", "value": True, "predicate": "eq"}),
+            (["submit assignment", "turn in"], {"key": "assignment_submitted", "value": True, "predicate": "eq"}),
+            (["view grade", "see result", "grades"], {"key": "grade_viewed", "value": True, "predicate": "eq"}),
+            (["checkout", "purchase", "buy"], {"key": "purchase_completed", "value": True, "predicate": "eq"}),
+        ]
+
+        goal_lower = goal.lower()
+        clauses = re.split(r"[,;]|\band\b|\bthen\b", goal_lower)
+        criteria: list[dict] = []
+        matched_keys: set[str] = set()
+
+        for clause in clauses:
+            clause = clause.strip()
+            if not clause:
+                continue
+            for keywords, crit in patterns:
+                if any(kw in clause for kw in keywords):
+                    if crit["key"] not in matched_keys:
+                        matched_keys.add(crit["key"])
+                        criteria.append(dict(crit))
+                    break
+
+        if not criteria:
+            for keywords, crit in patterns:
+                if any(kw in goal_lower for kw in keywords):
+                    if crit["key"] not in matched_keys:
+                        matched_keys.add(crit["key"])
+                        criteria.append(dict(crit))
+
+        return criteria
+
+    def _build_route_walk_mission(
+        self, goal: str, base_url: str, title: str, persona: str, elements: list[dict],
+    ) -> DiscoveredMission:
+        """Fallback: emit a single route-walk mission with low confidence."""
         goal_words = [w.lower() for w in goal.split() if len(w) > 2]
         matching_el = next(
             (el for el in elements if any(gw in el.get("name", "").lower() for gw in goal_words)),
             None
         )
         el_name = matching_el.get("name") if matching_el else goal
-
         clean_name = el_name.replace("'", "\\'")
         target_selector = (
             f"button:has-text('{clean_name}'), a:has-text('{clean_name}'), [role='button']:has-text('{clean_name}')"
@@ -2248,33 +2306,121 @@ class ExplorationEngine:
         steps.append({"type": "click", "target": target_selector})
         steps.append({"type": "wait", "value": "2000"})
 
-        # Verify state actually changed after reaching for the goal. Without a
-        # post-action state change there is no honest success signal — the
-        # mission would be unverifiable, so we say so via a state-change check
-        # that the runner reports as UNVERIFIED when the page didn't move.
-        success_condition = {
-            "url_changed_to": {"from": base_url},
-        }
-
+        is_matching = bool(matching_el)
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
             name=goal,
             title=goal,
             description=f"Attempt the goal '{goal}' and verify the application responds by changing state.",
-            objective=f"Verify that {persona} can act on '{el_name}' and the application visibly responds",
+            objective=f"Verify that {persona} can act on '{el_name}' and the application visibly responds" if is_matching else goal,
             persona=persona,
-            category="feature",
+            category="feature" if is_matching else "route_walk",
             journey=[
                 f"Access {title or 'application'}",
                 f"Use the control matching the goal: '{el_name}'",
                 "Verify the application state changes in response",
             ],
             steps=steps,
-            successCondition=success_condition,
-            confidence=0.75 if matching_el else 0.5,
-            recommended=bool(matching_el),
+            successCondition={"url_changed_to": {"from": base_url}},
+            confidence=0.75 if is_matching else 0.3,
+            recommended=is_matching,
+            route_analysis={
+                "accessible": True,
+                "source": "heuristic_fallback",
+                "warning": "" if is_matching else "No matching capabilities found; emitted a route-walk mission. Consider running Product Discovery first.",
+            },
             estimated_time_seconds=15,
         )
+
+    def _find_capability_for_route(self, route: dict, all_capabilities: list[Any]) -> Any | None:
+        """Find a capability from the Product Graph that corresponds to this route."""
+        if not all_capabilities:
+            return None
+        path = (route.get("path") or "").lower()
+        for cap in all_capabilities:
+            cap_name = getattr(cap, "name", "").lower()
+            cap_kind = getattr(cap, "kind", "").lower()
+            if cap_kind == "auth" or "auth" in cap_name or "login" in cap_name:
+                if any(ak in path for ak in ("login", "signin", "signup", "register", "auth")):
+                    return cap
+            clean_path = path.strip("/").replace("-", " ").replace("_", " ")
+            if clean_path:
+                path_words = [w for w in clean_path.split() if len(w) > 3]
+                if any(w in cap_name for w in path_words):
+                    return cap
+                if clean_path in cap_name or cap_name in clean_path:
+                    return cap
+        return None
+
+    async def _build_goal_mission(
+        self, goal: str, base_url: str, title: str, persona: str, elements: list[dict],
+        project_id: uuid.UUID | None = None,
+    ) -> list[DiscoveredMission]:
+        """Build one mission per feature in the goal. Falls back to a single
+        route-walk mission if no criteria can be extracted or no capabilities match.
+        """
+        # 1. Split goal into success_criteria
+        criteria = self._split_goal_into_criteria(goal)
+
+        pid = project_id or self.project_id
+        if not criteria or not pid or not self._db_session:
+            return [self._build_route_walk_mission(goal, base_url, title, persona, elements)]
+
+        try:
+            from app.modules.product_graph.repository import ProductGraphRepository
+            from app.modules.flows.service import FlowService
+
+            pg_repo = ProductGraphRepository(self._db_session)
+            goal_row = await pg_repo.create_goal(
+                project_id=pid,
+                name=goal,
+                description=f"Discovered from exploration goal: {goal}",
+                success_criteria=criteria,
+                source="discovered",
+            )
+
+            flow_service = FlowService(self._db_session)
+            generation_result = await flow_service.generate_flows(
+                project_id=pid,
+                goal_id=goal_row.id,
+            )
+
+            missions: list[DiscoveredMission] = []
+            for flow in generation_result.flows:
+                # Convert internal steps to runner dicts
+                m_steps = [s.to_runner_dict() for s in flow.internal]
+                journey_desc = [
+                    s.description or f"{s.action} {s.target}"
+                    for s in flow.internal
+                ] or [f"Execute {flow.name}"]
+
+                mission = DiscoveredMission(
+                    id=f"mission-{uuid.uuid4().hex[:8]}",
+                    flow_id=getattr(flow, "id", None),
+                    name=flow.name,
+                    title=flow.name,
+                    description=f"Generated feature flow for goal: {goal}",
+                    objective=f"Verify capability workflow for {flow.name}",
+                    persona=persona,
+                    category="feature",
+                    journey=journey_desc,
+                    steps=m_steps,
+                    successCondition=flow.state_contract.model_dump() if flow.state_contract else None,
+                    confidence=max(flow.confidence, 0.85),
+                    recommended=True,
+                    route_analysis={"accessible": True, "source": "deterministic"},
+                    estimated_time_seconds=15,
+                )
+                missions.append(mission)
+
+            if not missions:
+                return [self._build_route_walk_mission(goal, base_url, title, persona, elements)]
+
+            return missions
+        except Exception as e:
+            logger.warning("Error generating feature flows from goal: %s", e)
+            return [self._build_route_walk_mission(goal, base_url, title, persona, elements)]
+
 
     def _build_auth_mission(
         self, auth_route: dict, base_url: str, title: str, persona: str,
@@ -2570,13 +2716,23 @@ class ExplorationEngine:
         )
 
     def _build_feature_mission(
-        self, route: dict, base_url: str, title: str, persona: str, recommended: bool = False
+        self,
+        route: dict,
+        base_url: str,
+        title: str,
+        persona: str,
+        recommended: bool = False,
+        all_capabilities: list[Any] | None = None,
     ) -> DiscoveredMission | None:
         """Build a navigation journey that proves the destination was reached.
 
         Verification = URL actually reflects the target route AND the page has
         meaningful content (not just a structural container existing).
         """
+        if all_capabilities:
+            cap = self._find_capability_for_route(route, all_capabilities)
+            if not cap:
+                return None
         path = route["path"]
         feature_name = route["text"] or path.split("/")[-1].replace("-", " ").title()
         is_settings_like = any(sk in path.lower() for sk in ["settings", "profile", "account", "preference"])
