@@ -406,3 +406,33 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_billing.py backend/tests/integration/test_billing_webhook.py -v` (6 passed)
   - `pnpm --prefix frontend build` (22/22 static/dynamic routes compiled successfully)
+
+## Chunk 18 — Launch Checklist, Security Audit, Runbooks, ADR-002, and Master Smoke Tests
+- **Status:** Done
+- **Changes:**
+  - Launch Readiness & Documentation:
+    - Authored Master Launch Checklist in `docs/launch-checklist.md` with explicit sign-off criteria covering Infrastructure, Security, Product, SRE, and Compliance.
+    - Authored Phase 3 Security Review in `docs/security-review-phase-3.md` detailing OWASP top 10 controls, SSRF protections, token scoping, Fernet symmetric encryption, and audit log scrubbing.
+    - Authored Operational Rollback Runbook in `docs/runbooks/launch-rollback.md` covering Alembic schema rollback, container rollback, Canary abort triggers, and status page comms.
+    - Authored Architectural Decision Record `docs/adr/ADR-002-product-graph-architecture.md` detailing the Product Graph model, state contract resolution, and change impact engine.
+    - Appended Section 8 to `AUDIT.md` ("Phase 3 Production Launch Security Audit") covering authenticated session isolation, SSRF defenses, Fernet credential encryption, rate limiting, and observability.
+  - Automated Launch Readiness CI:
+    - Authored `.github/workflows/launch-readiness.yml` running linters, full backend unit/integration tests, launch smoke suites, security invariant audits, and frontend Next.js compilation.
+  - Master Smoke Suite & Security Invariant Tests:
+    - `backend/tests/smoke/test_onboarding_journey.py`: End-to-end registration, project setup, credential configuration, step progression, and CI validation trigger.
+    - `backend/tests/smoke/test_pr_integration_journey.py`: GitHub PR webhook handling, signature verification, impact analysis, and PR markdown comment formatting.
+    - `backend/tests/smoke/test_billing_journey.py`: Free tier quotas, monthly usage metering, 402 upgrade barriers, and customer portal session generation.
+    - `backend/tests/smoke/test_degradation_modes.py`: Deterministic fallback when AI is unavailable, graceful handling of S3 upload failures, and 503 response on database disconnection.
+    - `backend/tests/smoke/test_security_invariants.py`: Production JWT secret length validation, dev-user fallback rejection, SSRF blocklist (metadata IP & private CIDRs), sensitive field redaction, and vacuous expectation rejection.
+  - Smoke Automation Scripts:
+    - `scripts/smoke/run_smoke.sh`: Executes the full 5-file launch smoke test suite.
+    - `scripts/smoke/run_security_audit.sh`: Performs static analysis (rejecting demo endpoints) and security invariant test execution.
+  - Frontend E2E Mock Tests:
+    - `frontend/__tests__/onboarding.e2e.ts` and `frontend/__tests__/billing.e2e.ts`.
+- **Tests Passing:**
+  - `./scripts/smoke/run_smoke.sh` (11 passed)
+  - `./scripts/smoke/run_security_audit.sh` (5 passed)
+  - `frontend/node_modules/.bin/tsx --test 'frontend/__tests__/**/*.e2e.ts'` (4 passed)
+  - `pnpm --prefix frontend test` (45 passed)
+  - `pnpm --prefix frontend build` (22/22 routes compiled successfully)
+

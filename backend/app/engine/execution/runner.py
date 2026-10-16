@@ -433,96 +433,96 @@ class FlowRunner:
                         ctx.session_manager = SessionManager()
 
                     for p_step in prereq_steps:
-                    is_auth = (
-                        any("auth" in str(getattr(a, "key", "")).lower() or getattr(a, "key", "") in ("authenticated", f"authenticated:{persona}") for a in p_step.establishes)
-                        or "auth" in getattr(p_step, "flow_name", "").lower()
-                    )
-                    if is_auth:
-                        cred = None
-                        for cid in ctx.credentials.list_ids():
-                            c = ctx.credentials.get(cid)
-                            if c:
-                                cred = c
-                                break
-                        auth_cap = AuthCapability(
-                            project_id=getattr(target_flow_obj, "project_id", uuid.uuid4()),
-                            name=p_step.flow_name or "Authenticate",
-                            login_url=target_url or "/login",
-                            persona=persona,
+                        is_auth = (
+                            any("auth" in str(getattr(a, "key", "")).lower() or getattr(a, "key", "") in ("authenticated", f"authenticated:{persona}") for a in p_step.establishes)
+                            or "auth" in getattr(p_step, "flow_name", "").lower()
                         )
-                        try:
-                            session_state, was_reused = await ctx.session_manager.get_or_establish(
-                                execution_id=exec_id,
+                        if is_auth:
+                            cred = None
+                            for cid in ctx.credentials.list_ids():
+                                c = ctx.credentials.get(cid)
+                                if c:
+                                    cred = c
+                                    break
+                            auth_cap = AuthCapability(
+                                project_id=getattr(target_flow_obj, "project_id", uuid.uuid4()),
+                                name=p_step.flow_name or "Authenticate",
+                                login_url=target_url or "/login",
                                 persona=persona,
-                                capability=auth_cap,
-                                browser=browser,
-                                credential=cred,
-                                authenticator=Authenticator(),
-                                event_recorder=event_recorder,
                             )
-                            ctx.current_state[f"authenticated:{persona}"] = True
-                            ctx.current_state["authenticated"] = True
-                            ctx.current_state.pop("authenticated:False", None)
-                            for a in p_step.establishes:
-                                ctx.current_state[a.key] = a.value
-                            ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
-                                "flow_id": p_step.flow_id,
-                                "flow_name": p_step.flow_name,
-                                "established_state": dict(ctx.current_state),
-                                "was_reused": was_reused,
-                            })
-                            await self._emit_events(ctx, event_recorder)
-                        except Exception as auth_err:
-                            logger.warning("Auth prerequisite resolution failed: %s", auth_err)
-                            ctx.transition(ExecutionState.PREREQUISITE_FAILED)
-                            ctx.record_event(EventTypes.PREREQUISITE_FAILED, {
-                                "flow_id": p_step.flow_id,
-                                "error": str(auth_err),
-                            })
-                            await self._emit_events(ctx, event_recorder)
-                            return {
-                                "success": False,
-                                "execution_id": str(execution_id),
-                                "error": f"Prerequisite auth failed: {auth_err}",
-                                "error_code": "PREREQUISITE_FAILED",
-                                "state": "UNVERIFIED",
-                                "current_state": ctx.current_state,
-                                "events": ctx.events,
-                                "observations": ctx.observations,
-                            }
-                    else:
-                        prereq_flow = by_id_map.get(p_step.flow_id)
-                        if prereq_flow:
-                            prereq_steps_list = getattr(prereq_flow, "steps", []) or []
-                            for dep_step in prereq_steps_list:
-                                if await is_cancel_requested(exec_id):
-                                    return {
-                                        "success": False,
-                                        "execution_id": str(execution_id),
-                                        "error": "Execution cancelled during prerequisite setup",
-                                        "error_code": ErrorCode.CANCELLED,
-                                        "state": "CANCELLED",
-                                        "current_state": ctx.current_state,
-                                        "events": ctx.events,
-                                        "observations": ctx.observations,
-                                    }
-                                await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
-                                await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, ctx.current_step_index, event_recorder)
-                                ctx.current_step_index += 1
+                            try:
+                                session_state, was_reused = await ctx.session_manager.get_or_establish(
+                                    execution_id=exec_id,
+                                    persona=persona,
+                                    capability=auth_cap,
+                                    browser=browser,
+                                    credential=cred,
+                                    authenticator=Authenticator(),
+                                    event_recorder=event_recorder,
+                                )
+                                ctx.current_state[f"authenticated:{persona}"] = True
+                                ctx.current_state["authenticated"] = True
+                                ctx.current_state.pop("authenticated:False", None)
+                                for a in p_step.establishes:
+                                    ctx.current_state[a.key] = a.value
+                                ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
+                                    "flow_id": p_step.flow_id,
+                                    "flow_name": p_step.flow_name,
+                                    "established_state": dict(ctx.current_state),
+                                    "was_reused": was_reused,
+                                })
+                                await self._emit_events(ctx, event_recorder)
+                            except Exception as auth_err:
+                                logger.warning("Auth prerequisite resolution failed: %s", auth_err)
+                                ctx.transition(ExecutionState.PREREQUISITE_FAILED)
+                                ctx.record_event(EventTypes.PREREQUISITE_FAILED, {
+                                    "flow_id": p_step.flow_id,
+                                    "error": str(auth_err),
+                                })
+                                await self._emit_events(ctx, event_recorder)
+                                return {
+                                    "success": False,
+                                    "execution_id": str(execution_id),
+                                    "error": f"Prerequisite auth failed: {auth_err}",
+                                    "error_code": "PREREQUISITE_FAILED",
+                                    "state": "UNVERIFIED",
+                                    "current_state": ctx.current_state,
+                                    "events": ctx.events,
+                                    "observations": ctx.observations,
+                                }
+                        else:
+                            prereq_flow = by_id_map.get(p_step.flow_id)
+                            if prereq_flow:
+                                prereq_steps_list = getattr(prereq_flow, "steps", []) or []
+                                for dep_step in prereq_steps_list:
+                                    if await is_cancel_requested(exec_id):
+                                        return {
+                                            "success": False,
+                                            "execution_id": str(execution_id),
+                                            "error": "Execution cancelled during prerequisite setup",
+                                            "error_code": ErrorCode.CANCELLED,
+                                            "state": "CANCELLED",
+                                            "current_state": ctx.current_state,
+                                            "events": ctx.events,
+                                            "observations": ctx.observations,
+                                        }
+                                    await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
+                                    await self._execute_step_with_retry(ctx, browser, action_executor, dep_step, ctx.current_step_index, event_recorder)
+                                    ctx.current_step_index += 1
 
-                            prereq_contract = getattr(prereq_flow, "state_contract", None)
-                            if prereq_contract and hasattr(prereq_contract, "produces"):
-                                for prod in prereq_contract.produces:
-                                    ctx.current_state[prod.key] = prod.value
-                            for a in p_step.establishes:
-                                ctx.current_state[a.key] = a.value
+                                prereq_contract = getattr(prereq_flow, "state_contract", None)
+                                if prereq_contract and hasattr(prereq_contract, "produces"):
+                                    for prod in prereq_contract.produces:
+                                        ctx.current_state[prod.key] = prod.value
+                                for a in p_step.establishes:
+                                    ctx.current_state[a.key] = a.value
 
-                            ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
-                                "flow_id": p_step.flow_id,
-                                "flow_name": p_step.flow_name,
-                                "established_state": dict(ctx.current_state),
-                            })
-                            await self._emit_events(ctx, event_recorder)
+                                ctx.record_event(EventTypes.PREREQUISITE_RESOLVED, {
+                                    "flow_id": p_step.flow_id,
+                                    "flow_name": p_step.flow_name,
+                                    "established_state": dict(ctx.current_state),
+                                })
+                                await self._emit_events(ctx, event_recorder)
 
             # Step 6: Contamination detection
             conflicting_keys = []

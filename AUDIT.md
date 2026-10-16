@@ -154,3 +154,30 @@ All critical behaviors are covered by automated unit and integration tests under
 ## 7. Conclusion
 
 Kova has reached a fully verified, production-ready milestone. The platform enforces defense-in-depth across authentication, credential storage, and browser network isolation, while maintaining deterministic outcome guarantees and strict constraints on generative AI assistance.
+
+---
+
+## 8. Phase 3 Production Launch Security Audit (Chunks 01–17)
+
+Following the implementation of continuous validation, multi-tenant RBAC, enterprise cryptographic isolation, full-stack observability, and Stripe billing surfaces, a secondary comprehensive forensic audit was conducted on October 16, 2026.
+
+### 8.1 Multi-Tenant RBAC & Cryptographic Isolation
+- **Organization & Project RBAC**: Added `organizations`, `organization_members`, and `project_members` models with explicit role hierarchies (`owner` > `admin` > `member` for orgs, and `admin` > `tester` > `viewer` for projects).
+- **Tenant Isolation**: All queries enforce organization ownership checks. Cross-tenant access is rejected with HTTP 403.
+- **Enterprise Envelope Encryption**: Enterprise organizations receive dedicated Data Encryption Keys (DEKs) wrapped by the master key (`wrapped_dek`). Tenant data is encrypted with their respective DEK, preventing data decryption even under accidental cross-tenant read leaks.
+- **Audit Logging**: Comprehensive `audit_events` logging with recursive scrubbing of sensitive keys (`password`, `token`, `secret`, `cookie`, `key`, `auth`).
+
+### 8.2 Scoped API Tokens & Rate Limiting
+- **Fine-Grained Scopes**: API tokens now support fine-grained scopes (`ci:validate`, `projects:read`, `org:manage`, `*`). Tokens are hashed at rest via SHA-256 and shown exactly once upon creation.
+- **Distributed Rate Limiting**: Redis sliding window rate limiter (`60 requests/minute/user`) with memory fallback and fail-open backoff if Redis is unavailable.
+
+### 8.3 Observability Data Privacy & Metrics Protection
+- **Structured JSON Logging**: Central `RedactionFilter` scrubs credentials and secrets before logs reach stdout or Sentry.
+- **Metrics Allowlisting**: `GET /metrics` enforces CIDR allowlisting in production environments (`PROMETHEUS_ALLOWED_IPS`).
+- **Path Normalization**: Prometheus request metrics normalize path parameters (`/projects/{uuid}`) to eliminate high-cardinality DDoS attacks on metrics storage.
+
+### 8.4 Billing Security & Plan Enforcement
+- **Webhook Signature Verification**: Stripe webhooks strictly require valid `Stripe-Signature` verification.
+- **No Client Plan Mutation**: Plan changes are driven exclusively by verified Stripe webhook events.
+- **Quota & Limit Enforcement**: When free tier exceeds 50 executions/month, `POST /api/v1/ci/validate` returns HTTP 402 Payment Required with an upgrade URL.
+
