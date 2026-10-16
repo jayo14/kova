@@ -1,6 +1,34 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import { Bricolage_Grotesque, Instrument_Serif, DM_Sans, DM_Mono } from "next/font/google";
 import "./globals.css";
+
+const bricolage = Bricolage_Grotesque({
+  subsets: ["latin"],
+  variable: "--font-bricolage",
+  display: "swap",
+});
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
+  variable: "--font-instrument-serif",
+  display: "swap",
+});
+
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  variable: "--font-dm-sans",
+  display: "swap",
+});
+
+const dmMono = DM_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-dm-mono",
+  display: "swap",
+});
 
 const satoshi = localFont({
   src: [
@@ -30,8 +58,8 @@ const satoshi = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Kova",
-  description: "Autonomous software-use agent",
+  title: "Kova — Autonomous software agent",
+  description: "Give Kova a website and a goal. It explores the product, figures out what needs to happen, and executes the journey like a real user.",
 };
 
 export default function RootLayout({
@@ -40,7 +68,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" data-scroll-behavior="smooth" className={`${satoshi.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      data-scroll-behavior="smooth"
+      className={`${satoshi.variable} ${bricolage.variable} ${instrumentSerif.variable} ${dmSans.variable} ${dmMono.variable} h-full antialiased`}
+    >
       <head>
         <script
           dangerouslySetInnerHTML={{
