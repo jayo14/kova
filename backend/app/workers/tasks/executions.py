@@ -133,6 +133,31 @@ async def _run_execution_async(task, execution_id: str):
         project = await project_repo.get_by_id(flow.project_id)
         target_url = flow_snapshot.get("target_url", project.base_url if project else "")
 
+        # Resolve organization and enforce concurrent execution quota
+        org_id = project.org_id if project else None
+        if not org_id and project:
+            from app.modules.organizations.repository import OrganizationRepository
+            org_repo = OrganizationRepository(db)
+            primary_org = await org_repo.get_user_primary_org(project.user_id)
+            org_id = primary_org.id if primary_org else None
+
+        from app.modules.organizations.service import OrganizationService
+        org_service = OrganizationService(db) if org_id else None
+        slot_acquired = False
+        if org_service and org_id:
+            slot_acquired = await org_service.acquire_execution_slot(org_id, queue_timeout=300)
+            if not slot_acquired:
+                logger.warning("Org %s at capacity, failing execution %s", org_id, execution_id)
+                await exec_repo.update_status(
+                    exec_uuid,
+                    ExecutionStatus.FAILED,
+                    error_code="ORG_AT_CAPACITY",
+                    error_message="Organization concurrent execution quota exceeded (org_at_capacity)",
+                )
+                await event_svc.record(exec_uuid, EventTypes.EXECUTION_FAILED, {"error": "org_at_capacity"})
+                await db.commit()
+                return {"status": "failed", "reason": "org_at_capacity"}
+
         # Honor a cancellation that arrived between dispatch and pickup
         from app.engine.execution.control import is_cancel_requested
         if await is_cancel_requested(execution_id):
@@ -141,6 +166,8 @@ async def _run_execution_async(task, execution_id: str):
                 await exec_repo.update_status(exec_uuid, ExecutionStatus.CANCELLED)
             await event_svc.record_execution_cancelled(exec_uuid)
             await db.commit()
+            if slot_acquired and org_service and org_id:
+                await org_service.release_execution_slot(org_id)
             logger.info("Execution %s cancelled before start", execution_id)
             return {"status": "cancelled", "execution_id": execution_id}
 
@@ -322,3 +349,9 @@ async def _run_execution_async(task, execution_id: str):
                 logger.exception("Failed to persist execution failure for %s", execution_id)
 
             raise
+        finally:
+            if slot_acquired and org_service and org_id:
+                try:
+                    await org_service.release_execution_slot(org_id)
+                except Exception as rel_err:
+                    logger.warning("Failed to release execution slot for org %s: %s", org_id, rel_err)

@@ -33,4 +33,10 @@ class Project(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    org_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
+    )
+
     user = relationship("User", backref="projects")
+    organization = relationship("Organization", back_populates="projects")
+    members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")

@@ -36,8 +36,9 @@ async def get_current_user(
     if not token:
         if not settings.is_production and not settings.OIDC_ISSUER_URL:
             default_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
-            user_repo = UserRepository(db)
-            return await user_repo.get_or_create(default_id, "dev@kova.local", "Dev User")
+            user = await user_repo.get_or_create(default_id, "dev@kova.local", "Dev User")
+            user._token_scopes = ["*"]
+            return user
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated",
@@ -58,6 +59,7 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found",
             )
+        user._token_scopes = api_token.scopes if getattr(api_token, "scopes", None) else ["*"]
         return user
 
     secret = _get_jwt_secret()
@@ -112,6 +114,7 @@ async def get_current_user(
 
     user_repo = UserRepository(db)
     user = await user_repo.get_or_create(user_id, email, name)
+    user._token_scopes = ["*"]
     return user
 
 

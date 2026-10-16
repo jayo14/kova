@@ -9,9 +9,10 @@ from redis.asyncio import Redis
 
 import sentry_sdk
 
-from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, projects, viewport
+from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, organizations, projects, viewport
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
+from app.modules.auth.rate_limiter import rate_limiter
 
 
 # Initialize Sentry SDK before FastAPI app initialization
@@ -141,8 +142,37 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
     return await server_error_handler(request, exc)
 
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    # Exclude health endpoints, docs, and CI endpoints
+    path = request.url.path
+    if (
+        path.startswith("/health")
+        or path in ("/api/v1/health", "/api/v1/health/ready", "/", "/docs", "/openapi.json", "/redoc")
+        or path.startswith("/api/v1/ci")
+    ):
+        return await call_next(request)
+
+    auth_header = request.headers.get("authorization", "")
+    token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
+    client_id = f"tok_{token[:16]}" if token else (request.client.host if request.client else "anon")
+
+    allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=60, window_seconds=60)
+    if not allowed:
+        headers = _cors_headers_for_request(request)
+        headers["Retry-After"] = str(retry_after)
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Rate limit exceeded"},
+            headers=headers,
+        )
+    return await call_next(request)
+
+
 app.include_router(auth.router)
 app.include_router(auth.router, prefix="/api/v1")
+app.include_router(organizations.router, prefix="/api/v1")
+app.include_router(organizations.project_members_router, prefix="/api/v1")
 app.include_router(ci.router, prefix="/api/v1")
 app.include_router(projects.router, prefix="/api/v1")
 app.include_router(credentials.router, prefix="/api/v1")
