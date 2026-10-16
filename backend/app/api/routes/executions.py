@@ -16,7 +16,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import get_current_user, get_session
@@ -520,7 +520,7 @@ async def refresh_evidence_url(
     return {"url": signed_url}
 
 
-REPORT_SIGNATURE_TTL_SECONDS = 900
+REPORT_SIGNATURE_TTL_SECONDS = 7 * 86400
 
 
 def _generate_report_signature(execution_id: uuid.UUID, expires_at: int | None = None) -> str:
@@ -538,7 +538,7 @@ def _verify_report_signature(execution_id: uuid.UUID, signature: str) -> bool:
         expires_at = int(expiry_text)
     except (ValueError, TypeError):
         return False
-    if expires_at < int(time.time()) or expires_at > int(time.time()) + REPORT_SIGNATURE_TTL_SECONDS + 30:
+    if expires_at < int(time.time()):
         return False
     expected = _generate_report_signature(execution_id, expires_at).split(".", 1)[1]
     return hmac.compare_digest(expected, supplied)
@@ -762,6 +762,17 @@ async def get_execution_report(
     if signature:
         if not _verify_report_signature(exec_uuid, signature):
             raise HTTPException(status_code=401, detail="Invalid report signature")
+
+        from app.modules.validation.models import SignedUrlModel
+        su_check = await db.execute(
+            select(SignedUrlModel).where(
+                SignedUrlModel.execution_id == exec_uuid,
+                SignedUrlModel.signature == signature,
+            )
+        )
+        if not su_check.scalar_one_or_none():
+            raise HTTPException(status_code=403, detail="Signed URL has been revoked")
+
         stmt = select(Execution).where(Execution.id == exec_uuid)
         res = await db.execute(stmt)
         execution = res.scalar_one_or_none()
@@ -822,7 +833,28 @@ async def get_execution_report(
 
     sig = _generate_report_signature(exec_uuid)
     base_url = str(request.base_url).rstrip("/")
-    shareable_url = None if signature else f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
+    shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
+
+    from app.modules.validation.models import SignedUrlModel
+    from datetime import datetime, timezone
+    su_check = await db.execute(select(SignedUrlModel).where(SignedUrlModel.signature == sig))
+    if not su_check.scalar_one_or_none():
+        expiry_ts = int(sig.split(".", 1)[0])
+        expires_dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
+        db.add(
+            SignedUrlModel(
+                id=uuid.uuid4(),
+                execution_id=exec_uuid,
+                url=shareable_url,
+                signature=sig,
+                expires_at=expires_dt,
+                created_by=user.id if user else None,
+            )
+        )
+        await db.commit()
+
+    if signature:
+        shareable_url = None
 
     duration_ms = None
     if execution.started_at and execution.completed_at:
@@ -915,6 +947,76 @@ async def get_execution_report(
     if format != "json":
         report_response["html"] = html_content
     return report_response
+
+
+@router.post("/{execution_id}/share")
+async def share_execution_report(
+    execution_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        exec_uuid = uuid.UUID(execution_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid execution ID")
+
+    execution = await _verify_execution_ownership(db, exec_uuid, user.id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    from app.modules.validation.models import SignedUrlModel
+    from datetime import datetime, timezone
+
+    sig = _generate_report_signature(exec_uuid)
+    base_url = str(request.base_url).rstrip("/")
+    shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
+
+    expiry_ts = int(sig.split(".", 1)[0])
+    expires_dt = datetime.fromtimestamp(expiry_ts, tz=timezone.utc)
+
+    # Persist in SignedUrlModel
+    signed_url_record = SignedUrlModel(
+        id=uuid.uuid4(),
+        execution_id=exec_uuid,
+        url=shareable_url,
+        signature=sig,
+        expires_at=expires_dt,
+        created_by=user.id,
+    )
+    db.add(signed_url_record)
+    await db.commit()
+
+    return {
+        "url": shareable_url,
+        "signature": sig,
+        "expires_at": expires_dt.isoformat(),
+    }
+
+
+@router.delete("/{execution_id}/share")
+async def revoke_execution_report(
+    execution_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    try:
+        exec_uuid = uuid.UUID(execution_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid execution ID")
+
+    execution = await _verify_execution_ownership(db, exec_uuid, user.id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    from app.modules.validation.models import SignedUrlModel
+
+    stmt = delete(SignedUrlModel).where(SignedUrlModel.execution_id == exec_uuid)
+    await db.execute(stmt)
+    await db.commit()
+
+    return {"status": "revoked"}
+
 
 
 # ---------------------------------------------------------------------------

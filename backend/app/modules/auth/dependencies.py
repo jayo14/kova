@@ -23,6 +23,7 @@ async def get_current_user(
     request: Request = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
+    user_repo = UserRepository(db)
     token = None
     if credentials and hasattr(credentials, "credentials"):
         token = credentials.credentials
@@ -123,6 +124,17 @@ async def get_optional_current_user(
     request: Request = None,
     db: AsyncSession = Depends(get_session),
 ) -> User | None:
+    token = None
+    if credentials and hasattr(credentials, "credentials"):
+        token = credentials.credentials
+    if not token and request is not None:
+        token = request.headers.get("x-api-key")
+        if not token:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.lower().startswith("bearer "):
+                token = auth_header[7:].strip()
+    if not token:
+        return None
     try:
         return await get_current_user(credentials=credentials, request=request, db=db)
     except HTTPException:

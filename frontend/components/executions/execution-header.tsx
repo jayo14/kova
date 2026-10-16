@@ -15,6 +15,10 @@ interface ExecutionHeaderProps {
   onStopClick?: () => void;
   onRetryClick?: () => void;
   isRetrying?: boolean;
+  onShareClick?: () => void;
+  onExportPdfClick?: () => void;
+  isSharing?: boolean;
+  shareSuccess?: string | null;
 }
 
 function formatHostname(url: string): string {
@@ -31,6 +35,10 @@ export function ExecutionHeader({
   onStopClick,
   onRetryClick,
   isRetrying = false,
+  onShareClick,
+  onExportPdfClick,
+  isSharing = false,
+  shareSuccess = null,
 }: ExecutionHeaderProps) {
   const statusConfig = getExecutionStatusConfig(execution.status);
   const isActive = isActiveStatus(execution.status);
@@ -128,6 +136,37 @@ export function ExecutionHeader({
 
         {/* Header Action Buttons */}
         <div className="flex items-center gap-2 shrink-0">
+          {!isActive && onShareClick && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onShareClick}
+              disabled={isSharing}
+              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
+              title="Copy signed, shareable audit report link"
+            >
+              <MaterialIcon
+                name={shareSuccess ? "check" : "share"}
+                size={16}
+                className={shareSuccess ? "text-emerald-500" : "text-muted-foreground"}
+              />
+              <span>{shareSuccess ? "Copied!" : "Share"}</span>
+            </Button>
+          )}
+
+          {!isActive && onExportPdfClick && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onExportPdfClick}
+              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
+              title="Open print-ready report in new window"
+            >
+              <MaterialIcon name="picture_as_pdf" size={16} className="text-muted-foreground" />
+              <span>Export PDF</span>
+            </Button>
+          )}
+
           {isActive && onStopClick && (
             <Button
               variant="outline"
@@ -160,3 +199,4 @@ export function ExecutionHeader({
     </div>
   );
 }
+

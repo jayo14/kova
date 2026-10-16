@@ -226,13 +226,14 @@ export async function getExecutionEvents(
 }
 
 export async function createExecution(
-  missionId: string,
+  target: string | { flow_id?: string; mission_id?: string; flowId?: string; missionId?: string },
   token?: string
 ): Promise<ExecutionDetail | null> {
-  if (!missionId) return null;
+  const targetId = typeof target === "string" ? target : (target?.flow_id || target?.mission_id || target?.flowId || target?.missionId);
+  if (!targetId) return null;
   try {
     const ex = await api.post<BackendExecution>(
-      `/api/v1/flows/${encodeURIComponent(missionId)}/executions`,
+      `/api/v1/flows/${encodeURIComponent(targetId)}/executions`,
       undefined,
       { token, timeoutMs: 30000 }
     );
@@ -242,6 +243,39 @@ export async function createExecution(
     return null;
   }
 }
+
+export async function mintShareableUrl(
+  executionId: string,
+  token?: string
+): Promise<{ url: string; signature: string; expires_at: string } | null> {
+  if (!executionId) return null;
+  try {
+    return await api.post<{ url: string; signature: string; expires_at: string }>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/share`,
+      undefined,
+      { token, timeoutMs: 15000 }
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function revokeShareableUrl(
+  executionId: string,
+  token?: string
+): Promise<boolean> {
+  if (!executionId) return false;
+  try {
+    await api.delete(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/share`,
+      token
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 
 export async function runBatchExecutions(
   executionIds: string[],

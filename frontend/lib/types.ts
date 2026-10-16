@@ -83,6 +83,8 @@ export interface SuggestedMission {
   expectationSource?: "observed" | "inferred" | "unspecified";
   reviewRequired?: boolean;
   discoveryEvidence?: Array<Record<string, unknown>>;
+  flowId?: string;
+  promoted?: boolean;
 }
 
 export interface CredentialRequest {
@@ -275,6 +277,7 @@ export interface Mission {
   providesCapabilities?: string[];
   repeatability?: "repeatable" | "non_repeatable";
   resetStrategy?: string | null;
+  active?: boolean;
   createdAt: string;
   updatedAt: string;
   version?: number;

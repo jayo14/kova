@@ -28,8 +28,12 @@ from app.modules.exploration.schemas import (
     ExplorationCreateAccount,
     ExplorationEventRead,
     ExplorationRead,
+    PromoteMissionRequest,
 )
 from app.modules.exploration.service import ExplorationService
+from app.modules.auth.rbac import verify_project_role
+from app.modules.flows.schemas import FlowRead
+from app.modules.flows.service import FlowService
 from app.modules.users.models import User
 
 logger = logging.getLogger(__name__)
@@ -207,6 +211,62 @@ async def navigate_exploration(
         )
 
     return result
+
+
+@router.post("/{session_id}/missions/{mission_id}/promote", response_model=FlowRead, status_code=status.HTTP_201_CREATED)
+@router.post("/{session_id}/missions/{mission_id}:promote", response_model=FlowRead, status_code=status.HTTP_201_CREATED)
+async def promote_mission(
+    session_id: str,
+    mission_id: str,
+    data: PromoteMissionRequest = PromoteMissionRequest(),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Promote an exploration candidate mission into a project Flow."""
+    session = await _get_authorized_session(session_id, user.id, db)
+
+    target_mission = None
+    target_idx = -1
+    for idx, m in enumerate(session.candidate_missions or []):
+        if str(m.get("id")) == mission_id or str(m.get("flow_id")) == mission_id:
+            target_mission = m
+            target_idx = idx
+            break
+
+    if target_mission is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Candidate mission '{mission_id}' not found in exploration session",
+        )
+
+    resolved_project_id = data.project_id or session.project_id
+    if not resolved_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot promote mission without an associated project",
+        )
+
+    await verify_project_role(db, resolved_project_id, user, min_role="tester")
+
+    flow_service = FlowService(db)
+    flow = await flow_service.create_from_mission(
+        project_id=resolved_project_id,
+        mission=target_mission,
+        user_id=user.id,
+        activate_immediately=data.activate_immediately,
+        name=data.name,
+    )
+
+    updated_missions = list(session.candidate_missions or [])
+    if 0 <= target_idx < len(updated_missions):
+        updated_entry = dict(updated_missions[target_idx])
+        updated_entry["promoted"] = True
+        updated_entry["flow_id"] = str(flow.id)
+        updated_missions[target_idx] = updated_entry
+        session_repo = ExplorationRepository(db)
+        await session_repo.update_status(session.id, candidate_missions=updated_missions)
+
+    return flow
 
 
 @router.get("/{session_id}/events", response_model=list[ExplorationEventRead])

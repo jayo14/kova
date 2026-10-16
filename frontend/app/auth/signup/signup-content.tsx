@@ -99,12 +99,12 @@ export function SignupContent() {
         return;
       }
 
-      // Check for custom redirect or default to dashboard
+      // Check for custom redirect or default to onboarding
       const redirectParam = searchParams.get("redirect");
       if (redirectParam && redirectParam.startsWith("/")) {
         router.push(redirectParam);
       } else {
-        router.push("/dashboard");
+        router.push("/onboarding");
       }
       router.refresh();
     } catch (err) {

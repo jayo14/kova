@@ -156,8 +156,9 @@ export function MissionDetailHeader({
 
           <Button
             onClick={handleRun}
-            disabled={isRunning}
+            disabled={isRunning || mission.active === false}
             size="sm"
+            title={mission.active === false ? "Activate this mission to run" : "Run mission"}
             className="gap-1.5 rounded-xl font-medium shadow-sm"
           >
             {isRunning ? (

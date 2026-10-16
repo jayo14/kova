@@ -219,3 +219,79 @@ async def test_exploration_list_and_use_existing_credentials(client, db_session,
     assert executed_creds["credential"]["email"] == "existing-user@testplatform.io"
     assert executed_creds["credential"]["password"] == "StoredSecretPassword123!"
 
+
+@pytest.mark.asyncio
+async def test_promote_mission_endpoint(client, db_session):
+    from app.modules.projects.models import Project
+    from app.modules.exploration.repository import ExplorationRepository
+    from app.modules.exploration.models import ExplorationStatus
+    from app.modules.users.models import User
+    from sqlalchemy import select
+
+    # Find the current test user
+    stmt = select(User).where(User.email == "explorer@kova.test")
+    res = await db_session.execute(stmt)
+    user = res.scalar_one()
+
+    # Create a project for this user
+    project = Project(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="Target Project",
+        base_url="https://app.target.io",
+    )
+    db_session.add(project)
+    await db_session.flush()
+
+    # Create an exploration session with candidate missions
+    repo = ExplorationRepository(db_session)
+    session = await repo.create(
+        user_id=user.id,
+        url="https://app.target.io",
+        goal="explore site",
+        project_id=project.id,
+    )
+    candidate_missions = [
+        {
+            "id": "mission-alpha-1",
+            "title": "User Profile Edit",
+            "description": "Edit display name in profile",
+            "category": "feature",
+            "steps": [
+                {"action": "navigate", "url": "https://app.target.io/profile"},
+                {"action": "fill", "target": "input#name", "value": "New Name"},
+            ],
+            "successCondition": {"element_visible": {"selector": ".toast-success"}},
+            "confidence": 0.9,
+        }
+    ]
+    await repo.update_status(session.id, status=ExplorationStatus.READY, candidate_missions=candidate_missions)
+    await db_session.commit()
+
+    # 1. Test successful promotion
+    res = await client.post(
+        f"/api/v1/exploration/{session.id}/missions/mission-alpha-1/promote",
+        json={"activate_immediately": True},
+    )
+    assert res.status_code == 201, res.text
+    flow_data = res.json()
+    assert flow_data["name"] == "User Profile Edit"
+    assert flow_data["project_id"] == str(project.id)
+    assert flow_data["source"] == "user_provided"
+    assert flow_data["active"] is True
+    assert flow_data["capability"] == "feature"
+    assert flow_data["success_condition"] == {"element_visible": {"selector": ".toast-success"}}
+
+    # 2. Verify candidate_missions updated with promoted=True and flow_id
+    updated_session = await repo.get_by_id(session.id)
+    m = updated_session.candidate_missions[0]
+    assert m["promoted"] is True
+    assert m["flow_id"] == flow_data["id"]
+
+    # 3. Test 404 for nonexistent mission
+    bad_res = await client.post(
+        f"/api/v1/exploration/{session.id}/missions/mission-nonexistent/promote",
+        json={},
+    )
+    assert bad_res.status_code == 404
+

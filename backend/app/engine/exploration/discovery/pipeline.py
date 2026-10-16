@@ -119,6 +119,8 @@ class DiscoveryPipeline:
                 v = mut.value if hasattr(mut, "value") else (mut.get("value") if isinstance(mut, dict) else None)
                 if k:
                     crit.append(StateAssertion(key=k, value=v, predicate="eq"))
+            if not crit and cap.name:
+                crit.append(StateAssertion(key=cap.name, value=True, predicate="eq"))
             goals.append(
                 Goal(
                     project_id=self.project_id,

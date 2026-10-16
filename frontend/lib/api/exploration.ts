@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types";
 import { api, getApiBaseUrl, getBrowserSessionToken } from "./client";
 import { backendToCredential, type BackendCredential } from "./credentials";
+import type { BackendFlow } from "./missions";
 
 export interface BackendExplorationSession {
   id: string;
@@ -218,6 +219,30 @@ export async function navigateExploration(
   return await api.post(
     `/api/v1/exploration/${encodeURIComponent(sessionId)}/navigate/${action}`,
     undefined,
+    token
+  );
+}
+
+/**
+ * Promote an exploration candidate mission into a project Flow.
+ */
+export async function promoteMission(
+  sessionId: string,
+  missionId: string,
+  options?: {
+    projectId?: string;
+    activateImmediately?: boolean;
+    name?: string;
+  },
+  token?: string
+): Promise<BackendFlow> {
+  return await api.post<BackendFlow>(
+    `/api/v1/exploration/${encodeURIComponent(sessionId)}/missions/${encodeURIComponent(missionId)}/promote`,
+    {
+      project_id: options?.projectId,
+      activate_immediately: options?.activateImmediately ?? false,
+      name: options?.name,
+    },
     token
   );
 }
@@ -491,6 +516,8 @@ function mapCandidateMissions(rawList: unknown[]): SuggestedMission[] {
       expectationSource: m.expectation_source === "observed" || m.expectation_source === "inferred" ? m.expectation_source : "unspecified",
       reviewRequired: m.review_required !== false,
       discoveryEvidence: Array.isArray(m.discovery_evidence) ? m.discovery_evidence as Array<Record<string, unknown>> : [],
+      flowId: m.flow_id ? String(m.flow_id) : undefined,
+      promoted: Boolean(m.promoted),
     };
   });
 }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button } from "@/components/ui/button";
 import type { SuggestedMission } from "@/lib/types";
@@ -11,6 +12,8 @@ interface MissionCardProps {
   onSelect: (id: string) => void;
   onRun: (id: string) => void;
   onEdit: (mission: SuggestedMission) => void;
+  onPromote?: (id: string) => Promise<void> | void;
+  isPromoting?: boolean;
 }
 
 function formatSuccessCondition(raw: Record<string, unknown>): string {
@@ -35,6 +38,8 @@ export function MissionCard({
   onSelect,
   onRun,
   onEdit,
+  onPromote,
+  isPromoting = false,
 }: MissionCardProps) {
   return (
     <div
@@ -146,7 +151,37 @@ export function MissionCard({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-2 shrink-0 self-center sm:self-start">
+        <div className="flex items-center gap-2 shrink-0 self-center sm:self-start flex-wrap justify-end">
+          {mission.flowId || mission.promoted ? (
+            <Link
+              href={`/flows/${mission.flowId || mission.id}`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-2.5 h-8 hover:bg-emerald-500/20 transition-colors"
+              title="View Flow in Flows tab"
+            >
+              <MaterialIcon name="check_circle" size={14} />
+              <span>Promoted</span>
+            </Link>
+          ) : onPromote ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isPromoting}
+              onClick={async (e) => {
+                e.stopPropagation();
+                await onPromote(mission.id);
+              }}
+              className="text-muted-foreground hover:text-foreground h-8 px-2.5 text-caption font-medium border border-border/60 hover:bg-secondary/40"
+              aria-label={`Promote ${mission.title} to Flow`}
+            >
+              <MaterialIcon
+                name={isPromoting ? "hourglass_empty" : "publish"}
+                size={14}
+                className={isPromoting ? "animate-spin" : ""}
+              />
+              <span>{isPromoting ? "Promoting..." : "Promote to Flow"}</span>
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="sm"

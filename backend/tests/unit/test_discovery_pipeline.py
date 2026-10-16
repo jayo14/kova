@@ -17,6 +17,8 @@ from app.modules.product_graph.schemas import (
     Goal,
     Invariant,
     Page,
+    StateAssertion,
+    StateMutation,
 )
 
 
@@ -259,3 +261,112 @@ def test_discovery_result_review_required_filtering():
     assert len(review_items) == 1
     assert review_items[0]["name"] == "Ambiguous Link"
     assert review_items[0]["confidence"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_goal_success_criteria_promotion():
+    """Verify DiscoveryPipeline populates success_criteria on goals from capability produces_state, with fallback."""
+    project_id = uuid.uuid4()
+    pipeline = DiscoveryPipeline(project_id=project_id, base_url="http://127.0.0.1:8000")
+
+    # Capability with produces_state
+    cap_with_state = Capability(
+        project_id=project_id,
+        name="enroll_course",
+        description="Enroll into a course",
+        produces_state=[StateMutation(key="enrolled", value=True, action="set")],
+    )
+
+    # Capability without produces_state (fallback to key=cap.name)
+    cap_without_state = Capability(
+        project_id=project_id,
+        name="view_catalog",
+        description="View all courses",
+        produces_state=[],
+    )
+
+    mock_browser_page = AsyncMock()
+    mock_browser_page.url = "http://127.0.0.1:8000"
+    mock_browser_page.evaluate = AsyncMock(return_value=[])
+
+    pipeline.crawler.crawl = AsyncMock(return_value=[Page(project_id=project_id, url_pattern="/")])
+    pipeline.auth_detector.inspect_page_auth = AsyncMock()
+    pipeline.capability_extractor.extract_actions_and_capabilities = AsyncMock(return_value=([], [cap_with_state, cap_without_state], []))
+    pipeline.ai_assistant.assist_ambiguous_actions = AsyncMock(return_value=[])
+    pipeline.persona_detector.detect_personas = AsyncMock(return_value=[])
+    pipeline.auth_detector.detect_auth = AsyncMock(return_value=[])
+    pipeline.invariant_inferrer.infer_invariants = MagicMock(return_value=[])
+
+    result = await pipeline.discover(mock_browser_page)
+    assert len(result.goals) == 2
+
+    enroll_goal = next(g for g in result.goals if "Enroll" in g.name)
+    assert len(enroll_goal.success_criteria) == 1
+    assert enroll_goal.success_criteria[0].key == "enrolled"
+    assert enroll_goal.success_criteria[0].value is True
+    assert enroll_goal.success_criteria[0].predicate == "eq"
+
+    catalog_goal = next(g for g in result.goals if "View" in g.name)
+    assert len(catalog_goal.success_criteria) == 1
+    assert catalog_goal.success_criteria[0].key == "view_catalog"
+    assert catalog_goal.success_criteria[0].value is True
+    assert catalog_goal.success_criteria[0].predicate == "eq"
+
+
+@pytest.mark.asyncio
+async def test_flow_service_create_from_mission(db_session):
+    """Verify FlowService.create_from_mission converts discovery mission to a project Flow."""
+    from app.modules.flows.service import FlowService
+    from app.modules.projects.models import Project
+    from app.modules.users.models import User
+
+    user = User(id=uuid.uuid4(), email="mission_promote@example.com")
+    db_session.add(user)
+    await db_session.flush()
+
+    project = Project(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        name="Promotion Project",
+        base_url="http://127.0.0.1:8000",
+    )
+    db_session.add(project)
+    await db_session.flush()
+
+    mission = {
+        "id": "mission-test-123",
+        "title": "Complete Course Enrollment",
+        "description": "Enroll in the selected course and verify dashboard",
+        "persona": "student",
+        "category": "feature",
+        "steps": [
+            {"type": "navigate", "url": "http://127.0.0.1:8000/courses"},
+            {"type": "click", "target": "button.enroll"},
+        ],
+        "successCondition": {"url_changed_to": {"to": "/courses/enrolled"}},
+        "route_analysis": {"path": "/courses"},
+        "confidence": 0.85,
+    }
+
+    flow_service = FlowService(db_session)
+    flow = await flow_service.create_from_mission(
+        project_id=project.id,
+        mission=mission,
+        user_id=user.id,
+        activate_immediately=False,
+    )
+
+    assert flow.id is not None
+    assert flow.project_id == project.id
+    assert flow.name == "Complete Course Enrollment"
+    assert flow.source == "user_provided"
+    assert flow.active is False
+    assert flow.capability == "feature"
+    assert flow.confidence == 0.85
+    assert flow.persona == {"role": "student"}
+    assert flow.success_condition == {"url_changed_to": {"to": "/courses/enrolled"}}
+    assert len(flow.steps) == 2
+    assert flow.steps[0]["action"] == "navigate"
+    assert flow.steps[0]["url"] == "http://127.0.0.1:8000/courses"
+    assert flow.steps[1]["action"] == "click"
+    assert flow.steps[1]["selector"] == "button.enroll"

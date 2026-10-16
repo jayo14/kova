@@ -13,7 +13,7 @@ interface EvidenceViewerProps {
   onRefreshUrl?: (evidenceId: string) => Promise<string | null>;
 }
 
-type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "verification";
+type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "trace" | "verification";
 
 export function EvidenceViewer({
   evidence,
@@ -40,6 +40,7 @@ export function EvidenceViewer({
       tabs.push("network");
     }
     if (evidence.videoUrl) tabs.push("video");
+    tabs.push("trace");
     if (evidence.type === "VERIFICATION" || evidence.metadata?.checks || evidence.note) {
       tabs.push("verification");
     }
@@ -199,6 +200,8 @@ export function EvidenceViewer({
                     ? "wifi"
                     : tab === "video"
                     ? "movie"
+                    : tab === "trace"
+                    ? "timeline"
                     : "verified"
                 }
                 size={16}
@@ -433,6 +436,65 @@ export function EvidenceViewer({
                 <p className="text-caption text-muted-foreground">
                   Step window: {evidence.timestampRange[0]?.toFixed(2)}s - {evidence.timestampRange[1]?.toFixed(2)}s
                 </p>
+              )}
+            </div>
+          )}
+
+          {activeTab === "trace" && (
+            <div className="space-y-4">
+              {evidence.traceUrl ? (
+                <div className="space-y-4">
+                  <div className="p-4 rounded-xl border border-border bg-card/60 flex items-center justify-between">
+                    <div className="space-y-1">
+                      <div className="text-body-sm font-semibold text-foreground flex items-center gap-2">
+                        <MaterialIcon name="timeline" size={18} className="text-primary" />
+                        Playwright Execution Trace
+                      </div>
+                      <p className="text-caption text-muted-foreground">
+                        Inspect recorded browser actions, console messages, network events, and DOM snapshots in Playwright Trace Viewer.
+                      </p>
+                    </div>
+                    <a
+                      href={evidence.traceUrl}
+                      download
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
+                    >
+                      <MaterialIcon name="download" size={16} />
+                      Download Trace
+                    </a>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-border/80 bg-secondary/10 space-y-2 text-caption">
+                    <div className="font-semibold text-foreground">How to inspect locally:</div>
+                    <code className="block bg-black/80 text-emerald-400 p-2.5 rounded-lg font-mono text-xs select-all">
+                      npx playwright show-trace &lt;downloaded-trace.zip&gt;
+                    </code>
+                    <p className="text-muted-foreground text-[11px]">
+                      Or open{" "}
+                      <a
+                        href="https://trace.playwright.dev"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-primary underline"
+                      >
+                        trace.playwright.dev
+                      </a>{" "}
+                      in your browser and drag-and-drop the trace file.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-8 text-center space-y-3 rounded-2xl border border-dashed border-border bg-card/30">
+                  <div className="h-10 w-10 mx-auto rounded-full bg-muted flex items-center justify-center text-muted-foreground">
+                    <MaterialIcon name="timeline" size={20} />
+                  </div>
+                  <div className="text-body-sm font-semibold text-foreground">No Playwright Trace Recorded</div>
+                  <p className="text-caption text-muted-foreground max-w-md mx-auto">
+                    Full execution tracing can be enabled by setting <code className="px-1.5 py-0.5 rounded bg-muted font-mono text-xs text-foreground">EVIDENCE_CAPTURE_TRACE=true</code> in your environment.
+                  </p>
+                </div>
               )}
             </div>
           )}

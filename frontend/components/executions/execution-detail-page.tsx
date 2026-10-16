@@ -8,7 +8,8 @@ import type {
 } from "@/lib/types";
 import type { Evidence } from "@/lib/api/evidence";
 import { useExecutionRealtime } from "@/hooks/use-execution-realtime";
-import { cancelExecution, createExecution, getExecutionReport, type ExecutionReport } from "@/lib/api/executions";
+import { cancelExecution, createExecution, getExecutionReport, mintShareableUrl, type ExecutionReport } from "@/lib/api/executions";
+import { getApiBaseUrl } from "@/lib/api/client";
 import { getExecutionEvidence, refreshEvidenceUrl } from "@/lib/api/evidence";
 import { ExecutionHeader } from "./execution-header";
 import { ExecutionBrowser } from "./execution-browser";
@@ -125,6 +126,35 @@ export function ExecutionDetailPage({
     });
   }, [execution.missionId, router]);
 
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
+
+  const handleShare = useCallback(async () => {
+    setShareLoading(true);
+    setShareSuccess(null);
+    try {
+      const res = await mintShareableUrl(execution.id);
+      if (res?.url) {
+        if (typeof navigator !== "undefined" && navigator.clipboard) {
+          await navigator.clipboard.writeText(res.url);
+        }
+        setShareSuccess("Link copied to clipboard!");
+        setTimeout(() => setShareSuccess(null), 3500);
+      } else {
+        setActionError("Could not generate shareable link.");
+      }
+    } catch {
+      setActionError("Failed to generate shareable link.");
+    } finally {
+      setShareLoading(false);
+    }
+  }, [execution.id]);
+
+  const handleExportPdf = useCallback(() => {
+    const base = getApiBaseUrl();
+    window.open(`${base}/api/v1/executions/${encodeURIComponent(execution.id)}/report?format=html`, "_blank");
+  }, [execution.id]);
+
   const displayError = actionError || streamError;
   const reportLoading = terminalStatuses.includes(execution.status) && !reportLoaded;
   const evidenceLoading = terminalStatuses.includes(execution.status) && !evidenceLoaded;
@@ -180,6 +210,10 @@ export function ExecutionDetailPage({
         onStopClick={() => setCancelOpen(true)}
         onRetryClick={handleRetry}
         isRetrying={isRetrying}
+        onShareClick={handleShare}
+        onExportPdfClick={handleExportPdf}
+        isSharing={shareLoading}
+        shareSuccess={shareSuccess}
       />
 
       {displayError && (
