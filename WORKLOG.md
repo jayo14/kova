@@ -260,3 +260,31 @@
   - Added unit test suite in `backend/tests/unit/test_ci_and_reports.py` and integration e2e test in `backend/tests/integration/test_e2e.py`.
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_ci_and_reports.py backend/tests/integration/test_e2e.py -v` (13 passed)
+
+## Chunk 14 — GitHub and GitLab PR/MR Integration
+- **Status:** Complete
+- **Changes:**
+  - Database & Models:
+    - Added `integrations` and `integration_events` tables in Alembic migration `022_add_integrations_tables.py`.
+    - Created `Integration` and `IntegrationEvent` models in `backend/app/modules/integrations/models.py`.
+    - Created Pydantic schemas in `backend/app/modules/integrations/schemas.py`: `IntegrationCreate`, `IntegrationRead`, `IntegrationEventRead`, `KovaConfig`.
+    - Implemented `IntegrationRepository` in `backend/app/modules/integrations/repository.py` with Fernet credential encryption and automated payload secret/token redaction.
+  - GitHub & GitLab VCS Integrations:
+    - Implemented constant-time webhook signature verification (`hmac.compare_digest`) for GitHub (`verify_github_signature`) and GitLab (`verify_gitlab_token`).
+    - Implemented `GitHubClient` and `GitLabClient` using `httpx.AsyncClient` supporting diff fetching, comments listing, posting, and updating existing comments using the `<!-- kova-validation -->` marker.
+    - Built unified `DiffFetcher` to fetch pull request / merge request diffs and parse `.kova.yml` configurations with commit SHA pinning.
+  - Orchestration & Automation:
+    - Implemented `IntegrationOrchestrator` running the end-to-end loop: webhook event → diff fetch → `.kova.yml` parse → incremental re-discovery if configuration changed → targeted impact analysis & planning → validation execution → signed report URL generation → Markdown comment formatting with summary table, collapsible steps, and video/trace links → VCS PR comment creation or update.
+    - Webhook background isolation ensuring webhooks immediately return 200/accepted and orchestrator execution errors never cause unhandled server 500s.
+  - API Routes:
+    - Mounted `POST /api/v1/integrations/github/webhook` and `POST /api/v1/integrations/gitlab/webhook` in `backend/app/api/routes/integrations.py`.
+    - Mounted project integration management endpoints: `POST /api/v1/projects/{project_id}/integrations`, `GET /api/v1/projects/{project_id}/integrations`, `DELETE /api/v1/projects/{project_id}/integrations/{integration_id}`.
+  - Frontend:
+    - Created typed client `frontend/lib/api/integrations.ts`.
+    - Created UI components: `frontend/components/integrations/integration-card.tsx` and `frontend/components/integrations/integration-connect-dialog.tsx`.
+    - Added full project integrations management page at `frontend/app/projects/[projectId]/integrations/page.tsx`.
+  - Testing:
+    - Added unit test suite `backend/tests/unit/test_integrations.py` testing webhook signature validation, orchestrator execution, comment upserting, empty graph/flows handling, and `.kova.yml` config overrides.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_integrations.py backend/tests/integration/test_ci_and_reports.py -v` (12 passed)
+
