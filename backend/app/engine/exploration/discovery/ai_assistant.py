@@ -46,20 +46,24 @@ class AIAssistant:
                     reasoning = "Dismiss/close action"
                     ai_conf = 0.7
 
-                # Hard cap confidence at <= 0.9 for AI proposals
+                # Hotfix 07: Distinguish genuine AI reasoner proposals from keyword heuristic inference
+                source_label = "ai_proposal" if self.reasoner is not None else "heuristic_inference"
+                stage_label = "action_extraction" if self.reasoner is not None else "heuristic_action_extraction"
+
                 proposal_conf = min(ai_conf, 0.9)
                 action.name = inferred_name
                 action.confidence = proposal_conf
-                action.source = "ai_proposal"
+                action.source = source_label
 
                 proposal = AIProposal(
-                    stage="action_extraction",
+                    stage=stage_label,
                     input_summary=input_summary,
-                    output_summary=f"Inferred action name '{inferred_name}'",
+                    output_summary=f"Inferred action name '{inferred_name}' ({source_label})",
                     accepted=True,
-                    reasoning=reasoning,
+                    reasoning=f"{reasoning} [{source_label}]",
                     confidence=proposal_conf,
                 )
                 proposals.append(proposal)
+
 
         return proposals

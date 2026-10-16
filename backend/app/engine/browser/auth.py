@@ -320,7 +320,7 @@ def is_auth_barrier(expected_url: str | None, current_url: str | None) -> bool:
     return current_is_auth and not expected_is_auth
 
 
-async def find_submit_button(page: Any, password_input: Any = None) -> Any:
+async def find_submit_button(page: Any, password_input: Any = None, event_recorder: Any | None = None) -> Any:
     """Locate the authentic form submit button, avoiding OAuth/SSO buttons."""
     # 1. Semantic submit selectors first
     semantic_selectors = [
@@ -428,8 +428,29 @@ async def find_submit_button(page: Any, password_input: Any = None) -> Any:
                     vis = proposed_btn.is_visible(timeout=500)
                     if inspect.isawaitable(vis):
                         vis = await vis
+                    if event_recorder:
+                        try:
+                            from app.modules.executions.event_types import EventTypes
+                            res = event_recorder(EventTypes.AI_PROPOSAL, {
+                                "stage": "submit_button",
+                                "selector": proposed_selector,
+                                "accepted": bool(vis),
+                            })
+                            if inspect.isawaitable(res):
+                                await res
+                            if vis:
+                                res2 = event_recorder(EventTypes.AI_ASSISTED, {
+                                    "stage": "submit_button",
+                                    "selector": proposed_selector,
+                                    "message": "AI successfully identified submit button",
+                                })
+                                if inspect.isawaitable(res2):
+                                    await res2
+                        except Exception as ev_err:
+                            logger.debug("Failed recording AI events in find_submit_button: %s", ev_err)
                     if vis:
                         return proposed_btn
+
     except Exception as e:
         logger.debug("AI propose_submit_button fallback failed: %s", e)
 
@@ -521,6 +542,7 @@ async def find_auth_entrance_semantically(
     page: Any,
     provider: Any = None,
     is_signup: bool = False,
+    event_recorder: Any | None = None,
 ) -> bool:
     """Inspects the page for interactive entrance elements and uses AI or heuristics to open auth."""
     extract_entrance_script = """
@@ -574,8 +596,31 @@ async def find_auth_entrance_semantically(
                 result = await reasoner.identify_auth_entrance(current_url, candidates, is_signup=is_signup)
                 if result and result.entrance_index is not None:
                     chosen_idx = result.entrance_index
+                    if event_recorder:
+                        try:
+                            from app.modules.executions.event_types import EventTypes
+                            res = event_recorder(EventTypes.AI_PROPOSAL, {
+                                "stage": "auth_entrance",
+                                "current_url": current_url,
+                                "entrance_index": chosen_idx,
+                                "is_signup": is_signup,
+                                "accepted": True,
+                            })
+                            if inspect.isawaitable(res):
+                                await res
+                            res2 = event_recorder(EventTypes.AI_ASSISTED, {
+                                "stage": "auth_entrance",
+                                "current_url": current_url,
+                                "entrance_index": chosen_idx,
+                                "message": f"AI identified {'signup' if is_signup else 'signin'} entrance link",
+                            })
+                            if inspect.isawaitable(res2):
+                                await res2
+                        except Exception as emit_err:
+                            logger.debug("Failed emitting AI proposal event: %s", emit_err)
             except Exception as ex:
                 logger.debug("AI auth entrance error: %s", ex)
+
 
         if chosen_idx is None:
             keywords = (
@@ -609,7 +654,7 @@ async def find_auth_entrance_semantically(
     return False
 
 
-async def open_auth_view_if_needed(page: Any, is_signup: bool = False, provider: Any = None) -> bool:
+async def open_auth_view_if_needed(page: Any, is_signup: bool = False, provider: Any = None, event_recorder: Any | None = None) -> bool:
     """Attempts to reveal or navigate to login/signup modal or page if inputs are missing."""
     if is_signup:
         button_selectors = [
@@ -668,13 +713,15 @@ async def open_auth_view_if_needed(page: Any, is_signup: bool = False, provider:
                 continue
 
     # 3. AI / semantic entrance element fallback
-    return await find_auth_entrance_semantically(page, provider=provider, is_signup=is_signup)
+    return await find_auth_entrance_semantically(page, provider=provider, is_signup=is_signup, event_recorder=event_recorder)
+
 
 
 async def find_auth_inputs_semantically(
     page: Any,
     provider: Any = None,
     is_signup: bool = False,
+    event_recorder: Any | None = None,
 ) -> tuple[Any | None, Any | None, Any | None, Any]:
     """Inspects the page for visible input/button elements and uses AI or semantic heuristics to find fields."""
     frames = [page]
@@ -765,12 +812,36 @@ async def find_auth_inputs_semantically(
                     reasoner = AgentReasoner(ai_prov)
                     current_url = getattr(page, "url", "")
                     result = await reasoner.identify_auth_elements(current_url, candidates, is_signup=is_signup)
+                    if result and (result.email_or_user_index is not None or result.password_index is not None):
+                        if event_recorder:
+                            try:
+                                from app.modules.executions.event_types import EventTypes
+                                res = event_recorder(EventTypes.AI_PROPOSAL, {
+                                    "stage": "auth_elements",
+                                    "current_url": current_url,
+                                    "email_index": result.email_or_user_index,
+                                    "password_index": result.password_index,
+                                    "is_signup": is_signup,
+                                    "accepted": True,
+                                })
+                                if inspect.isawaitable(res):
+                                    await res
+                                res2 = event_recorder(EventTypes.AI_ASSISTED, {
+                                    "stage": "auth_elements",
+                                    "current_url": current_url,
+                                    "message": "AI identified auth form inputs",
+                                })
+                                if inspect.isawaitable(res2):
+                                    await res2
+                            except Exception as emit_err:
+                                logger.debug("Failed emitting AI proposal event: %s", emit_err)
                 except Exception as ex:
                     logger.debug("AI reasoner auth input identification error: %s", ex)
 
             email_idx = result.email_or_user_index if result else None
             pwd_idx = result.password_index if result else None
             name_idx = result.name_index if result else None
+
 
             # Resilient fallback if AI is unavailable or didn't match
             if email_idx is None or pwd_idx is None:
@@ -824,6 +895,7 @@ async def perform_login(
     name: str | None = None,
     is_signup: bool = False,
     provider: Any = None,
+    event_recorder: Any | None = None,
 ) -> tuple[bool, str]:
     """Fill login or registration form, submit credentials, and wait for session.
 
@@ -842,7 +914,7 @@ async def perform_login(
         is_on_signin_path = any(p in current_url_lower for p in ["/signin", "/login", "/sign-in", "/log-in"])
         if is_on_signin_path:
             logger.info("is_signup requested on signin URL (%s), navigating to signup view", initial_url)
-            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider)
+            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider, event_recorder=event_recorder)
             if opened:
                 logger.info("Successfully opened signup view, new URL: %s", getattr(page, "url", ""))
 
@@ -851,13 +923,13 @@ async def perform_login(
 
     # If inputs are not found on current page, attempt to open auth modal or navigate to auth route
     if not email_input or not password_input:
-        opened = await open_auth_view_if_needed(page, is_signup=is_signup, provider=provider)
+        opened = await open_auth_view_if_needed(page, is_signup=is_signup, provider=provider, event_recorder=event_recorder)
         if opened:
             name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
 
     # If registration is requested but inputs found belong to a login form (e.g. button says "Sign in"), switch view
     if is_signup and (email_input or password_input):
-        submit_btn = await find_submit_button(active_scope or page)
+        submit_btn = await find_submit_button(active_scope or page, event_recorder=event_recorder)
         submit_txt = ""
         if submit_btn:
             try:
@@ -866,15 +938,16 @@ async def perform_login(
                 pass
         if submit_txt and any(k in submit_txt for k in ["sign in", "log in", "login"]) and not any(k in submit_txt for k in ["sign up", "signup", "create", "register"]):
             logger.info("Submit button '%s' indicates signin view but is_signup=True. Attempting switch to signup view.", submit_txt)
-            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider)
+            opened = await open_auth_view_if_needed(page, is_signup=True, provider=provider, event_recorder=event_recorder)
             if opened:
                 name_input, email_input, password_input, active_scope = await find_auth_inputs_across_frames(page)
 
     # Semantic AI fallback if heuristic selectors failed to locate input fields
     if not email_input or not password_input:
         s_name, s_email, s_pwd, s_scope = await find_auth_inputs_semantically(
-            page, provider=provider, is_signup=is_signup
+            page, provider=provider, is_signup=is_signup, event_recorder=event_recorder
         )
+
         if s_email or s_pwd:
             name_input = name_input or s_name
             email_input = email_input or s_email
@@ -984,8 +1057,9 @@ async def perform_login(
         await asyncio.sleep(0.3)
 
         # Submit form
-        submit_btn = await find_submit_button(page, password_input)
+        submit_btn = await find_submit_button(page, password_input, event_recorder=event_recorder)
         submitted = False
+
         if submit_btn:
             try:
                 await submit_btn.scroll_into_view_if_needed(timeout=1500)
