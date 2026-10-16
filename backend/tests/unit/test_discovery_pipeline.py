@@ -155,7 +155,8 @@ def test_invariant_inferrer_proposals():
 
 @pytest.mark.asyncio
 async def test_ai_assistant_ambiguous_actions():
-    assistant = AIAssistant(reasoner=None)
+    # Heuristic fallback when reasoner is None
+    assistant_heuristic = AIAssistant(reasoner=None)
     actions = [
         Action(
             project_id=uuid.uuid4(),
@@ -166,13 +167,31 @@ async def test_ai_assistant_ambiguous_actions():
         )
     ]
 
-    proposals = await assistant.assist_ambiguous_actions(actions, {"url": "/settings"})
+    proposals = await assistant_heuristic.assist_ambiguous_actions(actions, {"url": "/settings"})
     assert len(proposals) == 1
     assert proposals[0].confidence <= 0.9
     assert proposals[0].accepted is True
     assert actions[0].name == "Save Changes"
-    assert actions[0].source == "ai_proposal"
+    assert actions[0].source == "heuristic_inference"
     assert actions[0].confidence <= 0.9
+
+    # AI proposal when reasoner is present
+    mock_reasoner = MagicMock()
+    assistant_ai = AIAssistant(reasoner=mock_reasoner)
+    actions_ai = [
+        Action(
+            project_id=uuid.uuid4(),
+            page_id=uuid.uuid4(),
+            name="button_submit",
+            selector="button[type='submit']",
+            confidence=0.4,
+        )
+    ]
+    proposals_ai = await assistant_ai.assist_ambiguous_actions(actions_ai, {"url": "/login"})
+    assert len(proposals_ai) == 1
+    assert actions_ai[0].source == "ai_proposal"
+    assert actions_ai[0].name == "Submit Form"
+
 
 
 @pytest.mark.asyncio

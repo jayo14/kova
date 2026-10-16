@@ -816,7 +816,7 @@ async def get_execution_report(
         if failed_checks:
             diagnostics = diagnose_verification(failed_checks[0])
 
-    ai_assisted_events = [ev for ev in events if ev.event_type == "ai_assisted"]
+    ai_assisted_events = [ev for ev in events if ev.event_type in ("ai_assisted", EventTypes.AI_ASSISTED)]
     healed_steps_count = len(ai_assisted_events)
     healing_summary = f"Passed with AI healing: {healed_steps_count} steps" if healed_steps_count > 0 else None
 

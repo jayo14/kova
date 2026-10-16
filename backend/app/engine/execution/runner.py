@@ -1104,7 +1104,7 @@ class FlowRunner:
                         logger.warning("Warning: %s (FAIL_ON_NETWORK_ERRORS is false)", net_err_msg)
 
             # Honest healing gate: if fail_on_healed is requested, reject runs that required AI healing
-            ai_assisted_events = [e for e in ctx.events if e.get("type") == "ai_assisted"]
+            ai_assisted_events = [e for e in ctx.events if e.get("type") in ("ai_assisted", EventTypes.AI_ASSISTED)]
             if fail_on_healed and ai_assisted_events:
                 raise ExecutionError(
                     f"Execution passed with AI healing on {len(ai_assisted_events)} step(s), but fail_on_healed was requested",
@@ -1360,7 +1360,7 @@ class FlowRunner:
 
             if login_ok:
                 logger.info("Authentication succeeded as %s", cred_to_use.email)
-                ctx.record_event("ai_assisted", {
+                ctx.record_event(EventTypes.AI_ASSISTED, {
                     "healing_type": "auth_barrier_healed",
                     "original_auth_url": current_page_url,
                     "destination": browser.page.url,
@@ -1426,13 +1426,14 @@ class FlowRunner:
                 except Exception as db_save_err:
                     logger.debug("Could not persist auto-healed credential to project: %s", db_save_err)
 
-                ctx.record_event("ai_assisted", {
+                ctx.record_event(EventTypes.AI_ASSISTED, {
                     "healing_type": "auth_account_created",
                     "original_auth_url": current_page_url,
                     "destination": browser.page.url,
                     "authenticated_as": auto_email,
                     "message": "Created new test account on the fly to bypass auth wall.",
                 })
+
                 await self._emit_events(ctx, event_recorder)
                 return True
         except Exception as reg_err:
@@ -1884,7 +1885,15 @@ class FlowRunner:
                                         step_index,
                                         alt_target,
                                     )
-                                    ctx.record_event("ai_assisted", {
+                                    ctx.record_event(EventTypes.AI_PROPOSAL, {
+                                        "stage": "target_healing",
+                                        "step": step_index,
+                                        "original_target": raw_action.get("target"),
+                                        "proposed_target": alt_target,
+                                        "action": raw_action.get("type"),
+                                        "accepted": True,
+                                    })
+                                    ctx.record_event(EventTypes.AI_ASSISTED, {
                                         "step": step_index,
                                         "original_target": raw_action.get("target"),
                                         "alternate_target": alt_target,
@@ -1945,12 +1954,13 @@ class FlowRunner:
                             )
                             if retry_res.get("success"):
                                 result = retry_res
-                                ctx.record_event("ai_assisted", {
+                                ctx.record_event(EventTypes.AI_ASSISTED, {
                                     "step": step_index,
                                     "healing_type": "auth_barrier_healed",
                                     "message": f"Authenticated as {cred_to_use.email} and successfully retried action.",
                                 })
                                 await self._emit_events(ctx, event_recorder)
+
 
             if not result["success"]:
                 # Capture failure snapshot so UI displays the browser state at failure
