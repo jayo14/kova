@@ -1,6 +1,9 @@
 """Execution service for business logic."""
 
+from __future__ import annotations
+
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +15,7 @@ from app.modules.executions.schemas import ExecutionCreate
 
 class ExecutionService:
     def __init__(self, db: AsyncSession):
+        self.db = db
         self.repo = ExecutionRepository(db)
         self.event_repo = ExecutionEventRepository(db)
         self.event_service = EventService(db)

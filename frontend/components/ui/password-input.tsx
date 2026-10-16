@@ -24,10 +24,10 @@ export function PasswordInput({ className, ...props }: PasswordInputProps) {
         type="button"
         onClick={() => setVisible((v) => !v)}
         tabIndex={-1}
-        className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1 text-muted-foreground hover:text-foreground transition-colors"
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-[#6B5646] hover:text-[#2A170D] transition-colors"
         aria-label={visible ? "Hide password" : "Show password"}
       >
-        <MaterialIcon name={visible ? "visibility_off" : "visibility"} size={16} />
+        <MaterialIcon name={visible ? "visibility_off" : "visibility"} size={18} />
       </button>
     </div>
   );
