@@ -32,10 +32,30 @@ class ProjectRepository:
                 await self.db.flush()
             user_id = default_user.id
 
+        # Look up or create user's primary organization
+        from app.modules.organizations.repository import OrganizationRepository
+        org_repo = OrganizationRepository(self.db)
+        org = await org_repo.get_user_primary_org(user_id)
+
         project = Project(
-            user_id=user_id, name=name, base_url=base_url, description=description
+            user_id=user_id,
+            org_id=org.id if org else None,
+            name=name,
+            base_url=base_url,
+            description=description,
         )
         self.db.add(project)
+        await self.db.flush()
+
+        # Add project owner as admin project member
+        from app.modules.organizations.models import ProjectMember
+        pm = ProjectMember(
+            id=uuid.uuid4(),
+            project_id=project.id,
+            user_id=user_id,
+            role="admin",
+        )
+        self.db.add(pm)
         await self.db.flush()
         return project
 
@@ -48,12 +68,35 @@ class ProjectRepository:
     async def get_by_id_and_user(
         self, project_id: uuid.UUID, user_id: uuid.UUID
     ) -> Project | None:
-        result = await self.db.execute(
-            select(Project).where(
-                Project.id == project_id, Project.user_id == user_id
+        project = await self.get_by_id(project_id)
+        if not project:
+            return None
+        if project.user_id == user_id:
+            return project
+
+        from app.modules.organizations.models import ProjectMember, OrganizationMember
+        # Check project membership
+        pm_res = await self.db.execute(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == user_id,
             )
         )
-        return result.scalar_one_or_none()
+        if pm_res.scalar_one_or_none():
+            return project
+
+        # Check organization membership
+        if project.org_id:
+            om_res = await self.db.execute(
+                select(OrganizationMember).where(
+                    OrganizationMember.org_id == project.org_id,
+                    OrganizationMember.user_id == user_id,
+                )
+            )
+            if om_res.scalar_one_or_none():
+                return project
+
+        return None
 
     async def list_all(self, skip: int = 0, limit: int = 100) -> list[Project]:
         result = await self.db.execute(
@@ -64,12 +107,26 @@ class ProjectRepository:
     async def list_by_user(
         self, user_id: uuid.UUID, skip: int = 0, limit: int = 100
     ) -> list[Project]:
-        result = await self.db.execute(
+        from app.modules.organizations.models import ProjectMember, OrganizationMember
+        stmt = (
             select(Project)
-            .where(Project.user_id == user_id)
+            .where(
+                (Project.user_id == user_id)
+                | Project.id.in_(
+                    select(ProjectMember.project_id).where(ProjectMember.user_id == user_id)
+                )
+                | (
+                    (Project.org_id.isnot(None))
+                    & Project.org_id.in_(
+                        select(OrganizationMember.org_id).where(OrganizationMember.user_id == user_id)
+                    )
+                )
+            )
+            .distinct()
             .offset(skip)
             .limit(limit)
         )
+        result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
     async def update(

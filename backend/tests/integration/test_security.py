@@ -582,3 +582,135 @@ async def test_credential_encryption_and_no_leak_in_api_events_logs_exceptions(
     for log_record in caplog.records:
         assert secret_password not in log_record.getMessage()
 
+
+# --- 17. Multi-tenant isolation and enterprise encryption ---
+
+
+@pytest.mark.asyncio
+async def test_org_isolation(db_session: AsyncSession):
+    """User in org A cannot access projects in org B (returns 403 or 404)."""
+    import jwt
+    from app.config.settings import settings
+    from app.modules.auth.dependencies import _get_jwt_secret
+    from app.modules.organizations.repository import OrganizationRepository
+    from app.modules.projects.models import Project
+
+    user_a = User(id=uuid.uuid4(), email="user_a@orga.com", name="User A")
+    user_b = User(id=uuid.uuid4(), email="user_b@orgb.com", name="User B")
+    db_session.add_all([user_a, user_b])
+    await db_session.flush()
+
+    org_repo = OrganizationRepository(db_session)
+    org_a = await org_repo.create_organization(name="Org A", owner_user_id=user_a.id)
+    org_b = await org_repo.create_organization(name="Org B", owner_user_id=user_b.id)
+
+    # Project B belongs to Org B
+    proj_b = Project(id=uuid.uuid4(), user_id=user_b.id, org_id=org_b.id, name="Project B", base_url="http://b.com")
+    db_session.add(proj_b)
+    await db_session.commit()
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        payload_a = {
+            "sub": str(user_a.id),
+            "email": user_a.email,
+            "exp": 9999999999,
+        }
+        if settings.effective_jwt_issuer:
+            payload_a["iss"] = settings.effective_jwt_issuer
+        if settings.OIDC_AUDIENCE:
+            payload_a["aud"] = settings.OIDC_AUDIENCE
+
+        token_a = jwt.encode(
+            payload_a,
+            _get_jwt_secret(),
+            algorithm="HS256",
+        )
+        headers = {"Authorization": f"Bearer {token_a}"}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.get(f"/api/v1/projects/{proj_b.id}", headers=headers)
+            assert resp.status_code in (403, 404)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_audit_log_redacts_secrets(db_session: AsyncSession):
+    """Audit log records mutating operations with passwords and secrets scrubbed."""
+    from app.modules.auth.audit_log import AuditLogger
+    from app.modules.organizations.models import AuditEvent
+    from app.modules.organizations.repository import OrganizationRepository
+
+    user = User(id=uuid.uuid4(), email="audit_actor@test.com", name="Audit Actor")
+    db_session.add(user)
+    await db_session.flush()
+
+    org_repo = OrganizationRepository(db_session)
+    org = await org_repo.create_organization(name="Audit Org", owner_user_id=user.id)
+    await db_session.commit()
+
+    org_id = org.id
+    actor_id = user.id
+    secret_pass = "UltraSecretPassword123!"
+    secret_key = "Bearer_secret_token_abc_xyz"
+
+    logger = AuditLogger(db_session)
+    event = await logger.record(
+        event_type="credentials.create",
+        actor_user_id=actor_id,
+        org_id=org_id,
+        action="create_credential",
+        target="login_creds",
+        metadata={
+            "credential_name": "login_creds",
+            "password": secret_pass,
+            "api_key": secret_key,
+            "nested": {"token": "sub_secret_token", "public_info": "safe_value"},
+        },
+    )
+
+    # Verify event stored with sensitive fields redacted
+    assert secret_pass not in str(event.metadata_)
+    assert secret_key not in str(event.metadata_)
+    assert "sub_secret_token" not in str(event.metadata_)
+    assert event.metadata_["password"] == "***REDACTED***"
+    assert event.metadata_["api_key"] == "***REDACTED***"
+    assert event.metadata_["nested"]["token"] == "***REDACTED***"
+    assert event.metadata_["nested"]["public_info"] == "safe_value"
+
+
+@pytest.mark.asyncio
+async def test_enterprise_dek_isolation(db_session: AsyncSession):
+    """Credentials created under enterprise org A cannot be decrypted with enterprise org B's DEK."""
+    from cryptography.fernet import InvalidToken
+    from app.modules.organizations.crypto import encrypt_with_org_dek, decrypt_with_org_dek
+    from app.modules.organizations.repository import OrganizationRepository
+
+    user_a = User(id=uuid.uuid4(), email="ent_a@corp.com", name="Ent User A")
+    user_b = User(id=uuid.uuid4(), email="ent_b@corp.com", name="Ent User B")
+    db_session.add_all([user_a, user_b])
+    await db_session.flush()
+
+    org_repo = OrganizationRepository(db_session)
+    org_a = await org_repo.create_organization(name="Enterprise A", owner_user_id=user_a.id, plan="enterprise")
+    org_b = await org_repo.create_organization(name="Enterprise B", owner_user_id=user_b.id, plan="enterprise")
+
+    assert org_a.wrapped_dek is not None
+    assert org_b.wrapped_dek is not None
+    assert org_a.wrapped_dek != org_b.wrapped_dek
+
+    sensitive_text = "EnterpriseDatabaseSecretKey999!"
+    ciphertext_a = encrypt_with_org_dek(org_a, sensitive_text)
+
+    # Decrypt with Org A's DEK succeeds
+    assert decrypt_with_org_dek(org_a, ciphertext_a) == sensitive_text
+
+    # Decrypt with Org B's DEK fails with InvalidToken
+    with pytest.raises(InvalidToken):
+        decrypt_with_org_dek(org_b, ciphertext_a)
+

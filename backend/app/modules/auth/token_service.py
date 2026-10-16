@@ -23,12 +23,14 @@ async def create_api_token(
     db: AsyncSession,
     user_id: uuid.UUID,
     name: str = "Default API Token",
+    scopes: list[str] | None = None,
 ) -> tuple[ApiToken, str]:
     raw_token, token_hash = generate_api_token()
     token_obj = ApiToken(
         user_id=user_id,
         name=name,
         token_hash=token_hash,
+        scopes=scopes if scopes is not None else ["*"],
     )
     db.add(token_obj)
     await db.flush()

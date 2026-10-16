@@ -288,3 +288,34 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_integrations.py backend/tests/integration/test_ci_and_reports.py -v` (12 passed)
 
+## Chunk 15 — Multi-tenant & RBAC Hardening
+- **Status:** Complete
+- **Changes:**
+  - Database & Models:
+    - Created Alembic migration `023_add_organizations_and_audit.py` adding `organizations`, `organization_members`, `organization_quotas`, `project_members`, and `audit_events` tables, adding `org_id` column to `projects`, and adding `scopes` JSON column to `api_tokens`.
+    - Implemented ORM models in `backend/app/modules/organizations/models.py` (`Organization`, `OrganizationMember`, `OrganizationQuota`, `ProjectMember`, `AuditEvent`).
+    - Added relationships to `Project` model and updated `ApiToken` model with `scopes`.
+  - Token Scoping & Project-Level RBAC:
+    - Created `backend/app/modules/auth/token_scopes.py` with granular scopes: `flows:read`, `flows:write`, `executions:read`, `executions:write`, `ci:validate`, `integrations:manage`, `org:manage`, `*`.
+    - Implemented scope verification dependencies (`require_scope`, `has_scope`) and updated `get_current_user` to attach scopes from API tokens or default `*` for session users.
+    - Implemented RBAC hierarchy (`admin` > `tester` > `viewer`) in `backend/app/modules/auth/rbac.py` (`verify_project_role`, `require_project_role`) ensuring project-level and organization-level permission checks.
+  - Multi-Tenant Isolation & Enterprise Envelope Encryption:
+    - Updated `ProjectRepository` to attach projects to organizations and enforce organization boundary checks on reads and updates.
+    - Implemented enterprise DEK (Data Encryption Key) isolation in `backend/app/modules/organizations/crypto.py` (`generate_org_dek`, `wrap_dek`, `unwrap_dek`, `encrypt_with_org_dek`, `decrypt_with_org_dek`). Enterprise organizations have distinct DEKs wrapped by the master key, preventing cross-tenant decryption.
+  - Rate Limiting, Audit Logging & Quotas:
+    - Implemented `RateLimiter` (`backend/app/modules/auth/rate_limiter.py`) with Redis and in-memory sliding window fallback, 60 req/min user limit, and Redis connection backoff to avoid blocking on unconfigured local Redis.
+    - Added HTTP rate limit middleware in `backend/app/main.py`.
+    - Implemented `AuditLogger` (`backend/app/modules/auth/audit_log.py`) with recursive secret scrubbing for passwords, auth tokens, cookies, and private keys.
+    - Implemented `OrganizationService` enforcing daily and concurrent execution limits (`acquire_execution_slot`, `release_execution_slot`), returning 429 `org_at_capacity` when quota exceeded.
+    - Configured per-tier Celery queues in `backend/app/workers/celery_app.py` (`kova-free`, `kova-pro`, `kova-enterprise`).
+  - Frontend:
+    - Created SOC2-compliant security audit trail page at `frontend/app/organization/audit/page.tsx` using `MaterialIcon`, native date formatting, action filtering, redacted metadata viewer, and pagination.
+    - Updated `frontend/lib/api/client.ts` exporting `apiClient` alias.
+  - Testing:
+    - Added unit tests in `backend/tests/unit/test_auth.py`: `test_project_rbac_viewer_cannot_write`, `test_project_rbac_tester_can_run`, `test_api_token_scope_ci_only`, `test_rate_limit_per_user`, `test_quota_concurrent_executions`.
+    - Added security integration tests in `backend/tests/integration/test_security.py`: `test_org_isolation`, `test_audit_log_redacts_secrets`, `test_enterprise_dek_isolation`.
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_auth.py backend/tests/integration/test_security.py -v` (44 passed)
+  - `pnpm --prefix frontend build` (17/17 pages static/dynamic compiled successfully)
+
+

@@ -69,23 +69,25 @@ from app.modules.validation.schemas import (
 from app.modules.validation.service import ValidationService
 
 
+from app.modules.auth.rbac import verify_project_role
+from app.modules.auth.token_scopes import SCOPE_CI_VALIDATE, require_scope
+from app.modules.organizations.service import OrganizationService
+
+
 @router.post("/run", status_code=status.HTTP_201_CREATED)
 async def ci_run(
     data: CIRunRequest,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope(SCOPE_CI_VALIDATE)),
     db: AsyncSession = Depends(get_session),
 ):
     """Trigger CI execution for specified flows (legacy) or minimal valid path from git diff."""
-    # 1. Verify project belongs to user
-    stmt = select(Project).where(Project.id == data.project_id, Project.user_id == user.id)
-    project_res = await db.execute(stmt)
-    project = project_res.scalar_one_or_none()
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or not owned by user",
-        )
+    # 1. Verify project access with tester role
+    project = await verify_project_role(db, data.project_id, user, min_role="tester")
+
+    if project.org_id:
+        org_service = OrganizationService(db)
+        await org_service.check_execution_quota(project.org_id)
 
     if data.base_url:
         project.base_url = data.base_url
@@ -160,11 +162,11 @@ async def ci_run(
 async def ci_validate(
     data: dict,
     response: Response,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_scope(SCOPE_CI_VALIDATE)),
     db: AsyncSession = Depends(get_session),
 ):
     """Trigger an explainable continuous validation run (async run or synchronous targeted report)."""
-    # Verify project ownership
+    # Verify project ownership and tester role
     project_id_raw = data.get("project_id")
     if not project_id_raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="project_id is required")
@@ -173,14 +175,11 @@ async def ci_validate(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid project_id UUID")
 
-    stmt = select(Project).where(Project.id == project_uuid, Project.user_id == user.id)
-    project_res = await db.execute(stmt)
-    project = project_res.scalar_one_or_none()
-    if not project:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found or not owned by user",
-        )
+    project = await verify_project_role(db, project_uuid, user, min_role="tester")
+
+    if project.org_id:
+        org_service = OrganizationService(db)
+        await org_service.check_execution_quota(project.org_id)
 
     # If request has scope, route to asynchronous ValidationRun (continuous validation baseline)
     if "scope" in data:
@@ -212,11 +211,8 @@ async def get_ci_validation(
     if not vrun:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Validation run not found")
 
-    # Verify project ownership
-    stmt = select(Project).where(Project.id == vrun.project_id, Project.user_id == user.id)
-    project_res = await db.execute(stmt)
-    if not project_res.scalar_one_or_none():
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    # Verify project access
+    await verify_project_role(db, vrun.project_id, user, min_role="viewer")
 
     await db.commit()
     await db.refresh(vrun)
@@ -235,12 +231,8 @@ async def get_ci_validation_report(
     if not vrun:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Validation run not found")
 
-    # Verify project ownership
-    stmt = select(Project).where(Project.id == vrun.project_id, Project.user_id == user.id)
-    project_res = await db.execute(stmt)
-    project = project_res.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    # Verify project access
+    project = await verify_project_role(db, vrun.project_id, user, min_role="viewer")
 
     await db.commit()
     await db.refresh(vrun)

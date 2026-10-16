@@ -473,4 +473,196 @@ async def test_authenticator_password_form_failure_wrong_url():
     assert all(not a.success for a in res.attempts)
 
 
+@pytest.mark.asyncio
+async def test_project_rbac_viewer_cannot_write(db_session: AsyncSession):
+    """Viewer-role user or token returns 403 on PUT /api/v1/projects/{id}/flows/{id}."""
+    from app.modules.flows.models import Flow
+    from app.modules.organizations.models import ProjectMember
+    from app.modules.projects.models import Project
+
+    owner = User(id=uuid.uuid4(), email="owner@test.com", name="Owner")
+    viewer = User(id=uuid.uuid4(), email="viewer@test.com", name="Viewer")
+    db_session.add_all([owner, viewer])
+    await db_session.flush()
+
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="RBAC Proj", base_url="http://test")
+    db_session.add(project)
+    await db_session.flush()
+
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Test Flow", steps=[])
+    db_session.add(flow)
+
+    member = ProjectMember(id=uuid.uuid4(), project_id=project.id, user_id=viewer.id, role="viewer")
+    db_session.add(member)
+    await db_session.commit()
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        viewer_token = jwt.encode(_auth_payload(sub=str(viewer.id)), _get_jwt_secret(), algorithm="HS256")
+        headers = {"Authorization": f"Bearer {viewer_token}"}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.put(
+                f"/api/v1/projects/{project.id}/flows/{flow.id}",
+                headers=headers,
+                json={"name": "Modified Flow Name"},
+            )
+            assert resp.status_code == 403
+            assert "insufficient project role" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_project_rbac_tester_can_run(db_session: AsyncSession):
+    """Tester-role user succeeds on POST /api/v1/ci/validate."""
+    from app.modules.organizations.models import ProjectMember
+    from app.modules.projects.models import Project
+
+    owner = User(id=uuid.uuid4(), email="owner2@test.com", name="Owner 2")
+    tester = User(id=uuid.uuid4(), email="tester2@test.com", name="Tester 2")
+    db_session.add_all([owner, tester])
+    await db_session.flush()
+
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Tester Proj", base_url="http://test")
+    db_session.add(project)
+    await db_session.flush()
+
+    member = ProjectMember(id=uuid.uuid4(), project_id=project.id, user_id=tester.id, role="tester")
+    db_session.add(member)
+    await db_session.commit()
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        tester_token = jwt.encode(_auth_payload(sub=str(tester.id)), _get_jwt_secret(), algorithm="HS256")
+        headers = {"Authorization": f"Bearer {tester_token}"}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.post(
+                "/api/v1/ci/validate",
+                headers=headers,
+                json={"project_id": str(project.id), "scope": "targeted"},
+            )
+            assert resp.status_code in (200, 201)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_api_token_scope_ci_only(db_session: AsyncSession):
+    """API token scoped to ci:validate only fails on DELETE /api/v1/projects/{id} with 403."""
+    from app.modules.auth.token_service import create_api_token
+    from app.modules.projects.models import Project
+
+    user = User(id=uuid.uuid4(), email="ci_scoped@test.com", name="CI Scoped User")
+    db_session.add(user)
+    await db_session.flush()
+
+    project = Project(id=uuid.uuid4(), user_id=user.id, name="CI Scope Proj", base_url="http://test")
+    db_session.add(project)
+    await db_session.flush()
+
+    _, raw_token = await create_api_token(db_session, user.id, name="CI Token", scopes=["ci:validate"])
+    await db_session.commit()
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        headers = {"Authorization": f"Bearer {raw_token}"}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            resp = await c.delete(
+                f"/api/v1/projects/{project.id}",
+                headers=headers,
+            )
+            assert resp.status_code == 403
+            assert "missing required scope" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_per_user(db_session: AsyncSession):
+    """61st request within a minute returns 429 with Retry-After."""
+    from app.modules.auth.rate_limiter import rate_limiter
+
+    rate_limiter.reset_in_memory()
+
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+    try:
+        user_id = uuid.uuid4()
+        user = User(
+            id=user_id,
+            email="ratelimit@kova.local",
+            password_hash=hash_password("ValidPassword123!"),
+        )
+        db_session.add(user)
+        await db_session.commit()
+
+        token = jwt.encode(_auth_payload(sub=str(user_id)), _get_jwt_secret(), algorithm="HS256")
+        headers = {"Authorization": f"Bearer {token}"}
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            # 60 requests pass
+            for _ in range(60):
+                resp = await c.get("/api/v1/projects/", headers=headers)
+                assert resp.status_code == 200
+
+            # 61st request fails with 429 and Retry-After header
+            resp61 = await c.get("/api/v1/projects/", headers=headers)
+            assert resp61.status_code == 429
+            assert "Retry-After" in resp61.headers
+            assert int(resp61.headers["Retry-After"]) >= 1
+    finally:
+        rate_limiter.reset_in_memory()
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quota_concurrent_executions(db_session: AsyncSession):
+    """Org at capacity -> new execution waits or fails with org_at_capacity."""
+    from app.modules.organizations.repository import OrganizationRepository
+    from app.modules.organizations.service import OrganizationService
+
+    user = User(id=uuid.uuid4(), email="quota_user@test.com", name="Quota User")
+    db_session.add(user)
+    await db_session.flush()
+
+    org_repo = OrganizationRepository(db_session)
+    org = await org_repo.create_organization(name="Capacity Org", owner_user_id=user.id, plan="free")
+    # Set max_concurrent_executions to 1
+    quota = await org_repo.get_quota(org.id)
+    quota.max_concurrent_executions = 1
+    await db_session.commit()
+
+    service = OrganizationService(db_session)
+    # 1. Acquire first slot
+    slot1 = await service.acquire_execution_slot(org.id, queue_timeout=1)
+    assert slot1 is True
+
+    # 2. Second slot exceeds capacity and times out
+    slot2 = await service.acquire_execution_slot(org.id, queue_timeout=0.2, poll_interval=0.05)
+    assert slot2 is False
+
+    # 3. Release first slot and second succeeds
+    await service.release_execution_slot(org.id)
+    slot3 = await service.acquire_execution_slot(org.id, queue_timeout=1)
+    assert slot3 is True
+    await service.release_execution_slot(org.id)
+
+
 

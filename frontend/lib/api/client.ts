@@ -172,3 +172,5 @@ export const api = {
   delete: <T>(path: string, options?: RequestOptions | string) =>
     request<T>("DELETE", path, undefined, options),
 };
+
+export const apiClient = api;
