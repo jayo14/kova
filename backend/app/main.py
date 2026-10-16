@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 
 import sentry_sdk
 
-from app.api.routes import auth, ci, credentials, executions, exploration, flows, projects, viewport
+from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, projects, viewport
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
 
@@ -150,6 +150,8 @@ app.include_router(flows.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
 app.include_router(executions.validations_router, prefix="/api/v1")
 app.include_router(executions.evidence_router, prefix="/api/v1")
+app.include_router(integrations.router, prefix="/api/v1")
+app.include_router(integrations.project_integrations_router, prefix="/api/v1")
 app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(viewport.router)
 
