@@ -134,6 +134,15 @@ class Settings(BaseSettings):
     def prometheus_allowed_ips_list(self) -> list[str]:
         return [ip.strip() for ip in self.PROMETHEUS_ALLOWED_IPS.split(",") if ip.strip()]
 
+    # Billing & Product Surfaces (Chunk 17)
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_PRO_PRICE_ID: str = "price_pro_default"
+    STRIPE_ENTERPRISE_PRICE_ID: str = "price_enterprise_default"
+    FRONTEND_URL: str = "http://localhost:3000"
+    DOCS_URL: str = "https://docs.kova.dev"
+    STATUS_PAGE_URL: str = "https://status.kova.dev"
+
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == "production"

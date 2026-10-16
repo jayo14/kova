@@ -9,7 +9,21 @@ from redis.asyncio import Redis
 
 import sentry_sdk
 
-from app.api.routes import auth, ci, credentials, executions, exploration, flows, integrations, metrics, organizations, projects, viewport
+from app.api.routes import (
+    auth,
+    billing,
+    ci,
+    credentials,
+    executions,
+    exploration,
+    flows,
+    integrations,
+    metrics,
+    organizations,
+    projects,
+    usage,
+    viewport,
+)
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
 from app.modules.auth.rate_limiter import rate_limiter
@@ -199,6 +213,8 @@ app.include_router(executions.validations_router, prefix="/api/v1")
 app.include_router(executions.evidence_router, prefix="/api/v1")
 app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(integrations.project_integrations_router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
+app.include_router(usage.router, prefix="/api/v1")
 app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(metrics.router)
 app.include_router(viewport.router)

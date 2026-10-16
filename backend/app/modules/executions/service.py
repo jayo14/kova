@@ -20,6 +20,28 @@ class ExecutionService:
         """Create a new execution record."""
         execution = await self.repo.create(flow_id=data.flow_id, flow_version=flow_version, flow_snapshot=flow_snapshot)
         await self.event_service.record_execution_created(execution.id)
+
+        try:
+            from sqlalchemy import select
+            from app.modules.billing.repository import BillingRepository
+            from app.modules.flows.models import Flow
+            from app.modules.projects.models import Project
+
+            f_res = await self.db.execute(select(Flow).where(Flow.id == data.flow_id))
+            flow = f_res.scalar_one_or_none()
+            if flow:
+                p_res = await self.db.execute(select(Project).where(Project.id == flow.project_id))
+                project = p_res.scalar_one_or_none()
+                if project and project.org_id:
+                    billing_repo = BillingRepository(self.db)
+                    await billing_repo.record_usage_event(
+                        org_id=project.org_id,
+                        execution_id=execution.id,
+                        plan_at_time="free",
+                    )
+        except Exception:
+            pass
+
         return execution
 
     async def get_execution(self, execution_id: uuid.UUID):

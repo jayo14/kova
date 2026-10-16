@@ -86,6 +86,9 @@ async def ci_run(
     project = await verify_project_role(db, data.project_id, user, min_role="tester")
 
     if project.org_id:
+        from app.modules.billing.service import BillingService
+        billing_service = BillingService(db)
+        await billing_service.check_execution_limit(project.org_id)
         org_service = OrganizationService(db)
         await org_service.check_execution_quota(project.org_id)
 
@@ -178,6 +181,9 @@ async def ci_validate(
     project = await verify_project_role(db, project_uuid, user, min_role="tester")
 
     if project.org_id:
+        from app.modules.billing.service import BillingService
+        billing_service = BillingService(db)
+        await billing_service.check_execution_limit(project.org_id)
         org_service = OrganizationService(db)
         await org_service.check_execution_quota(project.org_id)
 
