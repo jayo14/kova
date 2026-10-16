@@ -120,7 +120,27 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_session)):
 
 @router.get("/me")
 async def get_me(user: User = Depends(get_current_user)):
-    return {"id": str(user.id), "email": user.email, "name": user.name}
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "name": user.name,
+        "onboarding_step": getattr(user, "onboarding_step", 0) or 0,
+    }
+
+
+class UpdateOnboardingRequest(BaseModel):
+    step: int
+
+
+@router.patch("/me/onboarding")
+async def update_onboarding_step(
+    req: UpdateOnboardingRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    user.onboarding_step = req.step
+    await db.commit()
+    return {"onboarding_step": user.onboarding_step}
 
 class ResetPasswordRequest(BaseModel):
     email: EmailStr
@@ -295,11 +315,13 @@ async def delete_me(
 
 class CreateApiTokenRequest(BaseModel):
     name: str = "Default Token"
+    scopes: list[str] = ["*"]
 
 
 class ApiTokenResponse(BaseModel):
     id: uuid.UUID
     name: str
+    scopes: list[str] = ["*"]
     token: str | None = None
     created_at: datetime
     last_used_at: datetime | None = None
@@ -313,11 +335,12 @@ async def create_token(
 ):
     """Generate a new API token for CI or programmatic access."""
     from app.modules.auth.token_service import create_api_token
-    token_obj, raw_token = await create_api_token(db, user.id, data.name)
+    token_obj, raw_token = await create_api_token(db, user.id, data.name, scopes=data.scopes)
     await db.commit()
     return ApiTokenResponse(
         id=token_obj.id,
         name=token_obj.name,
+        scopes=token_obj.scopes or ["*"],
         token=raw_token,
         created_at=token_obj.created_at,
         last_used_at=token_obj.last_used_at,
@@ -336,6 +359,7 @@ async def list_tokens(
         ApiTokenResponse(
             id=t.id,
             name=t.name,
+            scopes=t.scopes or ["*"],
             created_at=t.created_at,
             last_used_at=t.last_used_at,
         )

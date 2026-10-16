@@ -1,0 +1,38 @@
+---
+title: "GitHub Actions Integration"
+description: "Run automated continuous validation on every Pull Request."
+---
+
+# GitHub Actions Integration
+
+Kova integrates seamlessly into GitHub Actions to validate preview environments and prevent regressions before merging.
+
+```yaml
+name: Continuous Validation
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Deploy Ephemeral Preview
+        id: deploy
+        run: echo "url=https://pr-${{ github.event.pull_request.number }}.preview.mycorp.com" >> $GITHUB_OUTPUT
+
+      - name: Kova Continuous Validation
+        run: |
+          curl -f -X POST "https://api.kova.dev/api/v1/ci/validate" \
+            -H "Authorization: Bearer ${{ secrets.KOVA_API_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "project_id": "${{ vars.KOVA_PROJECT_ID }}",
+              "base_url": "${{ steps.deploy.outputs.url }}",
+              "commit_message": "${{ github.event.pull_request.title }}"
+            }'
+```

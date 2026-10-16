@@ -361,3 +361,48 @@
 - **Tests Passing:**
   - `pytest backend/tests/unit/test_observability.py -v` (6 passed)
   - `pytest backend/tests/unit/test_observability.py backend/tests/unit/test_auth.py backend/tests/unit/test_integrations.py -v` (33 passed)
+
+## Chunk 17 — Onboarding, Billing, and Product Surfaces
+- **Status:** Complete
+- **Changes:**
+  - Database & Migrations:
+    - Added Alembic migration `024_add_billing_tables.py` creating `subscriptions`, `invoices`, `usage_events`, and adding `onboarding_step` to `users`.
+  - Backend Billing, Usage & Tokens:
+    - Built `StripeClient` (`backend/app/modules/billing/stripe_client.py`) with support for checkout sessions, customer portal sessions, signature verification, and mock fallbacks for testing.
+    - Implemented `BillingRepository` and `BillingService` (`backend/app/modules/billing/`):
+      - Handles Stripe webhooks: `checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`.
+      - Automatically synchronizes `OrganizationQuota` on plan upgrades and downgrades (`free`, `pro`, `enterprise`).
+      - Meters monthly flow executions and evidence storage via `UsageEvent`.
+      - Enforces monthly execution limits, raising `HTTPException(402)` with billing upgrade URL when monthly quota is reached.
+    - Added routes `POST /api/v1/billing/checkout`, `POST /api/v1/billing/portal`, `GET /api/v1/billing/subscription`, `GET /api/v1/billing/invoices`, `POST /api/v1/billing/webhook` in `backend/app/api/routes/billing.py`.
+    - Added route `GET /api/v1/usage` in `backend/app/api/routes/usage.py`.
+    - Added scoped API tokens and onboarding progress persistence in `backend/app/api/routes/auth.py` (`POST /tokens` with scopes, `GET /tokens` with one-time reveal protection, `DELETE /tokens/{id}`, and `PATCH /me/onboarding`).
+    - Enforced 402 plan limits on CI runs in `backend/app/api/routes/ci.py`.
+  - Frontend Surfaces:
+    - Created typed client libraries in `frontend/lib/api/` (`billing.ts`, `usage.ts`, `tokens.ts`, `onboarding.ts`).
+    - Built first-run 4-step skippable onboarding wizard:
+      - `frontend/app/onboarding/page.tsx`
+      - `frontend/components/onboarding/wizard.tsx` (App Connect, Credentials, Discovery, Validation, Resumable progress, Skip button).
+    - Built billing and plans management page:
+      - `frontend/app/billing/page.tsx`
+      - `frontend/components/billing/billing-content.tsx` (Plan tiers Free/Pro/Enterprise, Execution and Storage meters, Checkout and Portal actions, Invoices history).
+    - Built settings pages:
+      - `frontend/app/settings/tokens/page.tsx` & `frontend/components/settings/tokens-content.tsx` (Scoped token generation, one-time reveal copy banner, revocation).
+      - `frontend/app/settings/usage/page.tsx` & `frontend/components/settings/usage-content.tsx` (Execution breakdown, storage meter, cycle dates, 402 limit warnings).
+    - Built public status page:
+      - `frontend/app/status/page.tsx` (Service components telemetry, live health check, incident log).
+  - Documentation Site:
+    - Created Mintlify config `docs-site/mint.json` and documentation guides:
+      - `docs-site/quickstart.mdx`
+      - `docs-site/concepts.mdx`
+      - `docs-site/integrations/github-actions.mdx`
+      - `docs-site/integrations/gitlab-ci.mdx`
+      - `docs-site/api-reference.mdx`
+      - `docs-site/pricing.mdx`
+      - `docs-site/changelog.mdx`
+  - Testing:
+    - Added unit test suite `backend/tests/unit/test_billing.py` (5 tests passing).
+    - Added integration test `backend/tests/integration/test_billing_webhook.py` (E2E checkout, webhook, usage, limit hit 402, token management).
+- **Tests Passing:**
+  - `pytest backend/tests/unit/test_billing.py backend/tests/integration/test_billing_webhook.py -v` (6 passed)
+  - `pnpm --prefix frontend build` (22/22 static/dynamic routes compiled successfully)
