@@ -278,8 +278,9 @@
   font-size: 15px;
   text-decoration: none;
   box-shadow: 0 12px 30px -10px rgba(138, 53, 19, 0.6);
-  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s ease, box-shadow 0.3s ease;
+  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
   cursor: pointer;
+  will-change: transform;
 }
 
 .btn-pill:hover {
@@ -299,6 +300,8 @@
   opacity: 0.55;
   animation: orb-fl 14s ease-in-out infinite alternate;
   pointer-events: none;
+  will-change: transform;
+  transform: translateZ(0);
 }
 
 .pill-badge {
@@ -314,7 +317,7 @@
   color: var(--ink);
 }
 
-.tile-float {
+.tile, .tile-float {
   width: 64px;
   height: 64px;
   border-radius: 18px;
@@ -323,15 +326,21 @@
   display: grid;
   place-items: center;
   animation: fl2 6s ease-in-out infinite alternate;
-  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s;
+  transition: scale 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), translate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), rotate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
+  cursor: pointer;
+  will-change: transform, translate, scale, rotate;
+  transform: translateZ(0);
 }
 
-.tile-float:hover {
-  transform: scale(1.15) translateY(-8px) rotate(-4deg);
-  box-shadow: 0 30px 40px -14px rgba(138, 53, 19, 0.55);
+.tile:hover, .tile-float:hover {
+  scale: 1.22;
+  translate: 0 -10px;
+  rotate: -6deg;
+  box-shadow: 0 34px 44px -14px rgba(138, 53, 19, 0.6);
+  animation-play-state: paused;
 }
 
-.bento-card {
+.bento-card, .bn {
   border-radius: 28px;
   background: #fff;
   border: 1px solid var(--line);
@@ -339,12 +348,14 @@
   position: relative;
   overflow: hidden;
   text-align: left;
-  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s;
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+  transform: translateZ(0);
 }
 
-.bento-card:hover {
+.bento-card:hover, .bn:hover {
   transform: translateY(-6px);
-  box-shadow: 0 40px 60px -35px rgba(90, 40, 10, 0.35);
+  box-shadow: 0 40px 60px -35px rgba(90, 40, 10, 0.4);
 }
 
 .bento-ill {
@@ -367,6 +378,8 @@
   letter-spacing: -0.03em;
   color: rgba(42, 23, 13, 0.18);
   white-space: nowrap;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
 }
 
 /* ============================================================ */
@@ -651,6 +664,7 @@
   border: 2px solid rgba(255, 255, 255, 0.6);
   animation: ring 2.4s ease-out infinite;
   pointer-events: none;
+  will-change: transform, opacity;
 }
 
 .pb::after {
@@ -676,8 +690,9 @@
 }
 
 .ft .tile, .ft .tile-float {
-  transition: scale 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), translate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s ease;
+  transition: scale 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), translate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), rotate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s cubic-bezier(0.2, 0.8, 0.2, 1);
   cursor: pointer;
+  will-change: transform, scale, translate, rotate;
 }
 
 .ft .tile:hover, .ft .tile-float:hover {

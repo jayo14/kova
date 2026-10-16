@@ -10,9 +10,12 @@ goal interpretation, journey planning, next-action selection, recovery, and
 final verification — never per DOM node.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 from app.engine.ai.memory import AgentMemory

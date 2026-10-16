@@ -151,7 +151,7 @@ import hmac
 import time
 import uuid
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 import jinja2
 
