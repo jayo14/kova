@@ -181,7 +181,7 @@ export function LandingRedesign() {
             </div>
 
             {/* Floating Left Slanted Card: Report */}
-            <div className="hidden lg:block absolute left-8 top-32 z-10 w-52 rounded-2xl bg-white/90 p-4 text-left shadow-[0_30px_50px_-20px_rgba(40,10,0,0.55)] -rotate-6 transition-transform duration-300 hover:rotate-0 hover:scale-105">
+            <div className="sd hidden lg:block" style={{ left: "34px", top: "130px", transform: "rotate(-7deg)" }}>
               <div className="h-2 w-14 rounded-full bg-[#8A3513]" />
               {[1, 2, 3, 4].map((i) => (
                 <div key={i} className="mt-2.5 flex items-center gap-2">
@@ -189,11 +189,11 @@ export function LandingRedesign() {
                   <span className="h-1.5 flex-1 rounded-full bg-[#E6B79A]" />
                 </div>
               ))}
-              <b className="mt-3 block font-['Bricolage_Grotesque'] text-sm font-bold text-[#2A170D]">Continuous Report</b>
+              <b className="mt-3 block font-['Bricolage_Grotesque'] text-sm font-bold text-[#2A170D]">Report</b>
             </div>
 
             {/* Floating Right Slanted Card: Screenshots */}
-            <div className="hidden lg:block absolute right-8 top-40 z-10 w-56 rounded-2xl bg-white/90 p-4 text-left shadow-[0_30px_50px_-20px_rgba(40,10,0,0.55)] rotate-6 transition-transform duration-300 hover:rotate-0 hover:scale-105">
+            <div className="sd hidden lg:block" style={{ right: "34px", top: "170px", transform: "rotate(7deg)" }}>
               <div className="grid grid-cols-2 gap-2">
                 {[1, 2, 3, 4].map((i) => (
                   <div key={i} className="h-12 rounded-lg bg-gradient-to-br from-[#FBE9D6] to-[#F3C9A3] p-1.5">
@@ -251,25 +251,47 @@ export function LandingRedesign() {
                     </div>
                   </div>
 
-                  {/* Bottom Video Badge & Play Button */}
-                  <div className="flex items-center justify-between text-white/90 pt-2 border-t border-[#2A170D]/10">
-                    <div className="text-left">
-                      <div className="font-['Bricolage_Grotesque'] text-base md:text-xl font-bold text-[#2A170D]">
-                        Watch Kova go from URL to full report
-                      </div>
-                      <div className="font-['DM_Mono'] text-xs text-[#6B5646]">Autonomous execution · 14 actions · verified</div>
-                    </div>
+                  {/* Simulated Cursor */}
+                  <svg width="30" height="30" viewBox="0 0 24 24" className="absolute left-[30%] bottom-[16%] drop-shadow-[0_6px_8px_rgba(138,53,19,0.45)] transition-all duration-700" style={{ transform: isPlayingDemo ? "translate(120px, -40px)" : "none" }}>
+                    <path d="M4 3l16 7-7 2-2 7z" fill="#8A3513" stroke="#fff" strokeWidth="1.5" />
+                  </svg>
+                </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setIsPlayingDemo(!isPlayingDemo)}
-                      className="flex h-12 w-12 items-center justify-center rounded-full bg-[#8A3513] text-white shadow-lg transition-transform hover:scale-110 active:scale-95"
-                      aria-label="Play product demo"
-                    >
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M7 4.5v15l13-7.5z" />
-                      </svg>
-                    </button>
+                {/* Dark Gradient Overlay */}
+                <div className={`absolute inset-0 bg-gradient-to-b from-[rgba(42,23,13,0.12)] to-[rgba(42,23,13,0.6)] transition-opacity duration-500 ${isPlayingDemo ? "opacity-30" : "opacity-100"}`} />
+
+                {/* PRODUCT DEMO Chip */}
+                <div className="absolute left-6 top-5 z-20 rounded-full bg-[#2A170D]/60 px-3.5 py-1.5 font-['DM_Mono'] text-xs text-white tracking-widest uppercase backdrop-blur-sm">
+                  PRODUCT DEMO
+                </div>
+
+                {/* Concentric Pulsing Center Play Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsPlayingDemo(!isPlayingDemo)}
+                  className={`pb transition-all duration-300 ${isPlayingDemo ? "opacity-0 pointer-events-none scale-75" : "opacity-100 scale-100"}`}
+                  aria-label="Play product demo video"
+                >
+                  <svg width="36" height="36" viewBox="0 0 24 24" fill="#8A3513" className="ml-1">
+                    <path d="M7 4.5v15l13-7.5z" />
+                  </svg>
+                </button>
+
+                {/* Bottom Video Badge & Timeline Bar */}
+                <div className="absolute left-6 right-6 bottom-5 z-20 text-left text-white">
+                  <div className="font-['Bricolage_Grotesque'] text-lg md:text-2xl font-bold tracking-tight text-white drop-shadow-sm">
+                    Watch Kova go from URL to full report
+                  </div>
+                  <div className="mt-3 flex items-center gap-3.5">
+                    <div className="h-1.5 flex-1 rounded-full bg-white/35 overflow-hidden">
+                      <div
+                        className="h-full bg-white rounded-full transition-all duration-1000 ease-linear"
+                        style={{ width: isPlayingDemo ? "100%" : "0%" }}
+                      />
+                    </div>
+                    <span className="font-['DM_Mono'] text-xs text-white/90">
+                      {isPlayingDemo ? "0:42 / 0:42" : "0:00 / 0:42"}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -277,21 +299,21 @@ export function LandingRedesign() {
 
             {/* 4 Bottom Journey Step Chips */}
             <div className="relative z-10 mt-8 grid grid-cols-2 gap-3 sm:grid-cols-4 md:-mx-12">
-              <div className="flex items-center gap-2.5 rounded-2xl border border-white/90 bg-[#FFFDFA] p-3.5 text-left text-xs md:text-sm font-semibold text-[#2A170D] shadow-md transition-transform hover:-translate-y-1">
-                <i className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8A3513] font-['DM_Mono'] text-xs text-white not-italic">01</i>
+              <div className="chp">
+                <i>01</i>
                 <span>Paste your URL</span>
               </div>
-              <div className="flex items-center gap-2.5 rounded-2xl border border-white/90 bg-[#FFFDFA] p-3.5 text-left text-xs md:text-sm font-semibold text-[#2A170D] shadow-md transition-transform hover:-translate-y-1">
-                <i className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8A3513] font-['DM_Mono'] text-xs text-white not-italic">02</i>
+              <div className="chp">
+                <i>02</i>
                 <span>Kova explores &amp; learns</span>
               </div>
-              <div className="flex items-center gap-2.5 rounded-2xl border border-white/90 bg-[#FFFDFA] p-3.5 text-left text-xs md:text-sm font-semibold text-[#2A170D] shadow-md transition-transform hover:-translate-y-1">
-                <i className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8A3513] font-['DM_Mono'] text-xs text-white not-italic">03</i>
+              <div className="chp">
+                <i>03</i>
                 <span>Runs like a real user</span>
               </div>
-              <div className="flex items-center gap-2.5 rounded-2xl border border-white/90 bg-[#FFFDFA] p-3.5 text-left text-xs md:text-sm font-semibold text-[#2A170D] shadow-md transition-transform hover:-translate-y-1">
-                <i className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#8A3513] font-['DM_Mono'] text-xs text-white not-italic">04</i>
-                <span>Report &amp; evidence</span>
+              <div className="chp">
+                <i>04</i>
+                <span>Report, evidence &amp; video</span>
               </div>
             </div>
           </div>
@@ -313,13 +335,13 @@ export function LandingRedesign() {
             <div className="bento-card">
               <div className="font-['DM_Mono'] text-sm font-semibold text-[#D58A56]">01</div>
               <div className="bento-ill mt-5">
-                <svg width="110" height="85" viewBox="0 0 120 90" fill="none">
+                <svg width="120" height="90" viewBox="0 0 120 90" fill="none">
                   <rect x="8" y="8" width="104" height="74" rx="12" fill="#fff" stroke="#8A3513" strokeWidth="2" />
                   <path d="M8 28h104" stroke="#8A3513" strokeWidth="2" />
                   <circle cx="20" cy="18" r="3" fill="#D58A56" />
                   <circle cx="30" cy="18" r="3" fill="#E6B79A" />
                   <rect x="44" y="13" width="56" height="10" rx="5" fill="#F1E7D8" />
-                  <g className="animate-[spin_18s_linear_infinite] origin-[60px_56px]">
+                  <g className="gl">
                     <circle cx="60" cy="56" r="15" stroke="#8A3513" strokeWidth="2" />
                     <path d="M45 56h30M60 41c-8 9-8 21 0 30M60 41c8 9 8 21 0 30" stroke="#D58A56" strokeWidth="2" />
                   </g>
@@ -333,11 +355,11 @@ export function LandingRedesign() {
             <div className="bento-card">
               <div className="font-['DM_Mono'] text-sm font-semibold text-[#D58A56]">02</div>
               <div className="bento-ill mt-5">
-                <svg width="110" height="85" viewBox="0 0 120 90" fill="none">
+                <svg width="120" height="90" viewBox="0 0 120 90" fill="none">
                   <rect x="10" y="10" width="60" height="14" rx="7" fill="#fff" stroke="#8A3513" strokeWidth="2" />
                   <rect x="10" y="32" width="40" height="34" rx="8" fill="#fff" stroke="#D58A56" strokeWidth="2" />
                   <rect x="58" y="32" width="34" height="16" rx="8" fill="#fff" stroke="#D58A56" strokeWidth="2" />
-                  <g>
+                  <g className="mg">
                     <circle cx="82" cy="56" r="20" fill="rgba(255,255,255,0.6)" stroke="#8A3513" strokeWidth="3" />
                     <path d="M96 71l14 14" stroke="#8A3513" strokeWidth="5" strokeLinecap="round" />
                   </g>
@@ -351,11 +373,12 @@ export function LandingRedesign() {
             <div className="bento-card">
               <div className="font-['DM_Mono'] text-sm font-semibold text-[#D58A56]">03</div>
               <div className="bento-ill mt-5">
-                <svg width="110" height="85" viewBox="0 0 120 90" fill="none">
+                <svg width="120" height="90" viewBox="0 0 120 90" fill="none">
                   <rect x="14" y="16" width="70" height="26" rx="13" fill="#8A3513" />
                   <rect x="26" y="26" width="30" height="6" rx="3" fill="#F3C9A3" />
-                  <circle cx="70" cy="29" r="22" stroke="#D58A56" strokeWidth="2" opacity="0.6" />
-                  <path d="M66 40l34 14-14 4-4 14z" fill="#2A170D" stroke="#fff" strokeWidth="2" />
+                  <circle className="rp" cx="70" cy="29" r="22" stroke="#D58A56" strokeWidth="2" opacity="0.6" />
+                  <circle className="rp" cx="70" cy="29" r="34" stroke="#D58A56" strokeWidth="1.5" opacity="0.3" style={{ animationDelay: ".25s" }} />
+                  <path className="cu" d="M66 40l34 14-14 4-4 14z" fill="#2A170D" stroke="#fff" strokeWidth="2" />
                 </svg>
               </div>
               <h3 className="mt-6 font-['Bricolage_Grotesque'] text-2xl font-bold text-[#2A170D]">Let it act</h3>
@@ -366,10 +389,10 @@ export function LandingRedesign() {
             <div className="bento-card">
               <div className="font-['DM_Mono'] text-sm font-semibold text-[#D58A56]">04</div>
               <div className="bento-ill mt-5">
-                <svg width="110" height="85" viewBox="0 0 120 90" fill="none">
+                <svg width="120" height="90" viewBox="0 0 120 90" fill="none">
                   <rect x="26" y="6" width="62" height="78" rx="10" fill="#fff" stroke="#8A3513" strokeWidth="2" />
                   <path d="M38 24h38M38 36h38M38 48h22" stroke="#E6B79A" strokeWidth="4" strokeLinecap="round" />
-                  <g>
+                  <g className="bd">
                     <circle cx="84" cy="62" r="20" fill="#8A3513" />
                     <path d="M74 62l7 7 12-14" stroke="#fff" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
                   </g>
@@ -399,15 +422,17 @@ export function LandingRedesign() {
             {/* Card 1: Test (span 2) */}
             <div className="bento-card md:col-span-2">
               <div className="bento-ill">
-                <svg width="240" height="120" viewBox="0 0 260 130" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="260" height="130" viewBox="0 0 260 130" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="10" y="8" width="240" height="30" rx="15" fill="#fff" />
                   <rect x="10" y="50" width="240" height="30" rx="15" fill="#fff" />
                   <rect x="10" y="92" width="240" height="30" rx="15" fill="#fff" />
-                  <circle cx="30" cy="23" r="9" fill="#8A3513" />
-                  <circle cx="30" cy="65" r="9" fill="#8A3513" />
-                  <circle cx="30" cy="107" r="9" fill="#D58A56" stroke="none" />
+                  <circle className="tk" cx="30" cy="23" r="9" fill="#8A3513" />
+                  <circle className="tk" style={{ animationDelay: ".25s" }} cx="30" cy="65" r="9" fill="#8A3513" />
+                  <circle className="tk" style={{ animationDelay: ".5s" }} cx="30" cy="107" r="9" fill="#D58A56" stroke="none" />
                   <path d="M26 23l3 3 5-6M26 65l3 3 5-6" stroke="#fff" />
-                  <path d="M52 23h110M52 65h150M52 107h90" stroke="#E6B79A" strokeWidth="5" />
+                  <path className="bar" d="M52 23h110" stroke="#E6B79A" strokeWidth="5" />
+                  <path className="bar" style={{ animationDelay: ".25s" }} d="M52 65h150" stroke="#E6B79A" strokeWidth="5" />
+                  <path className="bar" style={{ animationDelay: ".5s" }} d="M52 107h90" stroke="#E6B79A" strokeWidth="5" />
                 </svg>
               </div>
               <h3 className="mt-6 font-['Bricolage_Grotesque'] text-2xl font-bold text-[#2A170D]">Test</h3>
@@ -419,9 +444,9 @@ export function LandingRedesign() {
             {/* Card 2: Validate (span 1) */}
             <div className="bento-card md:col-span-1">
               <div className="bento-ill">
-                <svg width="100" height="110" viewBox="0 0 36 40" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 3l13 5v10c0 9-6 15-13 19C11 33 5 27 5 18V8z" fill="#fff" />
-                  <path d="M12 19l4 4 8-10" stroke="#8A3513" strokeWidth="2.6" />
+                <svg width="110" height="120" viewBox="0 0 36 40" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path className="nd" d="M18 3l13 5v10c0 9-6 15-13 19C11 33 5 27 5 18V8z" fill="#fff" />
+                  <path className="dr" pathLength={1} style={{ strokeDasharray: 1, animationDelay: ".35s" }} d="M12 19l4 4 8-10" stroke="#8A3513" strokeWidth="2.6" />
                 </svg>
               </div>
               <h3 className="mt-6 font-['Bricolage_Grotesque'] text-2xl font-bold text-[#2A170D]">Validate</h3>
@@ -433,12 +458,12 @@ export function LandingRedesign() {
             {/* Card 3: Explore (span 1) */}
             <div className="bento-card md:col-span-1">
               <div className="bento-ill">
-                <svg width="200" height="110" viewBox="0 0 240 130" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M40 65L110 25M40 65L110 100M110 25L190 55M110 100L190 55M110 25L110 100" />
-                  <circle cx="40" cy="65" r="14" fill="#fff" />
-                  <circle cx="110" cy="25" r="12" fill="#fff" />
-                  <circle cx="110" cy="100" r="12" fill="#fff" />
-                  <circle cx="190" cy="55" r="16" fill="#8A3513" />
+                <svg width="240" height="130" viewBox="0 0 240 130" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path className="dr" pathLength={1} style={{ strokeDasharray: 1 }} d="M40 65L110 25M40 65L110 100M110 25L190 55M110 100L190 55M110 25L110 100" />
+                  <circle className="nd" cx="40" cy="65" r="14" fill="#fff" />
+                  <circle className="nd" style={{ animationDelay: ".2s" }} cx="110" cy="25" r="12" fill="#fff" />
+                  <circle className="nd" style={{ animationDelay: ".3s" }} cx="110" cy="100" r="12" fill="#fff" />
+                  <circle className="nd" style={{ animationDelay: ".5s" }} cx="190" cy="55" r="16" fill="#8A3513" />
                   <circle cx="190" cy="55" r="26" stroke="#D58A56" strokeDasharray="3 6" />
                 </svg>
               </div>
@@ -451,12 +476,12 @@ export function LandingRedesign() {
             {/* Card 4: Demonstrate (span 2) */}
             <div className="bento-card md:col-span-2">
               <div className="bento-ill">
-                <svg width="240" height="110" viewBox="0 0 260 120" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <svg width="260" height="120" viewBox="0 0 260 120" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="10" y="10" width="240" height="70" rx="14" fill="#fff" />
-                  <circle cx="130" cy="45" r="22" fill="#8A3513" />
-                  <path d="M124 36l15 9-15 9z" fill="#fff" stroke="#fff" />
+                  <circle className="nd" cx="130" cy="45" r="22" fill="#8A3513" />
+                  <path className="nd" style={{ animationDelay: ".15s" }} d="M124 36l15 9-15 9z" fill="#fff" stroke="#fff" />
                   <rect x="10" y="94" width="240" height="8" rx="4" fill="#fff" stroke="none" />
-                  <rect x="10" y="94" width="150" height="8" rx="4" fill="#D58A56" stroke="none" />
+                  <rect className="bar" style={{ animationDuration: "1.4s" }} x="10" y="94" width="150" height="8" rx="4" fill="#D58A56" stroke="none" />
                 </svg>
               </div>
               <h3 className="mt-6 font-['Bricolage_Grotesque'] text-2xl font-bold text-[#2A170D]">Demonstrate</h3>
@@ -480,28 +505,30 @@ export function LandingRedesign() {
               </div>
 
               <div className="shrink-0">
-                <svg width="150" height="150" viewBox="0 0 170 170" aria-hidden="true">
-                  <g className="animate-[spin_30s_linear_infinite] origin-[85px_85px]">
+                <svg width="170" height="170" viewBox="0 0 170 170" aria-hidden="true">
+                  <g style={{ transformOrigin: "85px 85px", animation: "spin 30s linear infinite" }}>
                     <circle cx="85" cy="85" r="78" fill="none" stroke="rgba(213,138,86,0.6)" strokeDasharray="2 8" />
                   </g>
                   <circle cx="85" cy="85" r="52" fill="none" stroke="rgba(255,255,255,0.2)" />
-                  <circle cx="85" cy="85" r="30" fill="#8A3513" />
-                  <circle cx="85" cy="33" r="7" fill="#F3C9A3" />
-                  <circle cx="137" cy="85" r="7" fill="#F3C9A3" />
-                  <circle cx="85" cy="137" r="7" fill="#fff" />
-                  <circle cx="33" cy="85" r="7" fill="#F3C9A3" />
+                  <circle className="nd" cx="85" cy="85" r="30" fill="#8A3513" />
+                  <circle className="nd" style={{ animationDelay: ".15s" }} cx="85" cy="33" r="7" fill="#F3C9A3" />
+                  <circle className="nd" style={{ animationDelay: ".3s" }} cx="137" cy="85" r="7" fill="#F3C9A3" />
+                  <circle className="nd" style={{ animationDelay: ".45s" }} cx="85" cy="137" r="7" fill="#fff" />
+                  <circle className="nd" style={{ animationDelay: ".6s" }} cx="33" cy="85" r="7" fill="#F3C9A3" />
                 </svg>
               </div>
             </div>
 
             {/* Card 6: No script to maintain (span 1) */}
             <div className="bento-card md:col-span-1">
-              <div className="bento-ill flex flex-col items-center justify-center gap-2.5">
-                <span className="rounded-full border border-dashed border-[#2A170D]/30 px-3 py-1 font-['DM_Mono'] text-xs text-[#6B5646] line-through">
+              <div className="bento-ill gap-2.5 flex flex-col justify-center items-center">
+                <span className="font-['DM_Mono'] text-xs text-[#6B5646] line-through py-1.5 px-3.5 rounded-full border border-dashed border-[#2A170D]/30">
                   click(&quot;#submit-btn&quot;)
                 </span>
                 <span className="text-[#8A3513] font-bold">↓</span>
-                <span className="btn-pill !py-2 !px-4 !text-xs">Adapts to the goal</span>
+                <span className="btn-pill nd !py-2 !px-4 !text-xs" style={{ animationDelay: ".2s" }}>
+                  Adapts to the goal
+                </span>
               </div>
               <h3 className="mt-6 font-['Bricolage_Grotesque'] text-2xl font-bold text-[#2A170D]">No script to maintain</h3>
               <p className="mt-2 text-sm text-[#6B5646] leading-relaxed">
@@ -687,62 +714,78 @@ export function LandingRedesign() {
       {/* ============================================================ */}
       {/* FOOTER                                                       */}
       {/* ============================================================ */}
-      <footer className="py-10">
+      <footer className="ft py-10">
         <div className="mx-auto max-w-[1200px] px-6">
-          <div className="relative overflow-hidden rounded-[36px] bg-[#F1E7D8] p-8 md:p-14 min-h-[460px] bg-[radial-gradient(rgba(42,23,13,0.12)_1px,transparent_1px)] [background-size:14px_14px]">
+          <div className="ftp relative overflow-hidden rounded-[36px] bg-[#F1E7D8] p-8 md:p-14 min-h-[520px] transition-[background-position] duration-1000 ease-out bg-[radial-gradient(rgba(42,23,13,0.12)_1px,transparent_1px)] [background-size:14px_14px]">
             <div className="flex flex-col md:flex-row justify-between gap-10">
               <div>
                 <h3 className="font-['Bricolage_Grotesque'] text-3xl font-bold tracking-tight text-[#2A170D]">
                   Kova<span className="text-[#D58A56]">.</span>
                 </h3>
-                <h4 className="mt-4 max-w-sm font-['Bricolage_Grotesque'] text-3xl md:text-4xl font-bold tracking-tight text-[#2A170D] leading-tight">
+                <h4 className="mt-4 max-w-sm font-['Bricolage_Grotesque'] text-3xl md:text-5xl font-bold tracking-tight text-[#2A170D] leading-tight">
                   Stay confident with <em className="font-['Instrument_Serif'] font-normal italic text-[#8A3513]">every release.</em>
                 </h4>
               </div>
 
               <div className="flex gap-16 text-sm text-[#6B5646]">
                 <div className="flex flex-col gap-3 font-medium">
-                  <a href="#product" className="transition-colors hover:text-[#8A3513]">Product</a>
-                  <a href="#how" className="transition-colors hover:text-[#8A3513]">How it works</a>
-                  <a href="#features" className="transition-colors hover:text-[#8A3513]">Features</a>
-                  <a href="#pricing" className="transition-colors hover:text-[#8A3513]">Pricing</a>
+                  <a href="#product">Product</a>
+                  <a href="#how">How it works</a>
+                  <a href="#features">Features</a>
+                  <a href="#pricing">Pricing</a>
                 </div>
                 <div className="flex flex-col gap-3 font-medium">
                   <span className="text-xs font-semibold uppercase tracking-wider text-[#8A3513]">Developers</span>
-                  <Link href="/auth/login" className="transition-colors hover:text-[#8A3513]">Sign in</Link>
-                  <Link href="/auth/signup" className="transition-colors hover:text-[#8A3513]">Get started</Link>
-                  <Link href="/status" className="transition-colors hover:text-[#8A3513]">System status</Link>
+                  <Link href="/auth/login">Sign in</Link>
+                  <Link href="/auth/signup">Get started</Link>
+                  <Link href="/status">System status</Link>
                 </div>
               </div>
             </div>
 
-            {/* Floating Decorative Tiles in Footer */}
-            <div className="hidden sm:block">
-              <div className="tile-float absolute left-14 top-64 -rotate-12">
-                <svg width="26" height="26" viewBox="0 0 36 36" fill="#8A3513" stroke="#8A3513" strokeWidth="2" strokeLinejoin="round">
+            {/* Floating Decorative Tiles in Footer (f1 - f6) */}
+            <div className="hidden lg:block">
+              {/* f1: click animation */}
+              <div className="tile-float f1 absolute left-[70px] top-[300px] -rotate-12">
+                <svg width="28" height="28" viewBox="0 0 36 36" fill="#8A3513" stroke="#8A3513" strokeWidth="2" strokeLinejoin="round">
                   <path d="M8 5l22 10-9 3-3 9z" />
                 </svg>
               </div>
-              <div className="tile-float absolute left-52 top-80 [animation-delay:-2s]">
-                <svg width="28" height="28" viewBox="0 0 16 16" fill="none" stroke="#3E9B5F" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+
+              {/* f2: pop animation */}
+              <div className="tile-float f2 absolute left-[260px] top-[380px] [animation-delay:-2s]">
+                <svg width="30" height="30" viewBox="0 0 16 16" fill="none" stroke="#3E9B5F" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 8.5l3 3 7-7" />
                 </svg>
               </div>
-              <div className="tile-float absolute left-96 top-64 rotate-6 [animation-delay:-4s]">
-                <svg width="28" height="28" viewBox="0 0 36 36" fill="none" stroke="#8A3513" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+
+              {/* f3: blink animation */}
+              <div className="tile-float f3 absolute left-[470px] top-[300px] rotate-8 [animation-delay:-4s]">
+                <svg width="30" height="30" viewBox="0 0 36 36" fill="none" stroke="#8A3513" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 18s6-11 15-11 15 11 15 11-6 11-15 11S3 18 3 18z" />
                   <circle cx="18" cy="18" r="5" />
                 </svg>
               </div>
-              <div className="tile-float absolute right-64 top-72 [animation-delay:-1s]">
-                <svg width="26" height="26" viewBox="0 0 24 24" fill="#D58A56" stroke="#8A3513" strokeWidth="1.5" strokeLinejoin="round">
+
+              {/* f4: freeze/zap animation */}
+              <div className="tile-float f4 absolute left-[680px] top-[390px] [animation-delay:-1s]">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="#D58A56" stroke="#8A3513" strokeWidth="1.5" strokeLinejoin="round">
                   <path d="M13 2L4 14h7l-1 8 9-12h-7z" />
                 </svg>
               </div>
-              <div className="tile-float absolute right-24 top-64 -rotate-6 [animation-delay:-5s]">
-                <svg width="28" height="28" viewBox="0 0 36 36" fill="none" stroke="#8A3513" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+
+              {/* f5: wobble animation */}
+              <div className="tile-float f5 absolute left-[880px] top-[300px] -rotate-6 [animation-delay:-5s]">
+                <svg width="30" height="30" viewBox="0 0 36 36" fill="none" stroke="#8A3513" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M18 3l12 4v9c0 8-5 13-12 17C11 29 6 24 6 16V7z" />
                   <path d="M12 18l4 4 8-9" />
+                </svg>
+              </div>
+
+              {/* f6: spin animation */}
+              <div className="tile-float f6 absolute right-16 top-[390px] [animation-delay:-3s]">
+                <svg width="28" height="28" viewBox="0 0 20 20" fill="none" stroke="#8A3513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 10a7 7 0 0 1 12-5l2 2M17 3v4h-4M17 10a7 7 0 0 1-12 5l-2-2M3 17v-4h4" />
                 </svg>
               </div>
             </div>

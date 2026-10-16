@@ -369,6 +369,55 @@
   white-space: nowrap;
 }
 
+/* ============================================================ */
+/* ENTRANCE & SCROLL ANIMATIONS                                 */
+/* ============================================================ */
+.rv {
+  animation: up 1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@supports (animation-timeline: view()) {
+  .sc {
+    animation: up linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 45%;
+  }
+}
+
+@keyframes up {
+  from {
+    opacity: 0;
+    transform: translateY(40px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes tick {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ============================================================ */
+/* SVG TRANSFORM-BOX & MICRO-INTERACTION KEYFRAMES             */
+/* ============================================================ */
+.gl, .mg, .cu, .rp, .bd, .nd, .tk, .bar, .dr, .ck svg {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bar {
+  transform-origin: left center;
+}
+
 @keyframes orb-fl {
   to {
     transform: translate(60px, 40px) scale(1.15);
@@ -387,13 +436,228 @@
   }
 }
 
-@keyframes spin-slow {
+@keyframes spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-@keyframes ring-pulse {
+@keyframes sw {
+  50% {
+    transform: translate(-24px, -16px);
+  }
+}
+
+@keyframes ck {
+  40%, 60% {
+    transform: translate(-9px, -9px);
+  }
+  50% {
+    transform: translate(-9px, -9px) scale(0.9);
+  }
+}
+
+@keyframes rp {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.55);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes pp {
+  50% {
+    transform: scale(1.3) rotate(-8deg);
+  }
+}
+
+@keyframes pop1 {
+  0% {
+    transform: scale(0);
+  }
+  60% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes drw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+
+/* Bento Card Hover Micro-Interactions */
+.bento-card:hover .gl, .bn:hover .gl {
+  animation: spin 1.6s cubic-bezier(0.4, 0, 0.2, 1) 1;
+}
+
+.bento-card:hover .mg, .bn:hover .mg {
+  animation: sw 1.4s ease-in-out 1;
+}
+
+.bento-card:hover .cu, .bn:hover .cu {
+  animation: ck 1.2s ease-in-out 1;
+}
+
+.bento-card:hover .rp, .bn:hover .rp {
+  animation: rp 1.2s ease-out 1;
+}
+
+.bento-card:hover .bd, .bn:hover .bd {
+  animation: pp 0.9s ease-in-out 1;
+}
+
+.bento-card:hover .nd, .bento-card:hover .tk, .bn:hover .nd, .bn:hover .tk {
+  animation: pop1 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.bento-card:hover .bar, .bn:hover .bar {
+  animation: grow 0.9s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.bento-card:hover .dr, .bn:hover .dr {
+  animation: drw 0.9s ease both;
+}
+
+.bento-card:hover .ck svg, .bn:hover .ck svg {
+  animation: pop1 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.ck:nth-child(2) svg {
+  animation-delay: 0.1s !important;
+}
+
+.ck:nth-child(3) svg {
+  animation-delay: 0.2s !important;
+}
+
+.ck:nth-child(4) svg {
+  animation-delay: 0.3s !important;
+}
+
+/* ============================================================ */
+/* PRODUCT SHOWCASE & SLANTED CARDS                            */
+/* ============================================================ */
+.sd {
+  position: absolute;
+  z-index: 10;
+  width: 210px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 16px;
+  box-shadow: 0 30px 50px -24px rgba(40, 10, 0, 0.55);
+  text-align: left;
+  transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.5s ease;
+}
+
+.sd:hover {
+  transform: translateY(-10px) rotate(0deg) !important;
+  box-shadow: 0 40px 60px -20px rgba(40, 10, 0, 0.65);
+}
+
+.sd b {
+  display: block;
+  margin-top: 14px;
+  font-family: var(--font-bricolage), sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+}
+
+.chp {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #FFFDFA;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 30px -20px rgba(40, 10, 0, 0.5);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  text-align: left;
+  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.chp:hover {
+  transform: translateY(-4px);
+  background: #ffffff;
+  box-shadow: 0 20px 40px -15px rgba(40, 10, 0, 0.6);
+}
+
+.chp i {
+  font-family: var(--font-dm-mono), monospace;
+  font-weight: 500;
+  font-size: 12px;
+  font-style: normal;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--rust);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+
+/* ============================================================ */
+/* CONCENTRIC PULSING PLAY BUTTON (.pb)                         */
+/* ============================================================ */
+.pb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 104px;
+  height: 104px;
+  margin: -52px 0 0 -52px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 20px 50px -10px rgba(60, 20, 0, 0.55);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  padding: 0;
+  z-index: 25;
+}
+
+.pb:hover {
+  transform: scale(1.12);
+}
+
+.pb::before,
+.pb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.6);
+  animation: ring 2.4s ease-out infinite;
+  pointer-events: none;
+}
+
+.pb::after {
+  animation-delay: 1.2s;
+}
+
+@keyframes ring {
   from {
     transform: scale(1);
     opacity: 0.8;
@@ -402,5 +666,77 @@
     transform: scale(1.9);
     opacity: 0;
   }
+}
+
+/* ============================================================ */
+/* FOOTER TILE HOVER REACTIONS                                  */
+/* ============================================================ */
+.ftp:hover {
+  background-position: 28px 28px !important;
+}
+
+.ft .tile, .ft .tile-float {
+  transition: scale 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), translate 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s ease;
+  cursor: pointer;
+}
+
+.ft .tile:hover, .ft .tile-float:hover {
+  scale: 1.22;
+  translate: 0 -10px;
+  rotate: -6deg;
+  box-shadow: 0 34px 44px -14px rgba(138, 53, 19, 0.6);
+  animation-play-state: paused;
+}
+
+.ft .tile svg, .ft .tile-float svg {
+  transform-origin: center;
+}
+
+@keyframes cl {
+  35% {
+    transform: translate(7px, 7px);
+  }
+  55% {
+    transform: translate(7px, 7px) scale(0.82);
+  }
+}
+
+@keyframes bl {
+  40% {
+    transform: scaleY(0.08);
+  }
+}
+
+@keyframes fz {
+  30% {
+    transform: scale(1.35) rotate(-14deg);
+    filter: drop-shadow(0 0 8px #D58A56);
+  }
+}
+
+@keyframes wb {
+  25% {
+    transform: rotate(-14deg);
+  }
+  60% {
+    transform: rotate(10deg) scale(1.15);
+  }
+}
+
+.ft .f1:hover svg { animation: cl 0.9s ease 1; }
+.ft .f2:hover svg { animation: pop1 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 1; }
+.ft .f3:hover svg { animation: bl 0.6s ease 1; }
+.ft .f4:hover svg { animation: fz 0.8s ease 1; }
+.ft .f5:hover svg { animation: wb 0.8s ease 1; }
+.ft .f6:hover svg { animation: spin 0.9s cubic-bezier(0.4, 0, 0.2, 1) 1; }
+
+.ft div span, .ft div a {
+  transition: color 0.3s ease, translate 0.3s ease;
+}
+
+.ft div span:hover, .ft div a:hover {
+  color: var(--rust);
+  translate: 5px 0;
+  cursor: pointer;
 }
 
