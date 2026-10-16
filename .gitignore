@@ -23,3 +23,12 @@ founder/
 .agents/
 skills-lock.json
 kova-launch-prompts/
+
+# Internal design mockups, audits, draft docs, and worklogs
+redesign pages/
+docs/
+AUDIT.md
+WORKLOG.md
+PRD.md
+ADR-001-native-browser-runtime.md
+kortix.yaml
