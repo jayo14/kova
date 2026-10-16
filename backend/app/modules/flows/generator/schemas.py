@@ -92,6 +92,7 @@ class ExecutionStep(BaseModel):
 
 class GeneratedFlow(BaseModel):
     """A generated flow possessing internal, JSON, and Gherkin representations."""
+    id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str = Field(min_length=1, max_length=255)
     goal_id: uuid.UUID | None = None
     persona_id: uuid.UUID | None = None

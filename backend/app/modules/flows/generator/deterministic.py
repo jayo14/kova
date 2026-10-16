@@ -129,21 +129,38 @@ class DeterministicFlowGenerator:
                         continue
 
                 produces = c.produces_state or []
+                matched = False
                 for p in produces:
                     p_key = p.get("key") if isinstance(p, dict) else getattr(p, "key", "")
                     p_val = p.get("value") if isinstance(p, dict) else getattr(p, "value", None)
                     if p_key == crit_key and (crit_val is None or p_val == crit_val):
                         if c not in matching_caps:
                             matching_caps.append(c)
+                        matched = True
+                        break
 
-        # If no capability matched by produces_state, attempt name/semantic match
-        if not matching_caps:
-            goal_lower = goal.name.lower()
-            for c in all_capabilities:
-                c_name_norm = c.name.lower().replace("_", " ")
-                if c_name_norm in goal_lower or goal_lower in c_name_norm:
-                    if c not in matching_caps:
-                        matching_caps.append(c)
+                if not matched:
+                    # Match by name or kind
+                    c_name_norm = c.name.lower().replace("_", " ")
+                    crit_words = crit_key.lower().replace("_", " ").split()
+                    if any(w in c_name_norm for w in crit_words if len(w) > 3) or (
+                        crit_key in ("authenticated", "signed_up") and (c.kind == "auth" or "auth" in c.name.lower())
+                    ):
+                        if c not in matching_caps:
+                            matching_caps.append(c)
+
+        # Match any capability whose name or key is mentioned in goal.name
+        goal_lower = goal.name.lower()
+        for c in all_capabilities:
+            if c in matching_caps:
+                continue
+            c_name_norm = c.name.lower().replace("_", " ")
+            if (
+                c_name_norm in goal_lower
+                or any(word in goal_lower for word in c_name_norm.split() if len(word) > 3)
+                or (c.kind == "auth" and any(k in goal_lower for k in ("sign in", "login", "log in", "sign up", "signup", "auth")))
+            ):
+                matching_caps.append(c)
 
         for cap in matching_caps:
             flow = await self._generate_flow_for_capability(
@@ -232,13 +249,6 @@ class DeterministicFlowGenerator:
             or ("auth" in (cap.requires_capabilities or []))
             or ("authentication" in (cap.requires_capabilities or []))
         )
-
-        if needs_auth:
-            auth_flow_steps, auth_page = self._build_auth_substeps(all_pages, all_actions)
-            if auth_flow_steps:
-                steps.extend(auth_flow_steps)
-                if auth_page and auth_page.id not in page_ids:
-                    page_ids.append(auth_page.id)
 
         # Navigate to target page
         if target_page.id not in page_ids:

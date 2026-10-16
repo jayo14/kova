@@ -102,7 +102,7 @@ class FlowService:
 
         # Persist generated flows with active=False (requiring review before CI)
         for f in flows:
-            await self.repo.create(
+            p_flow = await self.repo.create(
                 project_id=project_id,
                 name=f.name,
                 goal_id=f.goal_id,
@@ -116,6 +116,7 @@ class FlowService:
                 json_repr=f.json_repr,
                 gherkin_repr=f.gherkin,
             )
+            f.id = p_flow.id
 
         remaining_unresolved = (
             unresolved

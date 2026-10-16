@@ -8,6 +8,7 @@ from typing import Any
 
 class DiscoveredMission(BaseModel):
     id: str = Field(default_factory=lambda: f"mission-{uuid.uuid4().hex[:8]}")
+    flow_id: uuid.UUID | str | None = None
     name: str
     title: str | None = None
     description: str | None = None

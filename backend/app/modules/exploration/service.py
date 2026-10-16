@@ -628,6 +628,8 @@ class ExplorationService:
                 event_emitter=event_emitter,
                 existing_browser=existing_browser,
                 credential_id=credential_id,
+                project_id=resolved_project_id,
+                db_session=db,
             )
 
             try:
