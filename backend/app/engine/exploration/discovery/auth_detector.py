@@ -4,8 +4,8 @@ import logging
 from typing import Any
 
 from app.engine.browser.auth import classify_auth_page, observe_auth_signals
-from app.modules.flows.schemas import StateAssertion
-from app.modules.product_graph.schemas import Page
+from app.modules.flows.schemas import StateAssertion, StateMutation
+from app.modules.product_graph.schemas import Action, AuthCapability, Page, Persona
 
 logger = logging.getLogger(__name__)
 
@@ -40,3 +40,61 @@ class AuthDetector:
                     page.source = "heuristic"
         except Exception as e:
             logger.warning("Auth inspection failed for %s: %s", page.url_pattern, e)
+
+    async def detect_auth(
+        self, pages: list[Page], actions: list[Action], personas: list[Persona]
+    ) -> list[AuthCapability]:
+        """Detect auth pages and produce AuthCapability rows for the Product Graph."""
+        auth_capabilities: list[AuthCapability] = []
+        for page in pages:
+            p_lower = page.url_pattern.lower()
+            is_login_page = any(k in p_lower for k in ("/login", "/signin", "/sign-in", "/log-in", "/session"))
+            if not is_login_page and not (page.requires_auth and any(k in p_lower for k in ("auth", "register", "signup"))):
+                continue
+
+            strategy = self._infer_strategy(page, actions)
+            success_pattern = self._infer_success_pattern(page, personas, pages)
+
+            persona_list = personas or [Persona(name="default", project_id=page.project_id)]
+            for persona in persona_list:
+                auth_cap = AuthCapability(
+                    project_id=page.project_id,
+                    name=f"Authenticate as {persona.name}",
+                    description=f"Login via {page.url_pattern} as {persona.name}",
+                    kind="auth",
+                    auth_strategy=strategy,
+                    login_url=page.url_pattern,
+                    success_url_pattern=success_pattern,
+                    success_state_assertion=StateAssertion(
+                        key="authenticated", value=True, predicate="eq"
+                    ),
+                    produces_state=[StateMutation(key="authenticated", value=True)],
+                    persona=persona.name,
+                    requires_capabilities=[
+                        f"login_url:{page.url_pattern}",
+                        f"strategy:{strategy}",
+                        f"persona:{persona.name}",
+                        f"success_pattern:{success_pattern}",
+                    ],
+                    confidence=0.85,
+                    source="discovered",
+                )
+                auth_capabilities.append(auth_cap)
+        return auth_capabilities
+
+    def _infer_strategy(self, page: Page, actions: list[Action]) -> str:
+        page_actions = [a for a in actions if a.page_id == page.id]
+        selectors = " ".join([a.selector.lower() for a in page_actions])
+        if "magic" in selectors:
+            return "magic_link"
+        if "otp" in selectors:
+            return "otp"
+        return "password_form"
+
+    def _infer_success_pattern(self, page: Page, personas: list[Persona], pages: list[Page]) -> str:
+        for p in pages:
+            pl = p.url_pattern.lower()
+            if any(k in pl for k in ("/dashboard", "/workspace", "/home", "/app", "/overview")):
+                return p.url_pattern
+        return "/"
+

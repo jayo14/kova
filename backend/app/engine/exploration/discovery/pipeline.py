@@ -24,6 +24,7 @@ from app.modules.product_graph.schemas import (
     Persona,
     State,
 )
+from app.modules.flows.schemas import StateAssertion
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,10 @@ class DiscoveryPipeline:
         # Stage 4: Persona detection across application
         personas: list[Persona] = await self.persona_detector.detect_personas(browser_page, pages)
 
+        # Detect auth pages and produce AuthCapability rows for Product Graph
+        auth_caps = await self.auth_detector.detect_auth(pages, all_actions, personas)
+        all_capabilities.extend(auth_caps)
+
         # Stage 6: Invariant inference
         invariants: list[Invariant] = self.invariant_inferrer.infer_invariants(
             pages, all_actions, all_capabilities
@@ -108,11 +113,18 @@ class DiscoveryPipeline:
         # Synthesize baseline goals from capabilities and personas
         goals: list[Goal] = []
         for cap in all_capabilities:
+            crit: list[StateAssertion] = []
+            for mut in (cap.produces_state or []):
+                k = mut.key if hasattr(mut, "key") else (mut.get("key") if isinstance(mut, dict) else "")
+                v = mut.value if hasattr(mut, "value") else (mut.get("value") if isinstance(mut, dict) else None)
+                if k:
+                    crit.append(StateAssertion(key=k, value=v, predicate="eq"))
             goals.append(
                 Goal(
                     project_id=self.project_id,
                     name=f"Enable {cap.name.replace('_', ' ').title()}",
                     description=cap.description,
+                    success_criteria=crit,
                     source="discovered",
                     confidence=cap.confidence,
                 )
