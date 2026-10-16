@@ -491,13 +491,29 @@ class FlowRunner:
                                 c = ctx.credentials.get(cid)
                                 if c:
                                     cred = c
-                                    break
-                            auth_cap = AuthCapability(
-                                project_id=getattr(target_flow_obj, "project_id", uuid.uuid4()),
-                                name=p_step.flow_name or "Authenticate",
-                                login_url=target_url or "/login",
-                                persona=persona,
-                            )
+                            proj_id = getattr(target_flow_obj, "project_id", None)
+                            auth_cap = None
+                            if proj_id:
+                                try:
+                                    from app.infrastructure.database.session import async_session_factory
+                                    from app.modules.product_graph.repository import ProductGraphRepository
+                                    async with async_session_factory() as db:
+                                        repo = ProductGraphRepository(db)
+                                        auth_cap = await repo.get_auth_capability_for_persona(proj_id, persona)
+                                except Exception as query_err:
+                                    logger.debug("Could not load auth capability from graph: %s", query_err)
+
+                            if not auth_cap:
+                                auth_cap = AuthCapability(
+                                    project_id=proj_id or uuid.uuid4(),
+                                    name=p_step.flow_name or "Authenticate",
+                                    login_url=target_url or "/login",
+                                    persona=persona,
+                                )
+                            elif target_url and getattr(auth_cap, "login_url", None) and auth_cap.login_url.startswith("/"):
+                                from urllib.parse import urljoin
+                                auth_cap.login_url = urljoin(target_url, auth_cap.login_url)
+
                             try:
                                 session_state, was_reused = await ctx.session_manager.get_or_establish(
                                     execution_id=exec_id,

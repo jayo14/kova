@@ -32,6 +32,7 @@ class FlowService:
             goal_id=data.goal_id,
             persona_id=data.persona_id,
             page_ids=data.page_ids,
+            active=data.active,
         )
 
     async def get_flow(self, flow_id: uuid.UUID):
@@ -63,6 +64,7 @@ class FlowService:
             goal_id=data.goal_id,
             persona_id=data.persona_id,
             page_ids=data.page_ids,
+            active=data.active,
         )
 
     async def delete_flow(self, flow_id: uuid.UUID):

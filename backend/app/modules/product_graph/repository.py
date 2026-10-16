@@ -293,6 +293,74 @@ class ProductGraphRepository:
         )
         return list(result.scalars().all())
 
+    async def get_login_page(self, project_id: uuid.UUID) -> ProductPage | None:
+        """Find a login page for this project."""
+        stmt = select(ProductPage).where(ProductPage.project_id == project_id)
+        res = await self.db.execute(stmt)
+        pages = list(res.scalars().all())
+        for p in pages:
+            pl = p.url_pattern.lower()
+            if any(k in pl for k in ("/login", "/signin", "/sign-in", "/log-in", "/session")):
+                return p
+        return pages[0] if pages else None
+
+    async def get_auth_capability_for_persona(
+        self, project_id: uuid.UUID, persona: str
+    ) -> Any | None:
+        """Return the AuthCapability for the given persona, or None."""
+        from app.modules.flows.schemas import StateAssertion, StateMutation
+        from app.modules.product_graph.schemas import AuthCapability
+
+        stmt = select(ProductCapability).where(
+            ProductCapability.project_id == project_id,
+            ProductCapability.kind == "auth",
+        ).order_by(ProductCapability.created_at.desc())
+        res = await self.db.execute(stmt)
+        capabilities = list(res.scalars().all())
+        if not capabilities:
+            return None
+
+        # Prefer matching persona, fallback to default or first
+        matched_cap = next(
+            (c for c in capabilities if f"persona:{persona}" in (c.requires_capabilities or []) or persona.lower() in c.name.lower()),
+            capabilities[0],
+        )
+
+        login_url = "/login"
+        strategy = "password_form"
+        success_pattern = "/dashboard"
+
+        for req in (matched_cap.requires_capabilities or []):
+            if isinstance(req, str):
+                if req.startswith("login_url:"):
+                    login_url = req.split(":", 1)[1]
+                elif req.startswith("strategy:"):
+                    strategy = req.split(":", 1)[1]
+                elif req.startswith("success_pattern:"):
+                    success_pattern = req.split(":", 1)[1]
+
+        # If login_url was default, consult pages
+        if login_url == "/login":
+            login_page = await self.get_login_page(project_id)
+            if login_page and login_page.url_pattern:
+                login_url = login_page.url_pattern
+
+        return AuthCapability(
+            id=matched_cap.id,
+            project_id=matched_cap.project_id,
+            name=matched_cap.name,
+            description=matched_cap.description,
+            kind="auth",
+            auth_strategy=strategy if strategy in ("password_form", "magic_link", "oauth", "otp") else "password_form",
+            login_url=login_url,
+            success_url_pattern=success_pattern,
+            success_state_assertion=StateAssertion(key="authenticated", value=True, predicate="eq"),
+            produces_state=[StateMutation(key="authenticated", value=True)],
+            persona=persona,
+            confidence=0.85,
+            source="discovered",
+        )
+
     async def update_capability(self, capability_id: uuid.UUID, **kwargs: Any) -> ProductCapability | None:
         capability = await self.get_capability(capability_id)
         if not capability:

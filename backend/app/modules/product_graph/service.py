@@ -420,3 +420,14 @@ class ProductGraphService:
             removed=removed,
             changed=changed,
         )
+
+    async def get_login_page(self, project_id: uuid.UUID) -> ProductPage | None:
+        """Find a login page for this project via repository."""
+        return await self.repo.get_login_page(project_id)
+
+    async def get_auth_capability_for_persona(
+        self, project_id: uuid.UUID, persona: str
+    ) -> Any | None:
+        """Return the AuthCapability for the given persona via repository."""
+        return await self.repo.get_auth_capability_for_persona(project_id, persona)
+
