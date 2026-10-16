@@ -22,7 +22,7 @@ from app.engine.verification.verifier import KNOWN_CONDITION_KEYS
 logger = logging.getLogger(__name__)
 
 
-class ProposalRejected(Exception):
+class ProposalRejected(ValueError):
     """A proposal failed validation. Carries a safe, non-secret reason."""
 
     def __init__(self, reason: str):
@@ -88,6 +88,9 @@ def _validate_value(value: str) -> None:
 def validate_action_proposal(
     proposal: ActionProposal,
     allowed_hosts: set[str] | None = None,
+    *,
+    app_host: str | None = None,
+    available_credentials: set[str] | None = None,
 ) -> ActionProposal:
     """Full validation pipeline for one action proposal. Raises ProposalRejected."""
     if proposal.action not in RUNTIME_ACTIONS and proposal.action not in LOOP_ACTIONS:
@@ -99,15 +102,26 @@ def validate_action_proposal(
     if proposal.verification:
         validate_condition(proposal.verification, f"action '{proposal.action}'")
 
+    # Combine allowed_hosts and app_host
+    effective_hosts = set(allowed_hosts or set())
+    if app_host:
+        effective_hosts.add(app_host.lower().strip())
+
     # Navigation targets: scheme + SSRF + (when known) app-host allowlist
     if proposal.action == "navigate":
         url = validate_target_url(proposal.value)
-        if allowed_hosts:
+        if effective_hosts:
             host = (urlparse(url).hostname or "").lower()
-            if host not in allowed_hosts:
+            if host not in effective_hosts:
                 raise ProposalRejected(
                     f"navigate to non-application host '{host}' is not permitted"
                 )
+
+    # Credential check: secrets must come only from available_credentials
+    cred_intent = getattr(proposal, "credential_intent", None)
+    if cred_intent and cred_intent != "none" and available_credentials is not None:
+        if cred_intent not in available_credentials:
+            raise ProposalRejected(f"unknown credential '{cred_intent}'")
 
     # Email-extracted links are separately validated at navigation time by
     # validate_email_link; here we just ensure no raw URL lands in click/type.

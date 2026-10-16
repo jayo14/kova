@@ -80,3 +80,9 @@ class EventTypes:
     HUMAN_INPUT_REQUIRED = "agent.human_input_required"
     AGENT_COMPLETED = "agent.completed"
     AGENT_FAILED = "agent.failed"
+
+    # AI Proposal & Audit Trail (Hotfix 03 & 07)
+    AI_ASSISTED = "agent.ai_assisted"
+    AI_PROPOSAL = "agent.ai_proposal"
+    AI_PROPOSAL_REJECTED = "agent.ai_proposal_rejected"
+    AI_PROPOSAL_ALL_REJECTED = "agent.ai_proposal_all_rejected"

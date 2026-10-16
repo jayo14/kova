@@ -190,6 +190,40 @@ class FlowRunner:
         """Execute/run a flow with state-aware planning and prerequisite resolution."""
         return await self.execute(*args, **kwargs)
 
+    async def _mark_unverified(
+        self,
+        ctx: ExecutionContext,
+        execution_id: uuid.UUID | str,
+        *,
+        failure_category: str = "ai_proposal_rejected",
+        error_message: str = "All AI-proposed steps failed validation; cannot execute.",
+    ) -> None:
+        """Mark execution as UNVERIFIED, record event, and persist to database."""
+        try:
+            ctx.transition(ExecutionState.COMPLETED)
+        except Exception:
+            pass
+        ctx.completed_at = datetime.now(timezone.utc)
+        ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
+            "completed_at": ctx.completed_at.isoformat(),
+            "verification_status": "unverified",
+            "message": error_message,
+            "failure_category": failure_category,
+            "reason": error_message,
+        })
+        try:
+            from app.infrastructure.database.session import async_session_factory
+            from app.modules.executions.models import ExecutionStatus
+            from app.modules.executions.repository import ExecutionRepository
+
+            async with async_session_factory() as db:
+                repo = ExecutionRepository(db)
+                exec_uuid = uuid.UUID(str(execution_id))
+                await repo.update_status(exec_uuid, ExecutionStatus.UNVERIFIED)
+                await db.commit()
+        except Exception as db_err:
+            logger.debug("Failed to persist UNVERIFIED status for execution %s: %s", execution_id, db_err)
+
     async def _execute_inner(
         self,
         execution_id: uuid.UUID,
@@ -230,6 +264,18 @@ class FlowRunner:
                 page_context={"target_url": target_url},
             )
 
+        target_host = None
+        if target_url:
+            try:
+                from urllib.parse import urlparse
+                target_host = (urlparse(target_url).hostname or "").lower()
+            except Exception:
+                pass
+
+        available_creds = set()
+        if credential_store and hasattr(credential_store, "_credentials"):
+            available_creds = set(credential_store._credentials.keys())
+
         ctx = ExecutionContext(
             execution_id=str(execution_id),
             target_url=target_url,
@@ -237,6 +283,8 @@ class FlowRunner:
             persona=persona,
             current_state=dict(current_state or {}),
             session_manager=session_manager,
+            app_host=target_host,
+            available_credentials=available_creds,
         )
         if f"authenticated:{persona}" not in ctx.current_state:
             ctx.current_state[f"authenticated:{persona}"] = False
@@ -611,25 +659,85 @@ class FlowRunner:
                         ai_provider = get_ai_provider()
                         if ai_provider:
                             reasoner = AgentReasoner(ai_provider)
-                            memory = AgentMemory(objective=objective)
-                            interpretation = await reasoner.interpret_goal(objective)
+                            memory = AgentMemory(execution_id=execution_id, objective=objective)
+                            try:
+                                interpretation = await reasoner.interpret_goal(objective)
+                            except Exception:
+                                interpretation = reasoner._heuristic_goal(objective)
                             current_url = getattr(browser.page, "url", "")
                             live_title = await browser.page.title() if browser.page else ""
                             obs = {"url": current_url, "title": live_title, "interactive_elements": []}
                             plan = await reasoner.plan_journey(memory, interpretation, obs, False)
                             if plan and plan.steps:
-                                flow_steps = [
-                                    {
-                                        "type": s.action,
-                                        "target": s.target,
-                                        "value": s.value,
-                                        "description": s.description,
+                                from app.engine.ai.schemas import ActionProposal
+                                from app.engine.ai.validator import validate_action_proposal, ProposalRejected
+
+                                validated_steps: list[dict] = []
+                                rejected_steps: list[dict] = []
+                                for s in plan.steps:
+                                    proposal = ActionProposal(
+                                        action=s.action,
+                                        target=s.target,
+                                        value=s.value,
+                                        reason=s.description or f"Perform {s.action}",
+                                    )
+                                    try:
+                                        validate_action_proposal(
+                                            proposal,
+                                            app_host=getattr(ctx, "app_host", None),
+                                            available_credentials=getattr(ctx, "available_credentials", set()),
+                                        )
+                                        validated_steps.append({
+                                            "type": s.action,
+                                            "target": s.target,
+                                            "value": s.value,
+                                            "description": s.description,
+                                        })
+                                    except (ProposalRejected, ValueError) as e:
+                                        rejected_steps.append({
+                                            "step": {
+                                                "action": s.action,
+                                                "target": s.target,
+                                                "description": s.description,
+                                            },
+                                            "reason": str(e),
+                                        })
+
+                                if rejected_steps:
+                                    logger.info("Dynamic planning rejected %d steps: %s", len(rejected_steps), rejected_steps)
+                                    ctx.record_event(EventTypes.AI_PROPOSAL_REJECTED, {
+                                        "count": len(rejected_steps),
+                                        "reasons": rejected_steps,
+                                    })
+
+                                if not validated_steps:
+                                    # All AI-proposed steps failed validation — fail-closed
+                                    ctx.record_event(EventTypes.AI_PROPOSAL_ALL_REJECTED, {
+                                        "reason": "All AI-proposed steps failed validation",
+                                        "rejected_count": len(rejected_steps),
+                                    })
+                                    await self._mark_unverified(
+                                        ctx, execution_id,
+                                        failure_category="ai_proposal_rejected",
+                                        error_message="All AI-proposed steps failed validation; cannot execute.",
+                                    )
+                                    await self._emit_events(ctx, event_recorder)
+                                    return {
+                                        "success": False,
+                                        "execution_id": str(execution_id),
+                                        "error": "All AI-proposed steps failed validation; cannot execute.",
+                                        "error_code": "UNVERIFIED",
+                                        "failure_category": "ai_proposal_rejected",
+                                        "state": "UNVERIFIED",
+                                        "current_state": ctx.current_state,
+                                        "events": ctx.events,
+                                        "observations": ctx.observations,
                                     }
-                                    for s in plan.steps
-                                ]
-                                if not success_condition and plan.success_condition:
+
+                                flow_steps = validated_steps
+                                if plan.success_condition and (not success_condition or success_condition == {"url_matches": ".*"}):
                                     success_condition = plan.success_condition
-                                logger.info("Planned %d dynamic steps for objective '%s'", len(flow_steps), objective)
+                                logger.info("Planned %d dynamic steps (%d rejected) for objective '%s'", len(flow_steps), len(rejected_steps), objective)
                     except Exception as plan_err:
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
 
@@ -639,97 +747,97 @@ class FlowRunner:
                         logger.info("Skipping step %d due to state contamination skip_if_exists strategy", i)
                         continue
 
-                # Cancellation gate — checked at every step boundary
-                if await is_cancel_requested(exec_id):
-                    logger.info("Execution %s cancelled by user at step %d", execution_id, i)
-                    ctx.record_event(EventTypes.EXECUTION_CANCELLED, {
-                        "step": i,
-                        "reason": "user_requested",
-                    })
-                    await self._emit_events(ctx, event_recorder)
-                    # Persist CANCELLED on the execution row
-                    try:
-                        if event_recorder is not None and await self._execution_row_exists(uuid.UUID(exec_id)):
-                            from app.infrastructure.database.session import async_session_factory
-                            from app.modules.executions.models import ExecutionStatus
-                            from app.modules.executions.repository import ExecutionRepository
-                            async with async_session_factory() as cancel_db:
-                                cancel_repo = ExecutionRepository(cancel_db)
-                                await cancel_repo.update_status(
-                                    uuid.UUID(exec_id), ExecutionStatus.CANCELLED
-                                )
-                                await cancel_db.commit()
-                    except Exception as cancel_err:
-                        logger.warning("Failed to persist CANCELLED status: %s", cancel_err)
-                    return {
-                        "success": False,
-                        "execution_id": str(execution_id),
-                        "error": "Execution cancelled by user",
-                        "error_code": ErrorCode.CANCELLED,
-                        "current_state": ctx.current_state,
-                        "events": ctx.events,
-                        "observations": ctx.observations,
-                        "state": "CANCELLED",
-                    }
-
-                # Pause gate before each step — drain input while paused
-                await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
-                ctx.current_step_index = i
-                browser.current_step_index = i
-                await publish_state(exec_id, "executing", browser.page.url, "")
-                try:
-                    await self._capture_live_snapshot(browser, exec_id, step_index=i, state="observing")
-                except Exception:
-                    pass
-                await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
-
-                # Step-level auth barrier gate: heal immediately if redirected to an auth barrier
-                from app.engine.browser.auth import is_auth_url, is_auth_page
-                current_p_url = getattr(browser.page, "url", "")
-                step_target_url = self._extract_step_target_url(step, base_url=ctx.target_url or current_p_url)
-                # Only trigger if the step was aiming for a non-auth destination but got redirected to an auth page
-                step_was_redirected_to_auth = (
-                    bool(step_target_url)
-                    and not is_auth_url(step_target_url)
-                    and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url))
-                )
-                if step_was_redirected_to_auth:
-                    healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or ctx.target_url or current_p_url, event_recorder)
-                    dest_to_nav = step_target_url or ctx.target_url
-                    if healed and dest_to_nav and not is_auth_url(browser.page.url):
+                    # Cancellation gate — checked at every step boundary
+                    if await is_cancel_requested(exec_id):
+                        logger.info("Execution %s cancelled by user at step %d", execution_id, i)
+                        ctx.record_event(EventTypes.EXECUTION_CANCELLED, {
+                            "step": i,
+                            "reason": "user_requested",
+                        })
+                        await self._emit_events(ctx, event_recorder)
+                        # Persist CANCELLED on the execution row
                         try:
-                            logger.info("Navigating to destination after step auth barrier healing: %s", dest_to_nav)
-                            await browser.navigate(dest_to_nav)
-                            await asyncio.sleep(1.0)
-                        except Exception as re_nav_err:
-                            logger.debug("Re-navigation after auth barrier healing failed: %s", re_nav_err)
+                            if event_recorder is not None and await self._execution_row_exists(uuid.UUID(exec_id)):
+                                from app.infrastructure.database.session import async_session_factory
+                                from app.modules.executions.models import ExecutionStatus
+                                from app.modules.executions.repository import ExecutionRepository
+                                async with async_session_factory() as cancel_db:
+                                    cancel_repo = ExecutionRepository(cancel_db)
+                                    await cancel_repo.update_status(
+                                        uuid.UUID(exec_id), ExecutionStatus.CANCELLED
+                                    )
+                                    await cancel_db.commit()
+                        except Exception as cancel_err:
+                            logger.warning("Failed to persist CANCELLED status: %s", cancel_err)
+                        return {
+                            "success": False,
+                            "execution_id": str(execution_id),
+                            "error": "Execution cancelled by user",
+                            "error_code": ErrorCode.CANCELLED,
+                            "current_state": ctx.current_state,
+                            "events": ctx.events,
+                            "observations": ctx.observations,
+                            "state": "CANCELLED",
+                        }
 
-                step_check = await self._verify_step_postcondition(ctx, browser, verifier, step, i, event_recorder)
-                if step_check is not None and not step_check.passed:
-                    failed_checks = [check for check in step_check.checks if not check.passed]
-                    unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
-                    error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
-                    raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
+                    # Pause gate before each step — drain input while paused
+                    await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
+                    ctx.current_step_index = i
+                    browser.current_step_index = i
+                    await publish_state(exec_id, "executing", browser.page.url, "")
+                    try:
+                        await self._capture_live_snapshot(browser, exec_id, step_index=i, state="observing")
+                    except Exception:
+                        pass
+                    await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
 
-                # Update context.current_state after each step based on produces / mutates
-                if isinstance(step, dict):
-                    for p in step.get("produces", []):
-                        k = p.get("key") if isinstance(p, dict) else str(p)
-                        v = p.get("value", True) if isinstance(p, dict) else True
-                        ctx.current_state[k] = v
-                    for m in step.get("mutates", []):
-                        k = m.get("key") if isinstance(m, dict) else str(m)
-                        v = m.get("value", True) if isinstance(m, dict) else True
-                        ctx.current_state[k] = v
+                    # Step-level auth barrier gate: heal immediately if redirected to an auth barrier
+                    from app.engine.browser.auth import is_auth_url, is_auth_page
+                    current_p_url = getattr(browser.page, "url", "")
+                    step_target_url = self._extract_step_target_url(step, base_url=ctx.target_url or current_p_url)
+                    # Only trigger if the step was aiming for a non-auth destination but got redirected to an auth page
+                    step_was_redirected_to_auth = (
+                        bool(step_target_url)
+                        and not is_auth_url(step_target_url)
+                        and (is_auth_url(current_p_url) or await is_auth_page(browser.page, current_p_url))
+                    )
+                    if step_was_redirected_to_auth:
+                        healed = await self._heal_auth_barrier(ctx, browser, current_p_url, step_target_url or ctx.target_url or current_p_url, event_recorder)
+                        dest_to_nav = step_target_url or ctx.target_url
+                        if healed and dest_to_nav and not is_auth_url(browser.page.url):
+                            try:
+                                logger.info("Navigating to destination after step auth barrier healing: %s", dest_to_nav)
+                                await browser.navigate(dest_to_nav)
+                                await asyncio.sleep(1.0)
+                            except Exception as re_nav_err:
+                                logger.debug("Re-navigation after auth barrier healing failed: %s", re_nav_err)
 
-                # Drain any human input queued mid-step
-                await self._process_user_input(browser, exec_id)
-                # Pause gate after step
-                await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
-                try:
-                    await self._capture_live_snapshot(browser, exec_id, step_index=i, state="executing")
-                except Exception:
-                    pass
+                    step_check = await self._verify_step_postcondition(ctx, browser, verifier, step, i, event_recorder)
+                    if step_check is not None and not step_check.passed:
+                        failed_checks = [check for check in step_check.checks if not check.passed]
+                        unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
+                        error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
+                        raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
+
+                    # Update context.current_state after each step based on produces / mutates
+                    if isinstance(step, dict):
+                        for p in step.get("produces", []):
+                            k = p.get("key") if isinstance(p, dict) else str(p)
+                            v = p.get("value", True) if isinstance(p, dict) else True
+                            ctx.current_state[k] = v
+                        for m in step.get("mutates", []):
+                            k = m.get("key") if isinstance(m, dict) else str(m)
+                            v = m.get("value", True) if isinstance(m, dict) else True
+                            ctx.current_state[k] = v
+
+                    # Drain any human input queued mid-step
+                    await self._process_user_input(browser, exec_id)
+                    # Pause gate after step
+                    await self._check_and_handle_pause(ctx, browser, exec_id, event_recorder)
+                    try:
+                        await self._capture_live_snapshot(browser, exec_id, step_index=i, state="executing")
+                    except Exception:
+                        pass
 
             # Update context.current_state with target flow produces contract
             if target_contract and hasattr(target_contract, "produces"):
@@ -1898,7 +2006,10 @@ class FlowRunner:
         import json
         dom_snapshot_val = None
         if dom_before or dom_after:
-            dom_snapshot_val = json.dumps({"before": dom_before, "after": dom_after})
+            dom_snapshot_val = json.dumps({
+                "before": dom_before if isinstance(dom_before, (str, dict, list)) else str(dom_before),
+                "after": dom_after if isinstance(dom_after, (str, dict, list)) else str(dom_after),
+            }, default=str)
 
         if event_recorder is not None and ctx.execution_id:
             try:
