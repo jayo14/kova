@@ -8,23 +8,30 @@ import { MissionCard } from "./mission-card";
 import { MissionEditDialog } from "./mission-edit-dialog";
 import type { SuggestedMission } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { promoteMission, getCurrentSessionId, getCurrentProjectId } from "@/lib/api/exploration";
 
 interface MissionSuggestionsProps {
   missions: SuggestedMission[];
   recommendation?: string;
   projectName?: string;
+  sessionId?: string;
+  projectId?: string;
   onRun: (missionIds: string[], parallel: boolean) => void;
   onOpenProject?: () => void;
   onUpdateMission?: (mission: SuggestedMission) => void;
+  onPromoteMission?: (missionId: string) => Promise<void> | void;
 }
 
 export function MissionSuggestions({
   missions,
   recommendation,
   projectName,
+  sessionId,
+  projectId,
   onRun,
   onOpenProject,
   onUpdateMission,
+  onPromoteMission,
 }: MissionSuggestionsProps) {
   // Default selection: recommended missions or first mission
   const [selected, setSelected] = useState<Set<string>>(() => {
@@ -35,6 +42,39 @@ export function MissionSuggestions({
   const [editingMission, setEditingMission] = useState<SuggestedMission | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [parallelExecution, setParallelExecution] = useState(true);
+  const [promotingId, setPromotingId] = useState<string | null>(null);
+
+  const handlePromote = async (missionId: string) => {
+    if (onPromoteMission) {
+      setPromotingId(missionId);
+      try {
+        await onPromoteMission(missionId);
+      } finally {
+        setPromotingId(null);
+      }
+      return;
+    }
+    const sId = sessionId || getCurrentSessionId();
+    if (!sId) return;
+    setPromotingId(missionId);
+    try {
+      const flow = await promoteMission(sId, missionId, {
+        projectId: projectId || getCurrentProjectId() || undefined,
+      });
+      const m = missions.find((x) => x.id === missionId);
+      if (m && onUpdateMission) {
+        onUpdateMission({
+          ...m,
+          promoted: true,
+          flowId: flow.id,
+        });
+      }
+    } catch (err) {
+      console.error("Failed to promote mission:", err);
+    } finally {
+      setPromotingId(null);
+    }
+  };
 
   const toggle = (id: string) => {
     setSelected((prev) => {
@@ -125,6 +165,8 @@ export function MissionSuggestions({
             onSelect={toggle}
             onRun={(id) => onRun([id], false)}
             onEdit={handleEdit}
+            onPromote={handlePromote}
+            isPromoting={promotingId === mission.id}
           />
         ))}
       </div>

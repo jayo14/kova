@@ -123,12 +123,16 @@ class SignedUrlModel(Base):
     __tablename__ = "signed_urls"
     __table_args__ = (
         Index("ix_signed_urls_validation_id", "validation_id"),
+        Index("ix_signed_urls_execution_id", "execution_id"),
         Index("ix_signed_urls_url", "url"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     validation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("validation_reports.id", ondelete="CASCADE"), nullable=True
+    )
+    execution_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("executions.id", ondelete="CASCADE"), nullable=True
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -141,3 +145,4 @@ class SignedUrlModel(Base):
     )
 
     validation_report = relationship("ValidationReportModel", backref=backref("signed_urls", passive_deletes=True))
+    execution = relationship("Execution", backref=backref("signed_urls", passive_deletes=True))

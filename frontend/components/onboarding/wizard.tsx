@@ -1,23 +1,34 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
 import { updateOnboardingStep } from "@/lib/api/onboarding";
 import { createProject } from "@/lib/api/projects";
+import { createCredential } from "@/lib/api/credentials";
+import {
+  createExplorationSession,
+  streamExplorationEvents,
+  type BackendExplorationSession,
+} from "@/lib/api/exploration";
+import { getFlows } from "@/lib/api/flows";
+import { createExecution } from "@/lib/api/executions";
 
 interface WizardProps {
   initialStep?: number;
   userName?: string;
 }
 
-export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
+export function OnboardingWizard({ initialStep = 0 }: WizardProps) {
   const router = useRouter();
   const [step, setStep] = useState<number>(initialStep >= 4 ? 0 : initialStep);
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Step 1 state
   const [appName, setAppName] = useState("My Web App");
@@ -32,10 +43,22 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
   // Step 3 state
   const [discoveryRunning, setDiscoveryRunning] = useState(false);
   const [discoveredPages, setDiscoveredPages] = useState<string[]>([]);
+  const [latestScreenshot, setLatestScreenshot] = useState<string | null>(null);
+  const [discoveredFlowId, setDiscoveredFlowId] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Step 4 state
   const [validationRunning, setValidationRunning] = useState(false);
-  const [validationDone, setValidationDone] = useState(false);
+  const [executionId, setExecutionId] = useState<string | null>(null);
+  const [executionStatus, setExecutionStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const handleSkip = async () => {
     try {
@@ -47,6 +70,7 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
   };
 
   const goToStep = async (newStep: number) => {
+    setErrorMessage(null);
     setStep(newStep);
     try {
       await updateOnboardingStep(newStep);
@@ -58,18 +82,26 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
   const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setErrorMessage(null);
+
+    const cleanBaseUrl = baseUrl.trim();
+    if (!cleanBaseUrl.startsWith("http://") && !cleanBaseUrl.startsWith("https://")) {
+      setErrorMessage("Please enter a valid URL starting with http:// or https://");
+      setLoading(false);
+      return;
+    }
+
     try {
       const proj = await createProject({
         name: appName.trim(),
-        baseUrl: baseUrl.trim(),
+        baseUrl: cleanBaseUrl,
         description: "Created via onboarding wizard",
       });
       setProjectId(proj.id);
       await goToStep(1);
-    } catch (err: any) {
-      // Even if network or mock fails, proceed gracefully
-      console.warn("Project creation in onboarding:", err);
-      await goToStep(1);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to create project. Please verify the URL and try again.";
+      setErrorMessage(msg);
     } finally {
       setLoading(false);
     }
@@ -77,27 +109,145 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
 
   const handleStep2Submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await goToStep(2);
+    setLoading(true);
+    setErrorMessage(null);
+
+    try {
+      if (testUser.trim() && testPassword.trim()) {
+        await createCredential({
+          projectId: projectId || undefined,
+          name: envName.trim() || "Default",
+          email: testUser.trim(),
+          password: testPassword,
+        });
+      }
+      await goToStep(2);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to save credentials. Please check your inputs.";
+      setErrorMessage(msg);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleRunDiscovery = async () => {
+    if (!baseUrl) return;
     setDiscoveryRunning(true);
-    setDiscoveredPages(["/"]);
-    setTimeout(() => {
-      setDiscoveredPages((prev) => [...prev, "/login", "/dashboard"]);
-    }, 1200);
-    setTimeout(() => {
-      setDiscoveredPages((prev) => [...prev, "/settings", "/billing", "/checkout"]);
+    setErrorMessage(null);
+    setDiscoveredPages([]);
+    setLatestScreenshot(null);
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      let session: BackendExplorationSession;
+      try {
+        session = await createExplorationSession(
+          baseUrl.trim(),
+          "Discover user routes, navigation flows, and interactive features"
+        );
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : "Failed to start exploration session.";
+        setErrorMessage(msg);
+        setDiscoveryRunning(false);
+        return;
+      }
+
+      // Add base path
+      try {
+        const parsed = new URL(baseUrl.trim());
+        setDiscoveredPages([parsed.pathname || "/"]);
+      } catch {
+        setDiscoveredPages(["/"]);
+      }
+
+      await streamExplorationEvents(
+        session.id,
+        (event) => {
+          if (event.type === "page_loaded") {
+            if (event.url || event.path) {
+              const displayPath = event.path || (() => {
+                try {
+                  return new URL(event.url).pathname;
+                } catch {
+                  return event.url;
+                }
+              })();
+              if (displayPath) {
+                setDiscoveredPages((prev) =>
+                  prev.includes(displayPath) ? prev : [...prev, displayPath]
+                );
+              }
+            }
+            if (event.screenshot) {
+              setLatestScreenshot(event.screenshot);
+            }
+          } else if (event.type === "screenshot" && event.screenshot) {
+            setLatestScreenshot(event.screenshot);
+          } else if (event.type === "state_change") {
+            if (event.state === "completed" || event.state === "ready" || event.state === "failed") {
+              setDiscoveryRunning(false);
+            }
+          }
+        },
+        controller.signal
+      );
+
+      // Fetch flows associated with this project to prepare validation
+      if (projectId) {
+        try {
+          const flows = await getFlows(projectId);
+          if (flows.length > 0) {
+            setDiscoveredFlowId(flows[0].id);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch (err: unknown) {
+      if ((err as Error).name !== "AbortError") {
+        setErrorMessage((err as Error).message || "Discovery process encountered an issue.");
+      }
+    } finally {
       setDiscoveryRunning(false);
-    }, 2500);
+    }
   };
 
   const handleRunValidation = async () => {
     setValidationRunning(true);
-    setTimeout(() => {
+    setErrorMessage(null);
+
+    try {
+      let targetFlowId = discoveredFlowId;
+      if (!targetFlowId && projectId) {
+        const flows = await getFlows(projectId);
+        if (flows.length > 0) {
+          targetFlowId = flows[0].id;
+          setDiscoveredFlowId(targetFlowId);
+        }
+      }
+
+      if (!targetFlowId) {
+        setErrorMessage("No flow available to execute. You can proceed to dashboard and create a flow.");
+        setValidationRunning(false);
+        return;
+      }
+
+      const exec = await createExecution(targetFlowId);
+      if (exec) {
+        setExecutionId(exec.id);
+        setExecutionStatus(exec.status || "running");
+        // Direct user straight to real execution page
+        router.push(`/executions/${exec.id}`);
+      } else {
+        setErrorMessage("Could not launch flow execution.");
+        setValidationRunning(false);
+      }
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : "Failed to run validation execution.");
       setValidationRunning(false);
-      setValidationDone(true);
-    }, 2000);
+    }
   };
 
   const stepsList = [
@@ -106,6 +256,9 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
     { title: "Discovery", icon: "hub" },
     { title: "Validation", icon: "verified" },
   ];
+
+  const docsUrl = process.env.NEXT_PUBLIC_DOCS_URL || "/docs";
+  const statusUrl = process.env.NEXT_PUBLIC_STATUS_URL || "/status";
 
   return (
     <div className="min-h-screen bg-background flex flex-col justify-between p-6 max-w-4xl mx-auto">
@@ -153,6 +306,13 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
 
       {/* Wizard Body Card */}
       <div className="border border-border/80 rounded-2xl bg-card/60 p-8 shadow-sm flex-1 flex flex-col justify-between my-2">
+        {errorMessage && (
+          <div className="mb-6 p-4 rounded-xl bg-destructive/10 border border-destructive/20 text-destructive text-sm flex items-start gap-2">
+            <MaterialIcon name="error_outline" size={18} className="mt-0.5 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+        )}
+
         {step === 0 && (
           <form onSubmit={handleStep1Submit} className="space-y-6">
             <div className="space-y-2">
@@ -214,7 +374,7 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
             <div className="space-y-4 max-w-lg">
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Environment
+                  Environment Name
                 </label>
                 <Input
                   value={envName}
@@ -238,8 +398,7 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
                 <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                   Password
                 </label>
-                <Input
-                  type="password"
+                <PasswordInput
                   value={testPassword}
                   onChange={(e) => setTestPassword(e.target.value)}
                   placeholder="••••••••"
@@ -251,8 +410,8 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
               <Button type="button" variant="outline" onClick={() => goToStep(0)}>
                 Back
               </Button>
-              <Button type="submit" className="flex items-center gap-2">
-                Continue to Discovery
+              <Button type="submit" disabled={loading} className="flex items-center gap-2">
+                {loading ? "Saving..." : "Continue to Discovery"}
                 <MaterialIcon name="arrow_forward" size={16} />
               </Button>
             </div>
@@ -285,18 +444,34 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
 
                 <Button
                   onClick={handleRunDiscovery}
-                  disabled={discoveryRunning || discoveredPages.length > 0}
+                  disabled={discoveryRunning}
                   className="flex items-center gap-2"
                 >
                   <MaterialIcon name="play_arrow" size={16} />
-                  {discoveryRunning ? "Exploring App..." : discoveredPages.length > 0 ? "Discovery Complete" : "Start Discovery"}
+                  {discoveryRunning ? "Exploring App..." : discoveredPages.length > 0 ? "Re-run Discovery" : "Start Discovery"}
                 </Button>
               </div>
 
+              {latestScreenshot && (
+                <div className="mt-4 border border-border/60 rounded-xl overflow-hidden max-h-48 relative">
+                  <div className="text-[10px] font-mono bg-black/60 text-white px-2 py-0.5 absolute top-2 left-2 z-10 rounded">
+                    Live View
+                  </div>
+                  <Image
+                    src={latestScreenshot}
+                    alt="Discovered page preview"
+                    width={640}
+                    height={360}
+                    unoptimized
+                    className="w-full object-cover object-top max-h-48"
+                  />
+                </div>
+              )}
+
               {discoveredPages.length > 0 && (
                 <div className="pt-3 border-t border-border/40 space-y-2">
-                  <div className="text-xs font-semibold text-muted-foreground">Discovered Endpoints:</div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="text-xs font-semibold text-muted-foreground">Discovered Endpoints ({discoveredPages.length}):</div>
+                  <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto">
                     {discoveredPages.map((p) => (
                       <Badge key={p} variant="secondary" className="font-mono text-xs py-1 px-2 flex items-center gap-1">
                         <MaterialIcon name="check" size={12} className="text-emerald-500" />
@@ -338,35 +513,42 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className={`p-3 rounded-xl ${validationRunning ? "bg-primary/20 text-primary animate-spin" : "bg-card text-foreground"}`}>
-                    <MaterialIcon name={validationDone ? "task_alt" : "sync"} size={24} className={validationDone ? "text-emerald-500" : ""} />
+                    <MaterialIcon name={executionStatus ? "task_alt" : "sync"} size={24} className={executionStatus === "completed" ? "text-emerald-500" : ""} />
                   </div>
                   <div>
                     <h3 className="font-semibold text-sm">Baseline Validation Suite</h3>
                     <p className="text-xs text-muted-foreground">
-                      Testing login flow, navigation resilience, and UI accessibility
+                      {executionStatus ? `Execution ${executionStatus}` : "Executes critical flow with assertion verification"}
                     </p>
                   </div>
                 </div>
 
                 <Button
                   onClick={handleRunValidation}
-                  disabled={validationRunning || validationDone}
+                  disabled={validationRunning}
                   className="flex items-center gap-2"
                 >
                   <MaterialIcon name="verified" size={16} />
-                  {validationRunning ? "Validating Flows..." : validationDone ? "Validation Passed" : "Run Validation"}
+                  {validationRunning ? "Launching Validation..." : executionId ? "Run Again" : "Run Validation"}
                 </Button>
               </div>
 
-              {validationDone && (
-                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-950 dark:text-emerald-300 space-y-1">
+              {executionId && (
+                <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 text-foreground space-y-2">
                   <div className="font-bold text-sm flex items-center gap-1.5">
-                    <MaterialIcon name="check_circle" size={16} className="text-emerald-500" />
-                    All 3 critical flows passed (100% health score)
+                    <MaterialIcon name="check_circle" size={16} className="text-primary" />
+                    Validation run launched: <span className="font-mono text-xs">{executionId}</span>
                   </div>
                   <div className="text-xs text-muted-foreground">
-                    Baseline established. You are ready to integrate Kova in your CI pipeline!
+                    Redirecting to execution trace...
                   </div>
+                  <Button
+                    size="sm"
+                    onClick={() => router.push(`/executions/${executionId}`)}
+                    className="mt-2 text-xs"
+                  >
+                    View Execution
+                  </Button>
                 </div>
               )}
             </div>
@@ -390,11 +572,11 @@ export function OnboardingWizard({ initialStep = 0, userName }: WizardProps) {
       {/* Footer */}
       <div className="text-center text-xs text-muted-foreground pt-4">
         Need assistance setting up? Visit our{" "}
-        <a href="http://localhost:3000/docs" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+        <a href={docsUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
           Documentation
         </a>{" "}
         or check the{" "}
-        <a href="http://localhost:3000/status" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+        <a href={statusUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
           System Status
         </a>
         .

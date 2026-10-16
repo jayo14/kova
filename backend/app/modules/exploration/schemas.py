@@ -109,3 +109,9 @@ class ExplorationCancelResponse(BaseModel):
     id: uuid.UUID
     status: str
     message: str
+
+
+class PromoteMissionRequest(BaseModel):
+    project_id: uuid.UUID | None = None
+    activate_immediately: bool = False
+    name: str | None = None

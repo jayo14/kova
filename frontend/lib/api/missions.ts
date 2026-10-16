@@ -35,6 +35,7 @@ export interface BackendFlow {
   provides_capabilities?: string[];
   repeatability?: "repeatable" | "non_repeatable";
   reset_strategy?: string | null;
+  active?: boolean;
   created_at: string;
   updated_at: string;
   version?: number;
@@ -91,6 +92,7 @@ export function backendToMission(
     providesCapabilities: flow.provides_capabilities ?? [],
     repeatability: flow.repeatability ?? "repeatable",
     resetStrategy: flow.reset_strategy ?? null,
+    active: flow.active !== false,
     createdAt: flow.created_at,
     updatedAt: flow.updated_at,
     version: flow.version,

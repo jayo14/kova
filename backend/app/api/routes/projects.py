@@ -127,9 +127,10 @@ async def delete_project(
             event_type="project.deleted",
             actor_user_id=user.id,
             org_id=org_id,
-            project_id=proj_uuid,
+            project_id=None,
             action="delete_project",
             target=str(proj_uuid),
+            metadata={"project_id": str(proj_uuid), "project_name": getattr(project, "name", "")},
         )
 
 

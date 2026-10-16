@@ -567,3 +567,54 @@ async def test_signed_url_revoked(db_session):
     finally:
         app.dependency_overrides.clear()
 
+
+@pytest.mark.asyncio
+async def test_execution_share_and_revoke(db_session):
+    async def override_get_session():
+        yield db_session
+
+    app.dependency_overrides[get_session] = override_get_session
+
+    try:
+        user = User(id=uuid.uuid4(), email="share-user@kova.local")
+        project = Project(id=uuid.uuid4(), user_id=user.id, name="Share Project", base_url="https://example.com")
+        flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Share Flow", steps=[])
+        execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+        db_session.add_all([user, project, flow, execution])
+        await db_session.commit()
+
+        token_obj, raw_token = await create_api_token(db_session, user.id, name="Share Token")
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # 1. Share execution report
+            share_resp = await client.post(
+                f"/api/v1/executions/{execution.id}/share",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert share_resp.status_code == 200
+            share_data = share_resp.json()
+            assert "url" in share_data
+            assert "signature" in share_data
+            sig = share_data["signature"]
+
+            # 2. Access signed report publicly
+            pub_resp = await client.get(f"/api/v1/executions/{execution.id}/report?signature={sig}&format=html")
+            assert pub_resp.status_code == 200
+            assert "text/html" in pub_resp.headers["content-type"]
+
+            # 3. Revoke execution report
+            del_resp = await client.delete(
+                f"/api/v1/executions/{execution.id}/share",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+            assert del_resp.status_code == 200
+            assert del_resp.json()["status"] == "revoked"
+
+            # 4. Access after revoke is 403
+            revoked_resp = await client.get(f"/api/v1/executions/{execution.id}/report?signature={sig}&format=html")
+            assert revoked_resp.status_code == 403
+            assert "revoked" in revoked_resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+

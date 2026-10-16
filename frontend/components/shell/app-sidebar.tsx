@@ -1,9 +1,11 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
+import { getMe } from "@/lib/api/onboarding";
 
 interface NavItem {
   label: string;
@@ -48,6 +50,23 @@ function NavButton({ item, active }: { item: NavItem; active: boolean }) {
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    getMe()
+      .then((user) => {
+        if (mounted && user) {
+          setOnboardingStep(user.onboarding_step ?? 0);
+        }
+      })
+      .catch(() => {
+        // Silently ignore if unauthenticated or offline
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [pathname]);
 
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
@@ -74,6 +93,25 @@ export function AppSidebar() {
         </div>
       </nav>
 
+      {/* Complete setup card */}
+      {onboardingStep !== null && onboardingStep < 4 && (
+        <div className="px-3 pb-3">
+          <Link
+            href="/onboarding"
+            className="flex items-center justify-between rounded-xl border border-primary/20 bg-primary/5 p-3 hover:bg-primary/10 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <MaterialIcon name="checklist" size={18} className="text-primary" />
+              <div className="flex flex-col text-left">
+                <span className="text-xs font-semibold text-primary">Complete setup</span>
+                <span className="text-[10px] text-muted-foreground">Step {onboardingStep + 1} of 4</span>
+              </div>
+            </div>
+            <MaterialIcon name="chevron_right" size={16} className="text-primary/70" />
+          </Link>
+        </div>
+      )}
+
       {/* Secondary System Navigation */}
       <nav className="border-t border-border px-3 py-3" aria-label="Secondary navigation">
         <div className="flex flex-col gap-1">
@@ -85,3 +123,4 @@ export function AppSidebar() {
     </aside>
   );
 }
+

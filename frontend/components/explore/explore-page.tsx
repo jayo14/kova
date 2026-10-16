@@ -642,6 +642,8 @@ export function ExplorePage() {
               missions={state.missions}
               recommendation={state.recommendationNote}
               projectName={cleanProjectName}
+              sessionId={getCurrentSessionId() || initialSessionId || undefined}
+              projectId={resolvedProjectId || getCurrentProjectId() || undefined}
               onRun={handleRunMissions}
               onOpenProject={handleOpenProject}
               onUpdateMission={updateMission}

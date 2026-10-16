@@ -1,3 +1,4 @@
+from typing import Any
 import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +10,90 @@ from app.modules.flows.schemas import FlowCreate, FlowUpdate
 class FlowService:
     def __init__(self, db: AsyncSession):
         self.repo = FlowRepository(db)
+
+    async def create_from_mission(
+        self,
+        project_id: uuid.UUID,
+        mission: dict | Any,
+        user_id: uuid.UUID,
+        activate_immediately: bool = False,
+        name: str | None = None,
+    ):
+        if hasattr(mission, "model_dump"):
+            m_dict = mission.model_dump()
+        elif isinstance(mission, dict):
+            m_dict = mission
+        else:
+            m_dict = dict(mission)
+
+        flow_name = name or m_dict.get("title") or m_dict.get("name") or "Discovered Mission"
+        objective = m_dict.get("objective") or m_dict.get("description") or flow_name
+        description = m_dict.get("description") or m_dict.get("objective") or ""
+        persona = m_dict.get("persona")
+        if isinstance(persona, str):
+            persona_dict = {"role": persona}
+        elif isinstance(persona, dict):
+            persona_dict = persona
+        else:
+            persona_dict = None
+
+        raw_steps = m_dict.get("steps") or []
+        steps = []
+        for s in raw_steps:
+            if hasattr(s, "to_runner_dict"):
+                steps.append(s.to_runner_dict())
+            elif hasattr(s, "model_dump"):
+                steps.append(s.model_dump())
+            elif isinstance(s, dict):
+                step_copy = dict(s)
+                if "action" not in step_copy and "type" in step_copy:
+                    step_copy["action"] = step_copy["type"]
+                if "step_id" not in step_copy:
+                    step_copy["step_id"] = step_copy.get("id") or uuid.uuid4().hex
+                if "selector" not in step_copy and "target" in step_copy:
+                    step_copy["selector"] = step_copy["target"]
+                steps.append(step_copy)
+            else:
+                steps.append({"step_id": uuid.uuid4().hex, "action": "wait", "value": "1000"})
+
+        raw_sc = m_dict.get("success_condition") or m_dict.get("successCondition")
+        if isinstance(raw_sc, dict):
+            success_condition = raw_sc
+        elif isinstance(raw_sc, str):
+            success_condition = {"description": raw_sc}
+        else:
+            success_condition = None
+
+        routes: list[str] = []
+        if m_dict.get("route_analysis") and isinstance(m_dict["route_analysis"], dict):
+            p = m_dict["route_analysis"].get("path")
+            if p:
+                routes.append(p)
+        if not routes:
+            for s in steps:
+                if isinstance(s, dict) and s.get("action") == "navigate":
+                    u = s.get("url") or s.get("value")
+                    if u and u not in routes:
+                        routes.append(str(u))
+
+        category = m_dict.get("category")
+        confidence = float(m_dict.get("confidence") or 1.0)
+
+        return await self.repo.create(
+            project_id=project_id,
+            name=flow_name,
+            description=description,
+            persona=persona_dict,
+            objective=objective,
+            steps=steps,
+            success_condition=success_condition,
+            routes=routes,
+            capability=category,
+            source="user_provided",
+            confidence=confidence,
+            active=activate_immediately,
+            status="active",
+        )
 
     async def create_flow(self, data: FlowCreate):
         return await self.repo.create(
