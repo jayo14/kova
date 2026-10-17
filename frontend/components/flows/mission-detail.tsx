@@ -245,6 +245,8 @@ export function MissionDetail({
           <MissionExecutionHistory
             executions={executions}
             missionName={mission.name}
+            missionId={mission.id}
+            active={mission.active}
           />
         </div>
       </div>
