@@ -1,0 +1,30 @@
+---
+title: "GitLab CI Integration"
+description: "Run automated continuous validation on GitLab Merge Requests."
+---
+
+# GitLab CI Integration
+
+Add Kova validation as a stage in your `.gitlab-ci.yml`:
+
+```yaml
+stages:
+  - test
+  - validate
+
+kova_validation:
+  stage: validate
+  image: curlimages/curl:latest
+  only:
+    - merge_requests
+  script:
+    - |
+      curl -f -X POST "$KOVA_API_URL/api/v1/ci/validate" \
+        -H "Authorization: Bearer $KOVA_API_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{
+          \"project_id\": \"$KOVA_PROJECT_ID\",
+          \"base_url\": \"$CI_ENVIRONMENT_URL\",
+          \"commit_message\": \"$CI_COMMIT_MESSAGE\"
+        }"
+```

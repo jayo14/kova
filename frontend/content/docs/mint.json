@@ -1,0 +1,52 @@
+{
+  "$schema": "https://mintlify.com/schema.json",
+  "name": "Kova Documentation",
+  "logo": {
+    "dark": "/logo/dark.svg",
+    "light": "/logo/light.svg"
+  },
+  "favicon": "/favicon.ico",
+  "colors": {
+    "primary": "#6366f1",
+    "light": "#818cf8",
+    "dark": "#4f46e5"
+  },
+  "topbarLinks": [
+    {
+      "name": "Platform",
+      "url": "https://app.kova.dev"
+    },
+    {
+      "name": "Status",
+      "url": "https://status.kova.dev"
+    }
+  ],
+  "topbarCtaButton": {
+    "name": "Get Started Free",
+    "url": "https://app.kova.dev/auth/register"
+  },
+  "navigation": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        "quickstart",
+        "concepts"
+      ]
+    },
+    {
+      "group": "CI/CD & Integrations",
+      "pages": [
+        "integrations/github-actions",
+        "integrations/gitlab-ci",
+        "api-reference"
+      ]
+    },
+    {
+      "group": "Platform & Ops",
+      "pages": [
+        "pricing",
+        "changelog"
+      ]
+    }
+  ]
+}
