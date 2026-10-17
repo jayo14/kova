@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from app.api import get_current_user, get_session
-from app.modules.executions.schemas import ExecutionRead
+from app.modules.executions.schemas import ExecutionCreate, ExecutionRead
+from app.modules.executions.service import ExecutionService
 from app.modules.flows.models import Flow
 from app.modules.flows.schemas import FlowCreate, FlowRead, FlowUpdate
 from app.modules.flows.service import FlowService
@@ -280,7 +281,6 @@ async def create_flow_execution(
 
     # Create execution
     exec_service = ExecutionService(db)
-    from app.modules.projects.repository import ProjectRepository
     project = await ProjectRepository(db).get_by_id(flow.project_id)
     snapshot = {
         "version": flow.version,
@@ -296,9 +296,7 @@ async def create_flow_execution(
         "target_url": project.base_url if project else "",
     }
     execution = await exec_service.create_execution(
-        __import__("app.modules.executions.schemas", fromlist=["ExecutionCreate"]).ExecutionCreate(
-            flow_id=uuid.UUID(flow_id)
-        ),
+        ExecutionCreate(flow_id=uuid.UUID(flow_id)),
         flow_version=flow.version,
         flow_snapshot=snapshot,
     )
