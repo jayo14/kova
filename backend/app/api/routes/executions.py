@@ -132,10 +132,30 @@ async def run_batch_executions(
             raise HTTPException(status_code=404, detail=f"Execution {exec_id_str} not found")
 
     # Dispatch batch task
-    task = run_multiple_executions.delay(data.execution_ids, data.parallel)
+    task_id = str(uuid.uuid4())
+    try:
+        from app.workers.celery_app import celery_app
+        from app.workers.tasks.tasks import run_multiple_executions
+
+        def _ping():
+            inspector = celery_app.control.inspect(timeout=0.2)
+            return inspector.ping() if inspector else None
+
+        active_workers = await asyncio.to_thread(_ping)
+        if active_workers:
+            task = run_multiple_executions.delay(data.execution_ids, data.parallel)
+            task_id = task.id
+            logger.info("Dispatched batch executions %s to Celery worker: %s", data.execution_ids, list(active_workers.keys()))
+        else:
+            raise RuntimeError("No active Celery workers online")
+    except Exception as exc:
+        logger.info("Celery unavailable for batch execution (%s); executing via background asyncio tasks", exc)
+        from app.api.routes.flows import _schedule_dispatch
+        for eid in data.execution_ids:
+            await _schedule_dispatch(eid)
 
     return BatchExecutionResponse(
-        results=[{"execution_id": eid, "task_id": task.id} for eid in data.execution_ids],
+        results=[{"execution_id": eid, "task_id": task_id} for eid in data.execution_ids],
         parallel=data.parallel,
         count=len(data.execution_ids),
     )

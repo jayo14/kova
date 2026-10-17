@@ -66,4 +66,4 @@ class Execution(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    flow = relationship("Flow", backref="executions")
+    flow = relationship("Flow", back_populates="executions", passive_deletes=True)

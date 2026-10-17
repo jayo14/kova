@@ -54,3 +54,10 @@ class Flow(Base):
     )
 
     project = relationship("Project", backref=backref("flows", passive_deletes=True))
+    executions = relationship(
+        "Execution",
+        back_populates="flow",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+

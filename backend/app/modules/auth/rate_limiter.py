@@ -19,6 +19,7 @@ _redis_unavailable_until: float = 0.0
 class RateLimiter:
     def __init__(self, redis_client: Optional[aioredis.Redis] = None):
         self._redis = redis_client
+        self._shared_client: Optional[aioredis.Redis] = None
 
     async def _get_client(self) -> Optional[aioredis.Redis]:
         global _redis_unavailable_until
@@ -26,19 +27,21 @@ class RateLimiter:
             return self._redis
         if time.time() < _redis_unavailable_until:
             return None
+        if self._shared_client is not None:
+            return self._shared_client
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
                 kwargs["ssl_cert_reqs"] = "none"
-            client = aioredis.from_url(
+            self._shared_client = aioredis.from_url(
                 settings.REDIS_URL,
-                socket_connect_timeout=0.2,
-                socket_timeout=0.2,
+                socket_connect_timeout=2.0,
+                socket_timeout=2.0,
                 **kwargs,
             )
-            return client
+            return self._shared_client
         except Exception as e:
-            _redis_unavailable_until = time.time() + 60.0
+            _redis_unavailable_until = time.time() + 15.0
             logger.debug("RateLimiter: Redis unavailable, using in-memory: %s", e)
             return None
 
@@ -60,16 +63,16 @@ class RateLimiter:
                     await client.expire(key, window_seconds)
                 if count > limit:
                     ttl = await client.ttl(key)
-                    await client.aclose()
                     return False, max(1, ttl)
-                await client.aclose()
                 return True, 0
             except Exception as e:
-                _redis_unavailable_until = time.time() + 60.0
-                try:
-                    await client.aclose()
-                except Exception:
-                    pass
+                _redis_unavailable_until = time.time() + 15.0
+                if self._shared_client is not None and self._redis is None:
+                    try:
+                        await self._shared_client.aclose()
+                    except Exception:
+                        pass
+                    self._shared_client = None
                 logger.debug("Redis rate limit check failed: %s, falling back to memory", e)
 
         # In-memory sliding window fallback
@@ -106,16 +109,16 @@ class RateLimiter:
                     await client.expire(key, window_seconds)
                 if count > daily_limit:
                     ttl = await client.ttl(key)
-                    await client.aclose()
                     return False, max(1, ttl)
-                await client.aclose()
                 return True, 0
             except Exception as e:
-                _redis_unavailable_until = time.time() + 60.0
-                try:
-                    await client.aclose()
-                except Exception:
-                    pass
+                _redis_unavailable_until = time.time() + 15.0
+                if self._shared_client is not None and self._redis is None:
+                    try:
+                        await self._shared_client.aclose()
+                    except Exception:
+                        pass
+                    self._shared_client = None
                 logger.debug("Redis org exec limit check failed: %s, using memory", e)
 
         now = time.time()

@@ -102,6 +102,14 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+
+    @field_validator("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", mode="after")
+    @classmethod
+    def normalize_celery_urls(cls, v: str) -> str:
+        if v and v.startswith("rediss://") and "ssl_cert_reqs" not in v:
+            sep = "&" if "?" in v else "?"
+            return f"{v}{sep}ssl_cert_reqs=CERT_NONE"
+        return v
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     EVIDENCE_CAPTURE_VIDEO: bool = True
