@@ -165,3 +165,25 @@ async def test_generated_flow_columns_roundtrip(db_session, project):
     assert updated.active is True
     assert updated.confidence == 1.0
 
+
+@pytest.mark.asyncio
+async def test_delete_flow_with_executions(db_session, project):
+    from app.modules.executions.repository import ExecutionRepository
+
+    flow_repo = FlowRepository(db_session)
+    exec_repo = ExecutionRepository(db_session)
+
+    flow = await flow_repo.create(project_id=project.id, name="FlowWithExecutions")
+    execution = await exec_repo.create(flow_id=flow.id)
+    assert execution is not None
+    assert execution.flow_id == flow.id
+
+    # Deleting the flow must succeed and cascade cleanly without not-null violations
+    deleted = await flow_repo.delete(flow.id)
+    assert deleted is True
+
+    # Verify flow is gone
+    assert await flow_repo.get_by_id(flow.id) is None
+    # Verify execution is also deleted
+    assert await exec_repo.get_by_id(execution.id) is None
+

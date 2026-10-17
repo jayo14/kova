@@ -175,6 +175,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
+    # Always allow CORS preflights through immediately
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     # Exclude health endpoints, docs, metrics, and CI endpoints
     path = request.url.path
     if (
@@ -188,7 +192,9 @@ async def rate_limit_middleware(request: Request, call_next):
     token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
     client_id = f"tok_{token[:16]}" if token else (request.client.host if request.client else "anon")
 
-    allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=60, window_seconds=60)
+    # In development or debug, use generous limit (600 req/min) so pair programming and multi-tab loads don't get throttled
+    limit = 600 if (not settings.is_production or settings.DEBUG) else 60
+    allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=limit, window_seconds=60)
     if not allowed:
         headers = _cors_headers_for_request(request)
         headers["Retry-After"] = str(retry_after)

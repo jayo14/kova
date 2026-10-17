@@ -174,6 +174,9 @@ class FlowRepository:
         flow = await self.get_by_id(flow_id)
         if flow is None:
             return False
+        from app.modules.executions.models import Execution
+        from sqlalchemy import delete
+        await self.db.execute(delete(Execution).where(Execution.flow_id == flow_id))
         await self.db.delete(flow)
         await self.db.flush()
         return True
