@@ -36,6 +36,13 @@ export function MissionDetailHeader({
     setError(null);
     startRunTransition(async () => {
       try {
+        if (mission.active === false) {
+          try {
+            await updateMission(mission.id, { active: true } as any);
+          } catch {
+            // Ignore non-fatal update error
+          }
+        }
         const exec = await runMission(mission.id);
         if (exec) {
           router.push(`/executions/${exec.id}`);
@@ -156,9 +163,9 @@ export function MissionDetailHeader({
 
           <Button
             onClick={handleRun}
-            disabled={isRunning || mission.active === false}
+            disabled={isRunning}
             size="sm"
-            title={mission.active === false ? "Activate this mission to run" : "Run mission"}
+            title="Run mission"
             className="gap-1.5 rounded-xl font-medium shadow-sm"
           >
             {isRunning ? (
@@ -170,7 +177,7 @@ export function MissionDetailHeader({
             ) : (
               <MaterialIcon name="play_arrow" size={16} />
             )}
-            <span>Run mission</span>
+            <span>{isRunning ? "Starting..." : "Run mission"}</span>
           </Button>
 
           <Button

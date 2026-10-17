@@ -170,9 +170,9 @@ export function ProjectMissions({
                     variant="outline"
                     size="sm"
                     onClick={() => handleRunMission(mission.id)}
-                    disabled={runningId === mission.id || mission.active === false}
+                    disabled={runningId === mission.id}
                     className="h-8 gap-1 rounded-lg px-2.5 text-body-xs font-medium text-primary hover:text-primary hover:bg-primary/10 border-primary/20"
-                    title={mission.active === false ? "Mission must be activated to run" : "Run mission now"}
+                    title="Run mission now"
                   >
                     {runningId === mission.id ? (
                       <MaterialIcon name="progress_activity" size={14} className="animate-spin text-primary" />

@@ -1,12 +1,63 @@
+"use client";
+
+import { useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { MissionExecution } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { Button } from "@/components/ui/button";
+import { runMission } from "@/lib/api/missions";
 import { cn } from "@/lib/utils";
 
 interface MissionExecutionHistoryProps {
   executions: MissionExecution[];
   missionName: string;
+  missionId?: string;
+  active?: boolean;
+}
+
+function EmptyStateRunButton({ missionId, active }: { missionId: string; active?: boolean }) {
+  const router = useRouter();
+  const [isRunning, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  const handleRun = () => {
+    setError(null);
+    startTransition(async () => {
+      try {
+        const exec = await runMission(missionId);
+        if (exec?.id) {
+          router.push(`/executions/${exec.id}`);
+        } else {
+          setError("Could not trigger execution. Please try again.");
+        }
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to run mission.");
+      }
+    });
+  };
+
+  return (
+    <div className="space-y-2 pt-1">
+      <Button
+        onClick={handleRun}
+        disabled={isRunning}
+        size="sm"
+        className="gap-1.5 rounded-xl font-medium shadow-sm w-full sm:w-auto"
+      >
+        {isRunning ? (
+          <MaterialIcon name="progress_activity" size={16} className="animate-spin" />
+        ) : (
+          <MaterialIcon name="play_arrow" size={16} />
+        )}
+        <span>{isRunning ? "Starting execution..." : "Run mission now"}</span>
+      </Button>
+      {error && (
+        <p className="text-caption text-destructive">{error}</p>
+      )}
+    </div>
+  );
 }
 
 function formatExactDate(iso: string): string {
@@ -45,16 +96,23 @@ function relativeTime(iso: string): string {
 export function MissionExecutionHistory({
   executions,
   missionName,
+  missionId,
+  active,
 }: MissionExecutionHistoryProps) {
   if (executions.length === 0) {
     return (
-      <section aria-label="Execution history" className="space-y-2">
-        <h2 className="text-body-sm font-semibold text-foreground uppercase tracking-wider text-caption">
-          Executions
-        </h2>
-        <p className="text-body-sm text-muted-foreground leading-relaxed">
-          No executions yet. Run this mission to see what Kova finds.
-        </p>
+      <section aria-label="Execution history" className="rounded-2xl border border-border/80 bg-card/60 p-5 shadow-xs space-y-3">
+        <div>
+          <h2 className="text-body-sm font-semibold text-foreground uppercase tracking-wider text-caption">
+            Executions
+          </h2>
+          <p className="text-body-sm text-muted-foreground leading-relaxed mt-1">
+            No executions yet. Run this mission to see what Kova finds.
+          </p>
+        </div>
+        {missionId && (
+          <EmptyStateRunButton missionId={missionId} active={active} />
+        )}
       </section>
     );
   }
