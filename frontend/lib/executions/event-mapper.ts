@@ -436,6 +436,29 @@ const eventMessageMap: Record<
       icon: "pan_tool",
     };
   },
+  "agent.loop_started": (p) => {
+    const objective = typeof p.objective === "string" ? sanitizeText(p.objective) : "";
+    return {
+      label: objective ? `Autonomous loop started: ${objective}` : "Autonomous loop started",
+      icon: "psychology",
+    };
+  },
+  "agent.loop_turn": (p) => {
+    const turn = typeof p.turn === "number" ? ` (turn ${p.turn})` : "";
+    const action = typeof p.action === "string" ? `: ${p.action}` : "";
+    return {
+      label: `Agent turn${turn}${action}`,
+      icon: "psychology",
+    };
+  },
+  "agent.loop_outcome": (p) => {
+    const status = typeof p.status === "string" ? p.status : "COMPLETED";
+    const reason = typeof p.reason === "string" ? sanitizeText(p.reason) : "";
+    return {
+      label: reason ? `Agent outcome: ${status} (${reason})` : `Agent outcome: ${status}`,
+      icon: status === "COMPLETED" ? "task_alt" : status === "NEEDS_INPUT" ? "pan_tool" : "report_problem",
+    };
+  },
 };
 
 function inferStatusFromEventType(eventType: string): ActivityItem["status"] {
@@ -455,7 +478,8 @@ function inferStatusFromEventType(eventType: string): ActivityItem["status"] {
     eventType === "agent.email_created" ||
     eventType === "agent.email_received" ||
     eventType === "agent.email_link_selected" ||
-    eventType === "agent.verification_proposed"
+    eventType === "agent.verification_proposed" ||
+    eventType === "agent.loop_outcome"
   ) {
     return "completed";
   }
@@ -471,6 +495,8 @@ function inferStatusFromEventType(eventType: string): ActivityItem["status"] {
     eventType === "agent.replan_triggered" ||
     eventType === "agent.recovery_proposed" ||
     eventType === "agent.human_input_required" ||
+    eventType === "agent.loop_started" ||
+    eventType === "agent.loop_turn" ||
     eventType === "recovery.started"
   ) {
     return "active";

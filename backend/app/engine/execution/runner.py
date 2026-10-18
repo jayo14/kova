@@ -163,12 +163,25 @@ class FlowRunner:
         Returns:
             Execution result with events, observations, verification, and current_state.
         """
+        from app.config.settings import settings
+
         project_obj = project or getattr(target_flow, "project", None)
         limits = getattr(project_obj, "execution_limits", None) or {}
         max_duration = limits.get("max_duration_seconds") if isinstance(limits, dict) else getattr(limits, "max_duration_seconds", None)
-        effective_timeout = timeout_seconds or (max_duration if max_duration else EXECUTION_TIMEOUT_SECONDS)
-        if max_duration and timeout_seconds:
-            effective_timeout = min(timeout_seconds, max_duration)
+
+        is_agent_run = bool(
+            settings.AGENT_EXECUTION_ENABLED
+            and (objective or (target_flow and getattr(target_flow, "objective", None)))
+            and not flow_steps
+            and not (target_flow and getattr(target_flow, "steps", None))
+        )
+        if is_agent_run:
+            agent_cap = settings.AGENT_EXECUTION_MAX_DURATION_SECONDS
+            effective_timeout = timeout_seconds or (min(max_duration, agent_cap) if max_duration else agent_cap)
+        else:
+            effective_timeout = timeout_seconds or (max_duration if max_duration else EXECUTION_TIMEOUT_SECONDS)
+            if max_duration and timeout_seconds:
+                effective_timeout = min(timeout_seconds, max_duration)
 
         try:
             result = await asyncio.wait_for(
@@ -231,6 +244,234 @@ class FlowRunner:
                 await db.commit()
         except Exception as db_err:
             logger.debug("Failed to persist UNVERIFIED status for execution %s: %s", execution_id, db_err)
+
+    async def _execute_via_agent_loop(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        verifier: Verifier,
+        execution_id: uuid.UUID,
+        target_url: str,
+        objective: str,
+        success_condition: dict | None,
+        credential_store: CredentialStore | None,
+        event_recorder: Callable | None,
+        persona: str = "default",
+        project: Any | None = None,
+    ) -> dict[str, Any]:
+        """Dispatch flow execution to the autonomous agent loop behind feature flag."""
+        from app.config.settings import settings
+        from app.engine.ai.executor import AgentExecutor
+        from app.engine.ai.provider import get_ai_provider
+        from app.engine.ai.reasoner import AgentReasoner
+
+        ai_provider = get_ai_provider()
+        reasoner = AgentReasoner(provider=ai_provider)
+
+        safety_restrictions = getattr(project, "safety_restrictions", None) or getattr(ctx, "safety_restrictions", None)
+        execution_limits = getattr(project, "execution_limits", None) or getattr(ctx, "execution_limits", None)
+
+        max_dur = settings.AGENT_EXECUTION_MAX_DURATION_SECONDS
+        if execution_limits:
+            proj_max_dur = execution_limits.get("max_duration_seconds") if isinstance(execution_limits, dict) else getattr(execution_limits, "max_duration_seconds", None)
+            if proj_max_dur:
+                max_dur = min(max_dur, proj_max_dur)
+
+        ctx.record_event(EventTypes.AGENT_LOOP_STARTED, {
+            "objective": objective,
+            "persona": persona,
+            "max_duration_seconds": max_dur,
+        })
+        await self._emit_events(ctx, event_recorder)
+
+        async def _agent_event_emitter(event_type: str, payload: dict) -> None:
+            ctx.record_event(EventTypes.AGENT_LOOP_TURN, {
+                "sub_event_type": event_type,
+                **payload,
+            })
+            ctx.record_event(event_type, payload)
+            await self._emit_events(ctx, event_recorder)
+
+        agent_executor = AgentExecutor(
+            execution_id=execution_id,
+            reasoner=reasoner,
+            email_provider=None,
+            credential_store=credential_store,
+            event_emitter=_agent_event_emitter,
+            max_duration=float(max_dur),
+            safety_restrictions=safety_restrictions,
+        )
+
+        outcome = await agent_executor.run(
+            browser=browser,
+            target_url=target_url,
+            objective=objective,
+        )
+
+        ctx.record_event(EventTypes.AGENT_LOOP_OUTCOME, {
+            "status": outcome.status,
+            "reason": outcome.reason,
+            "facts": outcome.facts,
+            "failure_category": getattr(outcome, "failure_category", None),
+        })
+        await self._emit_events(ctx, event_recorder)
+
+        # Translate AgentOutcome to ExecutionState
+        if outcome.status == "COMPLETED":
+            ctx.transition(ExecutionState.VERIFYING)
+            ctx.record_event(EventTypes.VERIFICATION_STARTED, {"condition": success_condition})
+            await self._emit_events(ctx, event_recorder)
+
+            verification = None
+            if success_condition:
+                verification = await verifier.verify(success_condition)
+            else:
+                from app.engine.verification.verifier import compile_expectation
+                live_url = getattr(browser.page, "url", "")
+                live_title = await browser.page.title() if browser.page else ""
+                live_text = await browser.page.evaluate("() => document.body ? document.body.innerText.slice(0, 500) : ''") if browser.page else ""
+                compiled_cond = await compile_expectation(
+                    objective,
+                    "",
+                    page_context={"url": live_url, "title": live_title, "text": live_text},
+                )
+                if compiled_cond:
+                    verification = await verifier.verify(compiled_cond)
+
+            if verification and verification.passed:
+                ctx.transition(ExecutionState.COMPLETED)
+                ctx.completed_at = datetime.now(timezone.utc)
+                ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
+                    "completed_at": ctx.completed_at.isoformat(),
+                    "verified": True,
+                })
+                await self._emit_events(ctx, event_recorder)
+                return {
+                    "success": True,
+                    "execution_id": str(execution_id),
+                    "state": ExecutionState.COMPLETED.value,
+                    "verification": verification.to_dict(),
+                    "current_state": ctx.current_state,
+                    "events": ctx.events,
+                    "observations": ctx.observations,
+                }
+            else:
+                ctx.transition(ExecutionState.UNVERIFIED)
+                ctx.completed_at = datetime.now(timezone.utc)
+                ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
+                    "completed_at": ctx.completed_at.isoformat(),
+                    "verification_status": "unverified",
+                    "failure_category": "verifier_rejected_agent_completion",
+                    "reason": "Agent completed but verifier rejected verification",
+                })
+                await self._emit_events(ctx, event_recorder)
+                return {
+                    "success": False,
+                    "execution_id": str(execution_id),
+                    "state": ExecutionState.UNVERIFIED.value,
+                    "failure_category": "verifier_rejected_agent_completion",
+                    "verification": verification.to_dict() if verification else {},
+                    "error": "Verifier rejected agent completion",
+                    "error_code": "UNVERIFIED",
+                    "current_state": ctx.current_state,
+                    "events": ctx.events,
+                    "observations": ctx.observations,
+                }
+
+        elif outcome.status == "NEEDS_INPUT":
+            ctx.transition(ExecutionState.PAUSED)
+            ctx.control_state = "human"
+            ctx.record_event(EventTypes.EXECUTION_PAUSED, {
+                "reason": outcome.reason,
+                "control_state": "human",
+            })
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "state": ExecutionState.PAUSED.value,
+                "control_state": "human",
+                "error": outcome.reason,
+                "current_state": ctx.current_state,
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
+
+        elif outcome.status == "BLOCKED":
+            try:
+                ctx.transition(ExecutionState.BLOCKED)
+            except Exception:
+                ctx.state = ExecutionState.BLOCKED
+            ctx.completed_at = datetime.now(timezone.utc)
+            fail_cat = getattr(outcome, "failure_category", None) or "agent_blocked"
+            ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                "error": outcome.reason,
+                "error_code": "BLOCKED",
+                "failure_category": fail_cat,
+                "completed_at": ctx.completed_at.isoformat(),
+            })
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "state": ExecutionState.BLOCKED.value,
+                "failure_category": fail_cat,
+                "error": outcome.reason,
+                "error_code": "BLOCKED",
+                "current_state": ctx.current_state,
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
+
+        elif outcome.status == "UNVERIFIED":
+            ctx.transition(ExecutionState.UNVERIFIED)
+            ctx.completed_at = datetime.now(timezone.utc)
+            fail_cat = getattr(outcome, "failure_category", None) or "agent_outcome_unverified"
+            ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
+                "completed_at": ctx.completed_at.isoformat(),
+                "verification_status": "unverified",
+                "failure_category": fail_cat,
+                "reason": outcome.reason,
+            })
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "state": ExecutionState.UNVERIFIED.value,
+                "failure_category": fail_cat,
+                "error": outcome.reason,
+                "error_code": "UNVERIFIED",
+                "current_state": ctx.current_state,
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
+
+        else: # FAILED
+            if ctx.state not in (ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.BLOCKED, ExecutionState.UNVERIFIED):
+                try:
+                    ctx.transition(ExecutionState.FAILED)
+                except Exception:
+                    ctx.state = ExecutionState.FAILED
+            ctx.completed_at = datetime.now(timezone.utc)
+            fail_cat = getattr(outcome, "failure_category", None) or "agent_loop_failed"
+            ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                "error": outcome.reason,
+                "error_code": "FAILED",
+                "failure_category": fail_cat,
+                "completed_at": ctx.completed_at.isoformat(),
+            })
+            await self._emit_events(ctx, event_recorder)
+            return {
+                "success": False,
+                "execution_id": str(execution_id),
+                "state": ExecutionState.FAILED.value,
+                "failure_category": fail_cat,
+                "error": outcome.reason,
+                "error_code": "FAILED",
+                "current_state": ctx.current_state,
+                "events": ctx.events,
+                "observations": ctx.observations,
+            }
 
     async def _execute_inner(
         self,
@@ -677,7 +918,24 @@ class FlowRunner:
                 ctx.record_event(EventTypes.BROWSER_SCREENSHOT, ss_data)
                 await self._emit_events(ctx, event_recorder)
 
-            # If flow has no pre-baked steps but has an objective, dynamically plan actions
+            # If flow has no pre-baked steps but has an objective, dynamically plan actions or run autonomous agent loop
+            effective_obj = objective or (getattr(target_flow, "objective", None) if target_flow else None)
+            from app.config.settings import settings
+            if settings.AGENT_EXECUTION_ENABLED and effective_obj and not flow_steps:
+                return await self._execute_via_agent_loop(
+                    ctx=ctx,
+                    browser=browser,
+                    verifier=verifier,
+                    execution_id=execution_id,
+                    target_url=target_url,
+                    objective=effective_obj,
+                    success_condition=success_condition,
+                    credential_store=credential_store,
+                    event_recorder=event_recorder,
+                    persona=persona,
+                    project=project,
+                )
+
             if not flow_steps and objective:
                 from app.engine.ai.settings import ai_settings
                 if ai_settings.ai_enabled:
@@ -769,6 +1027,28 @@ class FlowRunner:
                                 logger.info("Planned %d dynamic steps (%d rejected) for objective '%s'", len(flow_steps), len(rejected_steps), objective)
                     except Exception as plan_err:
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
+
+            if not flow_steps:
+                ctx.transition(ExecutionState.UNVERIFIED)
+                ctx.completed_at = datetime.now(timezone.utc)
+                ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
+                    "completed_at": ctx.completed_at.isoformat(),
+                    "verification_status": "unverified",
+                    "failure_category": "no_steps_no_agent",
+                    "reason": "Flow has no steps and agent execution is disabled.",
+                })
+                await self._emit_events(ctx, event_recorder)
+                return {
+                    "success": False,
+                    "execution_id": str(execution_id),
+                    "error": "Flow has no steps and agent execution is disabled.",
+                    "error_code": "UNVERIFIED",
+                    "failure_category": "no_steps_no_agent",
+                    "state": ExecutionState.UNVERIFIED.value,
+                    "current_state": ctx.current_state,
+                    "events": ctx.events,
+                    "observations": ctx.observations,
+                }
 
             async with async_trace_span("execute_target", span_attrs):
                 for i, step in enumerate(flow_steps):
