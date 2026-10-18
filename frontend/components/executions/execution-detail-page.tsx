@@ -241,7 +241,70 @@ export function ExecutionDetailPage({
 
       {/* 2-Column Section: Activity Stream + Result + Evidence */}
       <div className="grid gap-6 lg:grid-cols-3 pt-2">
-        <div className="lg:col-span-2">
+        <div className="lg:col-span-2 space-y-4">
+          {(() => {
+            const destructiveEvent = events.find((e) => e.eventType === "safety.destructive_action_blocked");
+            const isDestructiveBlocked = Boolean(
+              destructiveEvent ||
+              execution.status === "blocked" ||
+              report?.failureCategory === "destructive_action_blocked"
+            );
+            if (!isDestructiveBlocked) return null;
+            const payload = destructiveEvent?.payload as Record<string, unknown> | undefined;
+            const targetLabel = String(payload?.target_label || payload?.action_type || "Destructive Action");
+            const reason = String(payload?.reason || "This action is destructive and not in the project's allowlist.");
+            return (
+              <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive-foreground">
+                <div className="flex items-start gap-3">
+                  <MaterialIcon name="warning" size={20} className="text-destructive shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h3 className="text-body-sm font-semibold text-destructive">
+                      Execution BLOCKED: Destructive action prevented
+                    </h3>
+                    <p className="text-caption text-foreground/80">
+                      Kova detected a destructive action and refused to execute it.
+                    </p>
+                    <p className="text-caption font-mono text-foreground/90">
+                      Action: {targetLabel}
+                    </p>
+                    <p className="text-caption text-muted-foreground">
+                      {reason}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
+          {(() => {
+            const injectionEvent = events.find((e) => e.eventType === "safety.injection_attempt_detected");
+            const isInjectionBlocked = Boolean(
+              injectionEvent ||
+              report?.failureCategory === "prompt_injection_detected"
+            );
+            if (!isInjectionBlocked) return null;
+            const payload = injectionEvent?.payload as Record<string, unknown> | undefined;
+            const evidence = String(payload?.evidence || "Untrusted instruction detected in page content.");
+            return (
+              <div className="rounded-xl border border-destructive/50 bg-destructive/10 p-4 text-destructive-foreground">
+                <div className="flex items-start gap-3">
+                  <MaterialIcon name="security" size={20} className="text-destructive shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h3 className="text-body-sm font-semibold text-destructive">
+                      SECURITY ALERT: Prompt injection attempt detected and blocked
+                    </h3>
+                    <p className="text-caption text-foreground/80">
+                      The application under test contained instructions attempting to manipulate Kova&apos;s AI.
+                    </p>
+                    <p className="text-caption font-mono text-foreground/90">
+                      Evidence: {evidence}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           <ExecutionActivity activities={activities} />
         </div>
 

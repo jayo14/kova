@@ -28,6 +28,7 @@ class ExecutionState(str, enum.Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     UNVERIFIED = "UNVERIFIED"
+    BLOCKED = "BLOCKED"
 
 
 # Valid state transitions
@@ -49,6 +50,7 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
         ExecutionState.PREREQUISITE_FAILED,
         ExecutionState.FAILED,
         ExecutionState.UNVERIFIED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.RESOLVING_PREREQUISITES: [
         ExecutionState.RESOLVING_PREREQUISITES,
@@ -83,6 +85,7 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
         ExecutionState.UNVERIFIED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.OBSERVING: [
         ExecutionState.OBSERVING,
@@ -96,6 +99,7 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
         ExecutionState.UNVERIFIED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.ACTING: [
         ExecutionState.ACTING,
@@ -109,16 +113,19 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
         ExecutionState.UNVERIFIED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.PAUSED: [
         ExecutionState.HUMAN_CONTROLLED,
         ExecutionState.RESUMING,
         ExecutionState.PREREQUISITE_FAILED,
         ExecutionState.FAILED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.HUMAN_CONTROLLED: [
         ExecutionState.RESUMING,
         ExecutionState.FAILED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.RESUMING: [
         ExecutionState.RUNNING,
@@ -126,16 +133,19 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
         ExecutionState.PLANNING,
         ExecutionState.RESOLVING_PREREQUISITES,
         ExecutionState.FAILED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.VERIFYING: [
         ExecutionState.VERIFYING,
         ExecutionState.COMPLETED,
         ExecutionState.FAILED,
         ExecutionState.UNVERIFIED,
+        ExecutionState.BLOCKED,
     ],
     ExecutionState.COMPLETED: [],
     ExecutionState.FAILED: [],
     ExecutionState.UNVERIFIED: [],
+    ExecutionState.BLOCKED: [],
 }
 
 

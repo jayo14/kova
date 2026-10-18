@@ -47,6 +47,10 @@ def classify_failure(error_code: str | None, status: str | None = None) -> str |
     code = (error_code or "").upper()
     if not code:
         return None
+    if code in {"DESTRUCTIVE_ACTION_BLOCKED"}:
+        return "destructive_action_blocked"
+    if code in {"INJECTION_ATTEMPT_DETECTED", "PROMPT_INJECTION_DETECTED"}:
+        return "prompt_injection_detected"
     if code in {"AUTH_BLOCKED", "AUTHENTICATION_FAILED", "CREDENTIALS_MISSING", "FORBIDDEN"}:
         return "authentication_or_authorization"
     if code in {"PREREQUISITE_UNSATISFIED", "PRECONDITION_FAILED"}:
@@ -72,6 +76,8 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
         return None
     observed = sanitize_text(error_message) or "Kova recorded a failure without additional detail."
     advice = {
+        "destructive_action_blocked": "To permit this action, add it to the project's safety_restrictions.destructive_action_allowlist.",
+        "prompt_injection_detected": "Review untrusted page content and sanitize inputs to prevent prompt injection attempts.",
         "authentication_or_authorization": "Confirm that the configured test account is valid and has the required role.",
         "missing_prerequisite": "Review the flow prerequisites and confirm required application state is available.",
         "element_resolution": "Check whether the expected component rendered and whether its selector still matches uniquely.",
@@ -91,6 +97,29 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
         "next_step": advice,
         "hypothesis": None,
     }
+
+
+def format_destructive_blocked_banner(action_label: str, reason: str | None = None) -> str:
+    """Format a prominent warning banner when an execution is blocked due to destructive action."""
+    return (
+        f"⚠️ Execution BLOCKED: Kova detected a destructive action and refused to execute it.\n\n"
+        f"Action: \"{action_label}\"\n"
+        f"Reason: {reason or \"This action is destructive and not in the project's allowlist.\"}\n\n"
+        f"To permit this action:\n"
+        f"1. Review whether this action is necessary for the validation scenario.\n"
+        f"2. If yes, add \"{action_label.lower()}\" to the project's safety_restrictions.destructive_action_allowlist.\n"
+        f"3. Re-run the execution."
+    )
+
+
+def format_prompt_injection_banner(evidence: str) -> str:
+    """Format a security-focused warning banner when prompt injection is detected."""
+    return (
+        f"🚨 SECURITY: Prompt-injection attempt detected and blocked.\n\n"
+        f"The application under test contained content that appeared to instruct Kova's AI to take an unsafe action. Kova refused to execute the proposed action.\n\n"
+        f"Evidence: {evidence}\n\n"
+        f"This is NOT a defect in the application under test — it is a sign that the application may contain malicious content. Review the page manually before re-running."
+    )
 
 
 def diagnose_verification(check: dict, step_name: str | None = None) -> dict:

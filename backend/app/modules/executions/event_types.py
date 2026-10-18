@@ -86,3 +86,12 @@ class EventTypes:
     AI_PROPOSAL = "agent.ai_proposal"
     AI_PROPOSAL_REJECTED = "agent.ai_proposal_rejected"
     AI_PROPOSAL_ALL_REJECTED = "agent.ai_proposal_all_rejected"
+
+    # Safety Guardrails
+    DESTRUCTIVE_ACTION_BLOCKED = "safety.destructive_action_blocked"
+    INJECTION_ATTEMPT_DETECTED = "safety.injection_attempt_detected"
+
+    # Agent Loop Production Dispatch
+    AGENT_LOOP_STARTED = "agent.loop_started"
+    AGENT_LOOP_TURN = "agent.loop_turn"
+    AGENT_LOOP_OUTCOME = "agent.loop_outcome"
