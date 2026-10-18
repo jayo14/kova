@@ -1416,6 +1416,7 @@ class FlowRunner:
             return {
                 "success": True,
                 "execution_id": str(execution_id),
+                "state": ExecutionState.COMPLETED.value,
                 "current_state": ctx.current_state,
                 "events": ctx.events,
                 "observations": ctx.observations,
