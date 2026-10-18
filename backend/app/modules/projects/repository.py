@@ -16,6 +16,12 @@ class ProjectRepository:
         name: str = "",
         base_url: str = "",
         description: str | None = None,
+        product_goal: str | None = None,
+        env_config: dict | None = None,
+        execution_limits: dict | None = None,
+        safety_restrictions: dict | None = None,
+        browser_settings: dict | None = None,
+        test_credentials_ref: uuid.UUID | None = None,
     ) -> Project:
         if user_id is None:
             from app.modules.users.models import User
@@ -43,6 +49,12 @@ class ProjectRepository:
             name=name,
             base_url=base_url,
             description=description,
+            product_goal=product_goal,
+            env_config=env_config or {},
+            execution_limits=execution_limits or {},
+            safety_restrictions=safety_restrictions or {},
+            browser_settings=browser_settings or {},
+            test_credentials_ref=test_credentials_ref,
         )
         self.db.add(project)
         await self.db.flush()
@@ -136,6 +148,12 @@ class ProjectRepository:
         name: str | None = None,
         description: str | None = None,
         base_url: str | None = None,
+        product_goal: str | None = None,
+        env_config: dict | None = None,
+        execution_limits: dict | None = None,
+        safety_restrictions: dict | None = None,
+        browser_settings: dict | None = None,
+        test_credentials_ref: uuid.UUID | None = None,
     ) -> Project | None:
         if user_id is not None:
             project = await self.get_by_id_and_user(project_id, user_id)
@@ -149,6 +167,18 @@ class ProjectRepository:
             project.description = description
         if base_url is not None:
             project.base_url = base_url
+        if product_goal is not None:
+            project.product_goal = product_goal
+        if env_config is not None:
+            project.env_config = env_config
+        if execution_limits is not None:
+            project.execution_limits = execution_limits
+        if safety_restrictions is not None:
+            project.safety_restrictions = safety_restrictions
+        if browser_settings is not None:
+            project.browser_settings = browser_settings
+        if test_credentials_ref is not None:
+            project.test_credentials_ref = test_credentials_ref
         await self.db.flush()
         await self.db.refresh(project)
         return project
