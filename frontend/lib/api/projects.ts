@@ -1,6 +1,6 @@
-import type { Project } from "@/lib/types";
+import type { Project, EnvironmentConfig, ExecutionLimits, SafetyRestrictions, BrowserSettings } from "@/lib/types";
 import { api } from "./client";
-import { mapKeysToSnake, stripNulls } from "./mappers";
+import { mapKeysToCamel, mapKeysToSnake, stripNulls } from "./mappers";
 
 export interface BackendProject {
   id: string;
@@ -10,6 +10,12 @@ export interface BackendProject {
   base_url: string;
   created_at: string;
   updated_at: string;
+  product_goal?: string | null;
+  env_config?: Record<string, unknown>;
+  execution_limits?: Record<string, unknown>;
+  safety_restrictions?: Record<string, unknown>;
+  browser_settings?: Record<string, unknown>;
+  test_credentials_ref?: string | null;
 }
 
 export function toFrontendProject(raw: BackendProject): Project {
@@ -21,6 +27,12 @@ export function toFrontendProject(raw: BackendProject): Project {
     baseUrl: raw.base_url,
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
+    productGoal: raw.product_goal ?? null,
+    envConfig: raw.env_config ? (mapKeysToCamel(raw.env_config) as unknown as EnvironmentConfig) : undefined,
+    executionLimits: raw.execution_limits ? (mapKeysToCamel(raw.execution_limits) as unknown as ExecutionLimits) : undefined,
+    safetyRestrictions: raw.safety_restrictions ? (mapKeysToCamel(raw.safety_restrictions) as unknown as SafetyRestrictions) : undefined,
+    browserSettings: raw.browser_settings ? (mapKeysToCamel(raw.browser_settings) as unknown as BrowserSettings) : undefined,
+    testCredentialsRef: raw.test_credentials_ref ?? null,
   };
 }
 
@@ -48,26 +60,53 @@ export async function getProject(id: string, token?: string): Promise<Project | 
 }
 
 export async function createProject(
-  input: { name: string; description?: string | null; baseUrl: string },
+  input: {
+    name: string;
+    description?: string | null;
+    baseUrl: string;
+    productGoal?: string | null;
+    envConfig?: Partial<EnvironmentConfig>;
+    executionLimits?: Partial<ExecutionLimits>;
+    safetyRestrictions?: Partial<SafetyRestrictions>;
+    browserSettings?: Partial<BrowserSettings>;
+    testCredentialsRef?: string | null;
+  },
   token?: string
 ): Promise<Project> {
   const cleanName = input.name.trim();
   const cleanBaseUrl = normalizeUrl(input.baseUrl);
   const cleanDescription = input.description?.trim() || null;
 
-  const body = mapKeysToSnake({
+  const payload: Record<string, unknown> = {
     name: cleanName,
     description: cleanDescription,
     baseUrl: cleanBaseUrl,
-  });
+  };
+  if (input.productGoal !== undefined) payload.productGoal = input.productGoal;
+  if (input.envConfig !== undefined) payload.envConfig = input.envConfig;
+  if (input.executionLimits !== undefined) payload.executionLimits = input.executionLimits;
+  if (input.safetyRestrictions !== undefined) payload.safetyRestrictions = input.safetyRestrictions;
+  if (input.browserSettings !== undefined) payload.browserSettings = input.browserSettings;
+  if (input.testCredentialsRef !== undefined) payload.testCredentialsRef = input.testCredentialsRef;
 
+  const body = mapKeysToSnake(payload);
   const raw = await api.post<BackendProject>("/api/v1/projects/", body, token);
   return toFrontendProject(raw);
 }
 
 export async function updateProject(
   id: string,
-  input: { name?: string; description?: string | null; baseUrl?: string },
+  input: {
+    name?: string;
+    description?: string | null;
+    baseUrl?: string;
+    productGoal?: string | null;
+    envConfig?: Partial<EnvironmentConfig>;
+    executionLimits?: Partial<ExecutionLimits>;
+    safetyRestrictions?: Partial<SafetyRestrictions>;
+    browserSettings?: Partial<BrowserSettings>;
+    testCredentialsRef?: string | null;
+  },
   token?: string
 ): Promise<Project | null> {
   if (!id) return null;
@@ -78,6 +117,12 @@ export async function updateProject(
     payload.description = input.description ? input.description.trim() : null;
   }
   if (input.baseUrl !== undefined) payload.baseUrl = normalizeUrl(input.baseUrl);
+  if (input.productGoal !== undefined) payload.productGoal = input.productGoal;
+  if (input.envConfig !== undefined) payload.envConfig = input.envConfig;
+  if (input.executionLimits !== undefined) payload.executionLimits = input.executionLimits;
+  if (input.safetyRestrictions !== undefined) payload.safetyRestrictions = input.safetyRestrictions;
+  if (input.browserSettings !== undefined) payload.browserSettings = input.browserSettings;
+  if (input.testCredentialsRef !== undefined) payload.testCredentialsRef = input.testCredentialsRef;
 
   const body = stripNulls(mapKeysToSnake(payload));
   try {
@@ -103,7 +148,6 @@ export async function deleteProject(id: string, token?: string): Promise<boolean
 }
 
 import type { ProductModel, ValidationRun } from "@/lib/types";
-import { mapKeysToCamel } from "./mappers";
 
 export async function getProjectKnowledge(id: string, token?: string): Promise<ProductModel | null> {
   if (!id) return null;
