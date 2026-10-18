@@ -34,4 +34,8 @@ class Credential(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    project = relationship("Project", backref=backref("credentials", passive_deletes=True))
+    project = relationship(
+        "Project",
+        foreign_keys=[project_id],
+        backref=backref("credentials", passive_deletes=True),
+    )
