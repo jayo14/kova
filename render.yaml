@@ -35,6 +35,10 @@ services:
           type: redis
           name: kova-redis
           property: connectionString
+      - key: AGENT_EXECUTION_ENABLED
+        value: "true"
+      - key: AGENT_EXECUTION_MAX_DURATION_SECONDS
+        value: "600"
 
   # ── Celery Worker (Playwright Execution Engine) ────────────
   - type: worker
@@ -72,6 +76,10 @@ services:
           type: redis
           name: kova-redis
           property: connectionString
+      - key: AGENT_EXECUTION_ENABLED
+        value: "true"
+      - key: AGENT_EXECUTION_MAX_DURATION_SECONDS
+        value: "600"
 
   # ── Frontend Web App (Next.js) ─────────────────────────────
   - type: web

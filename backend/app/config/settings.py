@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     OIDC_AUDIENCE: str = "authenticated"
     JWT_SECRET_KEY: str = ""
     FAIL_ON_NETWORK_ERRORS: bool = True
-    AGENT_EXECUTION_ENABLED: bool = False
+    AGENT_EXECUTION_ENABLED: bool = False  # default off in code; enabled via env in deployment
     AGENT_EXECUTION_MAX_DURATION_SECONDS: int = 600
 
     @model_validator(mode="after")
