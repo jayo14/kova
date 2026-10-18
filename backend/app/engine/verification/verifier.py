@@ -358,7 +358,7 @@ class VerificationResult:
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
-            "checks": [c.to_dict() for c in self.checks],
+            "checks": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.checks],
             "evidence_ids": self.evidence_ids,
         }
 
