@@ -93,6 +93,11 @@ def validate_action_proposal(
     available_credentials: set[str] | None = None,
 ) -> ActionProposal:
     """Full validation pipeline for one action proposal. Raises ProposalRejected."""
+    if getattr(proposal, "injection_detected", False):
+        raise ProposalRejected(
+            f"AI proposal rejected: prompt-injection evidence detected. {getattr(proposal, 'injection_evidence', '')}".strip()
+        )
+
     if proposal.action not in RUNTIME_ACTIONS and proposal.action not in LOOP_ACTIONS:
         raise ProposalRejected(f"unsupported action '{proposal.action}'")
 

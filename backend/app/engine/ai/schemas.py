@@ -86,6 +86,8 @@ class ActionProposal(BaseModel):
     expected_effect: str = ""
     verification: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    injection_detected: bool = False
+    injection_evidence: str = ""
 
 
 class RecoveryProposal(BaseModel):

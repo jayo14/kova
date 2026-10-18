@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 
 from app.engine.ai.memory import AgentMemory
 from app.engine.ai.observation import build_semantic_observation
+from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
 from app.engine.ai.provider import AIProvider, AIProviderError
 from app.engine.ai.schemas import (
     ActionProposal,
@@ -91,6 +92,7 @@ class AgentReasoner:
                 "You interpret software-testing objectives into structured intent. "
                 "Respond ONLY with JSON matching the requested schema. Be conservative: "
                 "set needs_account/needs_email_capability true whenever plausibly required."
+                + build_system_prompt_clause()
             )
             prompt = (
                 "Objective: "
@@ -192,11 +194,12 @@ class AgentReasoner:
                 "element_checked, element_value, page_loaded, auth_verified. Never include "
                 "passwords or secrets in any field — reference credentials via "
                 "credential_intent instead."
+                + build_system_prompt_clause()
             )
             prompt = (
                 "Objective: " + memory.objective + "\n"
                 "Structured intent: " + json.dumps(interpretation.model_dump()) + "\n"
-                "Current observation: " + json.dumps(semantic_view) + "\n"
+                "Current observation:\n" + taint_page_content(json.dumps(semantic_view)) + "\n"
                 "Email capability available: " + str(has_email_provider) + "\n"
                 "Identity state: " + json.dumps(memory.identity.to_safe_dict()) + "\n\n"
                 "Return JSON: {objective, intent, steps[{description, action, target, value, "
@@ -431,12 +434,13 @@ class AgentReasoner:
                 "If the page shows a human-input requirement (OTP, CAPTCHA, payment, "
                 "ambiguous destructive action), request_human. If the objective is "
                 "impossible, abort."
+                + build_system_prompt_clause()
             )
             prompt = (
                 "Objective: " + memory.objective + "\n"
                 "Intent: " + interpretation.intent + "\n"
                 "Memory: " + json.dumps(memory.compact_view()) + "\n"
-                "Observation: " + json.dumps(semantic_view) + "\n"
+                "Observation:\n" + taint_page_content(json.dumps(semantic_view)) + "\n"
                 + ("Recent failure: " + recent_failure + "\n" if recent_failure else "")
                 + "\nReturn JSON: {action, target, value, credential_intent, reason, "
                 "expected_effect, verification, confidence}."
@@ -732,12 +736,13 @@ class AgentReasoner:
                 "Destructive actions must never be retried blindly. "
                 "When human input is needed (OTP, CAPTCHA, expired link requiring new "
                 "email is OK to retry, payment), request_human."
+                + build_system_prompt_clause()
             )
             prompt = (
                 "Objective: " + memory.objective + "\n"
                 "Memory: " + json.dumps(memory.compact_view()) + "\n"
                 "Failure: " + failure_code + " — " + failure + "\n"
-                "Observation: " + json.dumps(build_semantic_observation(observation)) + "\n"
+                "Observation:\n" + taint_page_content(json.dumps(build_semantic_observation(observation))) + "\n"
                 "Return JSON: {strategy, alternative_target, reason, action?}."
             )
             try:
@@ -787,13 +792,14 @@ class AgentReasoner:
                 "You are advisory: the deterministic verifier remains authoritative. "
                 "If your view conflicts with deterministic facts, the runtime will "
                 "report UNVERIFIED. Output ONLY JSON."
+                + build_system_prompt_clause()
             )
             prompt = (
                 "Objective: " + memory.objective + "\n"
                 "Success requirements: " + json.dumps(interpretation.success_requirements) + "\n"
                 "Deterministic facts: " + json.dumps(deterministic_facts) + "\n"
                 "Memory: " + json.dumps(memory.compact_view()) + "\n"
-                "Observation: " + json.dumps(build_semantic_observation(observation)) + "\n"
+                "Observation:\n" + taint_page_content(json.dumps(build_semantic_observation(observation))) + "\n"
                 "Return JSON: {intent_satisfied, reason, required_facts[], "
                 "suggested_condition}."
             )
@@ -831,8 +837,9 @@ class AgentReasoner:
             "or gated access page. Return an AuthPageClassification with kind in "
             "['login', 'signup', 'magic_link', 'oauth_redirect', 'otp_verification', 'not_auth', 'ambiguous'] "
             "and a confidence score between 0.0 and 1.0."
+            + build_system_prompt_clause()
         )
-        user_prompt = f"Page observation:\n{json.dumps(observation, default=str)[:4000]}"
+        user_prompt = f"Page observation:\n{taint_page_content(json.dumps(observation, default=str)[:4000])}"
         try:
             res = await self._provider.generate_structured(
                 system=system_prompt,
@@ -858,8 +865,9 @@ class AgentReasoner:
             "Analyze the page elements to identify the form submit button. "
             "Avoid OAuth/SSO buttons (Google, GitHub, etc.). "
             "Return a JSON object with 'selector' (CSS selector) and 'confidence'."
+            + build_system_prompt_clause()
         )
-        user_prompt = f"Page elements:\n{json.dumps(observation.get('elements', []), default=str)[:3000]}"
+        user_prompt = f"Page elements:\n{taint_page_content(json.dumps(observation.get('elements', []), default=str)[:3000])}"
         try:
             res = await self._provider.generate_structured(
                 system=system_prompt,

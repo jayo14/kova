@@ -245,6 +245,24 @@ class AgentExecutor:
                 memory, interpretation, observation,
                 recent_failure=self.recent_failure_detail or None,
             )
+
+            # Prompt injection defense check
+            from app.engine.ai.prompt_sanitizer import detect_injection_in_proposal
+            injection_detected, evidence = detect_injection_in_proposal(proposal.model_dump())
+            if injection_detected:
+                proposal.injection_detected = True
+                proposal.injection_evidence = evidence
+                await self._emit(
+                    EventTypes.INJECTION_ATTEMPT_DETECTED,
+                    {"evidence": evidence, "proposal": proposal.model_dump()},
+                )
+                return AgentOutcome(
+                    status="BLOCKED",
+                    reason=f"Prompt-injection attempt detected: {evidence}",
+                    facts=self._fact_list(memory),
+                    failure_category="prompt_injection_detected",
+                )
+
             await self._emit(EventTypes.ACTION_PROPOSED, {
                 "turn": turn,
                 "action": proposal.action,
