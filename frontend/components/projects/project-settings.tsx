@@ -37,6 +37,26 @@ export function ProjectSettingsDialog({
   const [name, setName] = useState(project.name);
   const [baseUrl, setBaseUrl] = useState(project.baseUrl);
   const [description, setDescription] = useState(project.description || "");
+  const [productGoal, setProductGoal] = useState(project.productGoal || "");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [envTarget, setEnvTarget] = useState<"development" | "staging" | "production">(
+    project.envConfig?.target || "staging"
+  );
+  const [maxDuration, setMaxDuration] = useState(
+    project.executionLimits?.maxDurationSeconds ?? 300
+  );
+  const [maxTurns, setMaxTurns] = useState(
+    project.executionLimits?.maxAgentTurns ?? 60
+  );
+  const [productionAllowed, setProductionAllowed] = useState(
+    project.safetyRestrictions?.productionAccessAllowed ?? false
+  );
+  const [paymentAllowed, setPaymentAllowed] = useState(
+    project.safetyRestrictions?.paymentActionsAllowed ?? false
+  );
+  const [accountDeletionAllowed, setAccountDeletionAllowed] = useState(
+    project.safetyRestrictions?.accountDeletionAllowed ?? false
+  );
   const [error, setError] = useState<string | null>(null);
 
   const [isDeleting, setIsDeleting] = useState(false);
@@ -66,11 +86,27 @@ export function ProjectSettingsDialog({
       return;
     }
 
+    if (productionAllowed && envTarget === "production" && !description.includes("I ACKNOWLEDGE production access")) {
+      setError("Production access requires explicit acknowledgment: include 'I ACKNOWLEDGE production access' in the description.");
+      return;
+    }
+
     startTransition(async () => {
       const updated = await updateProject(project.id, {
         name: trimmedName,
         baseUrl: trimmedUrl,
         description: description.trim() || undefined,
+        productGoal: productGoal.trim() || undefined,
+        envConfig: { target: envTarget },
+        executionLimits: {
+          maxDurationSeconds: Number(maxDuration),
+          maxAgentTurns: Number(maxTurns),
+        },
+        safetyRestrictions: {
+          productionAccessAllowed: productionAllowed,
+          paymentActionsAllowed: paymentAllowed,
+          accountDeletionAllowed: accountDeletionAllowed,
+        },
       });
 
       if (!updated) {
@@ -176,6 +212,127 @@ export function ProjectSettingsDialog({
               disabled={isPending || isDeleting}
               rows={3}
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label
+              htmlFor="settings-project-goal"
+              className="text-body-xs font-medium text-foreground"
+            >
+              Product Goal (natural-language verification intent)
+            </label>
+            <Textarea
+              id="settings-project-goal"
+              value={productGoal}
+              onChange={(e) => setProductGoal(e.target.value)}
+              placeholder="e.g. Verify user signup, onboarding, and workspace configuration without regressions..."
+              disabled={isPending || isDeleting}
+              rows={2}
+            />
+          </div>
+
+          <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between text-body-xs font-semibold text-foreground"
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              <span className="flex items-center gap-1.5">
+                <MaterialIcon name="tune" size={16} />
+                Advanced environment & safety settings
+              </span>
+              <MaterialIcon
+                name={showAdvanced ? "expand_less" : "expand_more"}
+                size={18}
+              />
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-3 space-y-3 pt-3 border-t border-border/40 text-body-xs">
+                <div className="space-y-1">
+                  <label className="font-medium text-foreground">Target Environment</label>
+                  <select
+                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-body-xs"
+                    value={envTarget}
+                    onChange={(e) => setEnvTarget(e.target.value as any)}
+                    disabled={isPending || isDeleting}
+                  >
+                    <option value="development">Development</option>
+                    <option value="staging">Staging (default)</option>
+                    <option value="production">Production</option>
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="font-medium text-foreground">Max Duration (s)</label>
+                    <Input
+                      type="number"
+                      min={30}
+                      max={1800}
+                      value={maxDuration}
+                      onChange={(e) => setMaxDuration(Number(e.target.value))}
+                      disabled={isPending || isDeleting}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-medium text-foreground">Max Agent Turns</label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={maxTurns}
+                      onChange={(e) => setMaxTurns(Number(e.target.value))}
+                      disabled={isPending || isDeleting}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  <span className="font-medium text-foreground block">Safety restrictions</span>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={productionAllowed}
+                      onChange={(e) => setProductionAllowed(e.target.checked)}
+                      disabled={isPending || isDeleting}
+                    />
+                    <span>Allow navigation to production environments</span>
+                  </label>
+                  {productionAllowed && (
+                    <p className="text-[11px] text-amber-500 pl-6">
+                      ⚠️ Caution: Requires description acknowledgment when target environment is production.
+                    </p>
+                  )}
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={paymentAllowed}
+                      onChange={(e) => setPaymentAllowed(e.target.checked)}
+                      disabled={isPending || isDeleting}
+                    />
+                    <span>Allow payment and checkout actions</span>
+                  </label>
+                  {paymentAllowed && (
+                    <p className="text-[11px] text-amber-500 pl-6">
+                      ⚠️ Warning: Payment actions may trigger financial transactions.
+                    </p>
+                  )}
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={accountDeletionAllowed}
+                      onChange={(e) => setAccountDeletionAllowed(e.target.checked)}
+                      disabled={isPending || isDeleting}
+                    />
+                    <span>Allow account deletion operations</span>
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-end gap-2 pt-2">

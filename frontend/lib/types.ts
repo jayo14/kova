@@ -127,6 +127,39 @@ export type ExplorationEvent =
 
 // ── Project ───────────────────────────────────────────────
 
+export interface EnvironmentConfig {
+  target: "development" | "staging" | "production";
+  baseUrlOverride?: string | null;
+  allowedHosts?: string[] | null;
+  blockedHosts?: string[] | null;
+}
+
+export interface ExecutionLimits {
+  maxDurationSeconds: number;
+  maxAgentTurns: number;
+  maxRetries: number;
+  maxConcurrentExecutions: number;
+  maxEvidenceStorageMb: number;
+}
+
+export interface SafetyRestrictions {
+  productionAccessAllowed: boolean;
+  paymentActionsAllowed: boolean;
+  accountDeletionAllowed: boolean;
+  destructiveActionAllowlist: string[];
+  forbiddenRoutes: string[];
+  forbiddenSelectors: string[];
+}
+
+export interface BrowserSettings {
+  viewportWidth: number;
+  viewportHeight: number;
+  locale: string;
+  timezone: string;
+  userAgentOverride?: string | null;
+  blockImages: boolean;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -136,6 +169,12 @@ export interface Project {
   baseUrl: string;
   createdAt: string;
   updatedAt: string;
+  productGoal?: string | null;
+  envConfig?: EnvironmentConfig;
+  executionLimits?: ExecutionLimits;
+  safetyRestrictions?: SafetyRestrictions;
+  browserSettings?: BrowserSettings;
+  testCredentialsRef?: string | null;
 }
 
 export interface ProjectSummary extends Project {
