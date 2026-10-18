@@ -309,6 +309,30 @@ export function ExecutionDetailPage({
         </div>
 
         <div className="space-y-4">
+          {(() => {
+            const outcomeEvent = events.find((e) => e.eventType === "agent.loop_outcome");
+            if (!outcomeEvent) return null;
+            const payload = outcomeEvent.payload as Record<string, unknown> | undefined;
+            const status = String(payload?.status || "COMPLETED");
+            const reason = payload?.reason ? String(payload.reason) : null;
+            return (
+              <div className="rounded-xl border border-primary/40 bg-primary/10 p-3.5 text-foreground flex items-center gap-3">
+                <MaterialIcon
+                  name={status === "COMPLETED" ? "psychology" : "info"}
+                  size={20}
+                  className="text-primary shrink-0"
+                />
+                <div className="text-body-xs">
+                  <span className="font-semibold text-primary">Agent outcome: {status}</span>
+                  {status === "COMPLETED" && (
+                    <span className="text-muted-foreground"> — verified by deterministic checker</span>
+                  )}
+                  {reason && <p className="text-caption text-foreground/80 mt-0.5">{reason}</p>}
+                </div>
+              </div>
+            );
+          })()}
+
           <ExecutionResult
             execution={reportExecution}
             onRetry={handleRetry}

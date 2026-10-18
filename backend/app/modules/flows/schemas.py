@@ -139,6 +139,12 @@ class FlowDependency(BaseModel):
 
 
 class FlowCreate(BaseModel):
+    """Schema for creating a flow.
+
+    Agent-executable flow contract:
+    When objective is set and steps is empty ([]), the flow is dispatched
+    to the autonomous agent loop when settings.AGENT_EXECUTION_ENABLED is true.
+    """
     project_id: uuid.UUID
     name: str
     description: str | None = None
