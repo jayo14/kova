@@ -4,7 +4,7 @@ from datetime import datetime
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.infrastructure.database.base import Base
+from app.infrastructure.database.base import Base, JSONCompat
 
 
 class Project(Base):
@@ -35,6 +35,15 @@ class Project(Base):
 
     org_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
+    )
+
+    product_goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    env_config: Mapped[dict] = mapped_column(JSONCompat, default=dict, server_default="{}")
+    execution_limits: Mapped[dict] = mapped_column(JSONCompat, default=dict, server_default="{}")
+    safety_restrictions: Mapped[dict] = mapped_column(JSONCompat, default=dict, server_default="{}")
+    browser_settings: Mapped[dict] = mapped_column(JSONCompat, default=dict, server_default="{}")
+    test_credentials_ref: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("credentials.id", ondelete="SET NULL", use_alter=True), nullable=True
     )
 
     user = relationship("User", backref="projects")
