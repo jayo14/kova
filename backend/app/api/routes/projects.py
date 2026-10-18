@@ -25,7 +25,10 @@ async def create_project(
     db: AsyncSession = Depends(get_session),
 ):
     service = ProjectService(db)
-    project = await service.create_project(data, user_id=user.id)
+    try:
+        project = await service.create_project(data, user_id=user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if project.org_id:
         audit = AuditLogger(db)
         await audit.record(
