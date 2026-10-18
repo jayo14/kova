@@ -231,8 +231,9 @@ class BrowserSession:
             await browser.close()
     """
 
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = True, browser_settings: Any = None):
         self._headless = headless
+        self._browser_settings = browser_settings
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -250,11 +251,41 @@ class BrowserSession:
         import os
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        viewport = DEFAULT_VIEWPORT
+        user_agent = DEFAULT_USER_AGENT
+        locale = None
+        timezone_id = None
+        if self._browser_settings:
+            bs = self._browser_settings
+            if hasattr(bs, "viewport_width") and hasattr(bs, "viewport_height"):
+                viewport = {"width": bs.viewport_width, "height": bs.viewport_height}
+            elif isinstance(bs, dict) and "viewport_width" in bs and "viewport_height" in bs:
+                viewport = {"width": bs["viewport_width"], "height": bs["viewport_height"]}
+
+            if hasattr(bs, "user_agent_override") and bs.user_agent_override:
+                user_agent = bs.user_agent_override
+            elif isinstance(bs, dict) and bs.get("user_agent_override"):
+                user_agent = bs["user_agent_override"]
+
+            if hasattr(bs, "locale") and bs.locale:
+                locale = bs.locale
+            elif isinstance(bs, dict) and bs.get("locale"):
+                locale = bs["locale"]
+
+            if hasattr(bs, "timezone") and bs.timezone:
+                timezone_id = bs.timezone
+            elif isinstance(bs, dict) and bs.get("timezone"):
+                timezone_id = bs["timezone"]
+
         context_kwargs: dict[str, Any] = {
-            "viewport": DEFAULT_VIEWPORT,
-            "user_agent": DEFAULT_USER_AGENT,
+            "viewport": viewport,
+            "user_agent": user_agent,
             "service_workers": "block",
         }
+        if locale:
+            context_kwargs["locale"] = locale
+        if timezone_id:
+            context_kwargs["timezone_id"] = timezone_id
         if getattr(settings, "EVIDENCE_CAPTURE_VIDEO", False):
             video_dir = getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_videos")
             os.makedirs(video_dir, exist_ok=True)

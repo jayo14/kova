@@ -86,13 +86,17 @@ class AgentExecutor:
         credential_store: CredentialStore | None = None,
         event_emitter: Callable[[str, dict], Any] | None = None,
         max_turns: int = MAX_AGENT_TURNS,
+        max_duration: float | None = None,
+        safety_restrictions: Any | None = None,
     ):
         self.execution_id = execution_id
         self.reasoner = reasoner
         self.email_provider = email_provider
         self.credential_store = credential_store or CredentialStore()
         self.event_emitter = event_emitter
-        self.max_turns = max_turns
+        self.max_turns = min(max_turns, 100)
+        self.max_duration = max_duration
+        self.safety_restrictions = safety_restrictions
         self.mailbox: Any | None = None
         self.app_host: str | None = None
 
@@ -187,8 +191,16 @@ class AgentExecutor:
         recovery_budget = MAX_RECOVERIES
         self.recent_failure_detail = ""
         recovery_used = 0
+        start_time = time.monotonic()
 
         for turn in range(self.max_turns):
+            if self.max_duration and (time.monotonic() - start_time) > self.max_duration:
+                return AgentOutcome(
+                    "FAILED",
+                    f"Agent execution timed out after {self.max_duration} seconds",
+                    facts=self._fact_list(memory),
+                )
+
             # Observe (always fresh — the loop never trusts stale state)
             observation = await browser.observe()
             memory.current_url = browser.page.url

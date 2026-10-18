@@ -137,6 +137,7 @@ class FlowRunner:
         current_state: dict[str, Any] | None = None,
         session_manager: Any | None = None,
         reset_strategy: str = "none",
+        project: Any | None = None,
     ) -> dict[str, Any]:
         """Execute a flow.
 
@@ -157,11 +158,17 @@ class FlowRunner:
             current_state: Initial application state dictionary.
             session_manager: Optional SessionManager instance.
             reset_strategy: Contamination reset strategy ("none", "re_establish", "create_new", "skip_if_exists").
+            project: Optional Project domain model for limits and safety configuration.
 
         Returns:
             Execution result with events, observations, verification, and current_state.
         """
-        effective_timeout = timeout_seconds or EXECUTION_TIMEOUT_SECONDS
+        project_obj = project or getattr(target_flow, "project", None)
+        limits = getattr(project_obj, "execution_limits", None) or {}
+        max_duration = limits.get("max_duration_seconds") if isinstance(limits, dict) else getattr(limits, "max_duration_seconds", None)
+        effective_timeout = timeout_seconds or (max_duration if max_duration else EXECUTION_TIMEOUT_SECONDS)
+        if max_duration and timeout_seconds:
+            effective_timeout = min(timeout_seconds, max_duration)
 
         try:
             result = await asyncio.wait_for(
@@ -170,6 +177,7 @@ class FlowRunner:
                     credential_store, target_url, event_recorder, preconditions, dependency_plan,
                     objective, expected_outcome, fail_on_healed,
                     target_flow, flows, persona, current_state, session_manager, reset_strategy,
+                    project=project_obj,
                 ),
                 timeout=effective_timeout,
             )
@@ -243,6 +251,7 @@ class FlowRunner:
         current_state: dict[str, Any] | None = None,
         session_manager: Any | None = None,
         reset_strategy: str = "none",
+        project: Any | None = None,
     ) -> dict[str, Any]:
         """Inner execution logic with state-aware planning and prerequisite resolution."""
         from types import SimpleNamespace
@@ -285,6 +294,10 @@ class FlowRunner:
             session_manager=session_manager,
             app_host=target_host,
             available_credentials=available_creds,
+            project=project,
+            execution_limits=getattr(project, "execution_limits", None),
+            safety_restrictions=getattr(project, "safety_restrictions", None),
+            browser_settings=getattr(project, "browser_settings", None),
         )
         if f"authenticated:{persona}" not in ctx.current_state:
             ctx.current_state[f"authenticated:{persona}"] = False
@@ -432,7 +445,7 @@ class FlowRunner:
         })
         await self._emit_events(ctx, event_recorder)
 
-        browser = BrowserSession()
+        browser = BrowserSession(browser_settings=ctx.browser_settings)
         exec_id = str(execution_id)
         frame_task: asyncio.Task | None = None
         nav_unbind: Callable[[], None] | None = None
@@ -1819,6 +1832,20 @@ class FlowRunner:
         # Map old/string format to new format if needed
         raw_action = self._normalize_step(step, target_url=ctx.target_url)
         action_type = raw_action.get("type", "")
+
+        # Enforce safety restrictions
+        safety = getattr(ctx, "safety_restrictions", None)
+        if safety:
+            prod_allowed = safety.get("production_access_allowed") if isinstance(safety, dict) else getattr(safety, "production_access_allowed", False)
+            forbidden_routes = safety.get("forbidden_routes") if isinstance(safety, dict) else (getattr(safety, "forbidden_routes", []) or [])
+            if action_type == "navigate":
+                dest_url = raw_action.get("value") or raw_action.get("url") or ctx.target_url or ""
+                dest_lower = dest_url.lower()
+                if not prod_allowed and ("prod." in dest_lower or "production." in dest_lower or "/prod" in dest_lower):
+                    raise ExecutionError("Production access not allowed for this project", error_code="PRODUCTION_ACCESS_DENIED")
+                for fr in forbidden_routes:
+                    if fr and (fr == dest_url or fr in dest_url):
+                        raise ExecutionError(f"Route {dest_url} is forbidden for this project", error_code="FORBIDDEN_ROUTE")
 
         ctx.current_step_id = step.get("step_id") if isinstance(step, dict) else None
         action_started_at = datetime.now(timezone.utc)

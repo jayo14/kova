@@ -45,6 +45,10 @@ class ExecutionContext:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     control_state: str = "agent"  # "agent" | "human" | "paused"
+    project: Any | None = None
+    execution_limits: Any | None = None
+    safety_restrictions: Any | None = None
+    browser_settings: Any | None = None
     _emitted_count: int = 0
 
     def transition(self, new_state: ExecutionState) -> None:
