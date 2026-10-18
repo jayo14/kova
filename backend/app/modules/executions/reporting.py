@@ -101,10 +101,11 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
 
 def format_destructive_blocked_banner(action_label: str, reason: str | None = None) -> str:
     """Format a prominent warning banner when an execution is blocked due to destructive action."""
+    fallback_reason = "This action is destructive and not in the project's allowlist."
     return (
         f"⚠️ Execution BLOCKED: Kova detected a destructive action and refused to execute it.\n\n"
         f"Action: \"{action_label}\"\n"
-        f"Reason: {reason or \"This action is destructive and not in the project's allowlist.\"}\n\n"
+        f"Reason: {reason or fallback_reason}\n\n"
         f"To permit this action:\n"
         f"1. Review whether this action is necessary for the validation scenario.\n"
         f"2. If yes, add \"{action_label.lower()}\" to the project's safety_restrictions.destructive_action_allowlist.\n"
