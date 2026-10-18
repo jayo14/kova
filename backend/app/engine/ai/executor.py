@@ -60,11 +60,13 @@ class AgentOutcome:
         reason: str,
         verification: dict | None = None,
         facts: list[str] | None = None,
+        failure_category: str | None = None,
     ):
         self.status = status
         self.reason = reason
         self.verification = verification or {}
         self.facts = facts or []
+        self.failure_category = failure_category
 
     def to_dict(self) -> dict:
         return {
@@ -72,6 +74,7 @@ class AgentOutcome:
             "reason": self.reason,
             "verification": self.verification,
             "facts": self.facts,
+            "failure_category": self.failure_category,
         }
 
 
@@ -97,6 +100,8 @@ class AgentExecutor:
         self.max_turns = min(max_turns, 100)
         self.max_duration = max_duration
         self.safety_restrictions = safety_restrictions
+        from app.engine.safety.destructive_guard import DestructiveActionGuard
+        self.safety_guard = DestructiveActionGuard(safety_restrictions)
         self.mailbox: Any | None = None
         self.app_host: str | None = None
 
@@ -299,6 +304,29 @@ class AgentExecutor:
                     await browser.page.focus(focus_selector)
                 except Exception:
                     pass
+
+            # Destructive action allowlist check
+            if proposal.action in {"click", "submit", "upload"}:
+                from app.engine.safety.destructive_guard import DestructiveActionBlocked
+                target_label = proposal.target.get("label") or proposal.target.get("text") if isinstance(proposal.target, dict) else None
+                target_css = proposal.target.get("css") if isinstance(proposal.target, dict) else (proposal.target if isinstance(proposal.target, str) else None)
+                try:
+                    self.safety_guard.check(
+                        action_type=proposal.action,
+                        target_label=target_label,
+                        target_selector=target_css,
+                    )
+                except DestructiveActionBlocked as e:
+                    await self._emit(
+                        EventTypes.DESTRUCTIVE_ACTION_BLOCKED,
+                        {"action_type": proposal.action, "target_label": e.action_label, "reason": e.reason},
+                    )
+                    return AgentOutcome(
+                        status="BLOCKED",
+                        reason=f"Destructive action blocked: {e.action_label}",
+                        facts=self._fact_list(memory),
+                        failure_category="destructive_action_blocked",
+                    )
 
             # Execute the validated proposal
             outcome = await self._execute_proposal(browser, memory, proposal, turn)

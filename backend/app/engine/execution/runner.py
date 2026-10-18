@@ -1148,12 +1148,25 @@ class FlowRunner:
 
         except Exception as e:
             # Step 9: FAILED - always transition to terminal state
-            if ctx.state not in (ExecutionState.COMPLETED, ExecutionState.FAILED):
+            if ctx.state not in (ExecutionState.COMPLETED, ExecutionState.FAILED, ExecutionState.BLOCKED, ExecutionState.UNVERIFIED):
                 try:
                     ctx.transition(ExecutionState.FAILED)
                 except Exception as transition_err:
                     logger.warning("State transition to FAILED failed: %s", transition_err)
                     ctx.state = ExecutionState.FAILED
+
+            if ctx.state == ExecutionState.BLOCKED:
+                try:
+                    from app.infrastructure.database.session import async_session_factory
+                    from app.modules.executions.models import ExecutionStatus
+                    from app.modules.executions.repository import ExecutionRepository
+
+                    async with async_session_factory() as db:
+                        repo = ExecutionRepository(db)
+                        await repo.update_status(uuid.UUID(str(execution_id)), ExecutionStatus.BLOCKED)
+                        await db.commit()
+                except Exception as db_err:
+                    logger.debug("Failed to persist BLOCKED status for execution %s: %s", execution_id, db_err)
 
             ctx.completed_at = datetime.now(timezone.utc)
             ctx.record_error(str(e))
@@ -1671,10 +1684,11 @@ class FlowRunner:
     # Actions whose failure may already have had side effects — never blindly
     # re-executed. A retried click on 'Delete' or a form submit can double-apply.
     NON_RETRYABLE_ACTION_TYPES = {"click"}
-    DESTRUCTIVE_ACTION_TEXT = (
+    _NON_RETRYABLE_ACTION_TEXT = (
         "delete", "remove", "destroy", "purge", "drop",
         "confirm", "pay", "checkout", "purchase", "place order", "submit payment",
     )
+    DESTRUCTIVE_ACTION_TEXT = _NON_RETRYABLE_ACTION_TEXT
 
     async def _verify_step_postcondition(
         self,
@@ -1846,6 +1860,32 @@ class FlowRunner:
                 for fr in forbidden_routes:
                     if fr and (fr == dest_url or fr in dest_url):
                         raise ExecutionError(f"Route {dest_url} is forbidden for this project", error_code="FORBIDDEN_ROUTE")
+
+        # Destructive action allowlist check
+        if action_type in {"click", "submit", "upload"}:
+            from app.engine.safety.destructive_guard import DestructiveActionGuard, DestructiveActionBlocked
+            target_val = raw_action.get("target")
+            target_css = target_val.get("css") if isinstance(target_val, dict) else (target_val if isinstance(target_val, str) else None)
+            target_lbl = step.get("label") or step.get("description") or (target_val.get("text") if isinstance(target_val, dict) else None)
+            guard = DestructiveActionGuard(safety)
+            try:
+                guard.check(
+                    action_type=action_type,
+                    target_label=target_lbl,
+                    target_selector=target_css,
+                )
+            except DestructiveActionBlocked as e:
+                ctx.record_event(EventTypes.DESTRUCTIVE_ACTION_BLOCKED, {
+                    "action_type": action_type,
+                    "target_label": e.action_label,
+                    "reason": e.reason,
+                })
+                await self._emit_events(ctx, event_recorder)
+                try:
+                    ctx.transition(ExecutionState.BLOCKED)
+                except Exception:
+                    ctx.state = ExecutionState.BLOCKED
+                raise ExecutionError(str(e), error_code="DESTRUCTIVE_ACTION_BLOCKED")
 
         ctx.current_step_id = step.get("step_id") if isinstance(step, dict) else None
         action_started_at = datetime.now(timezone.utc)
