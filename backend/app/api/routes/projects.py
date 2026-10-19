@@ -302,3 +302,16 @@ async def generate_flows_endpoint(
     service = FlowService(db)
     return await service.generate_flows(project_id, request=gen_request)
 
+
+@router.post("/{project_id}/flows:evaluate-stale")
+async def evaluate_stale_flows_endpoint(
+    project_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Re-evaluate all stale flows in a project against the current Product Graph."""
+    await _get_project_with_auth(db, project_id, user.id)
+    service = FlowService(db)
+    return await service.evaluate_stale_flows(project_id)
+
+
