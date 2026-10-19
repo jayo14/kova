@@ -177,7 +177,7 @@ async def test_exploratory_runner_counts_defect_as_success():
 
 @pytest.mark.asyncio
 async def test_visual_runner_stub_returns_unverified():
-    """Visual runner stub returns unverified pointing to action 10."""
+    """Visual runner without baseline returns unverified pointing to visual reference."""
     req = ValidationRequest(
         project_id=uuid.uuid4(),
         mode=ValidationMode.VISUAL,
@@ -186,4 +186,5 @@ async def test_visual_runner_stub_returns_unverified():
     report = await runner.run(req)
 
     assert report.overall_status == "unverified"
-    assert "action 10" in report.failure_reason.lower()
+    assert "visual reference" in report.failure_reason.lower()
+

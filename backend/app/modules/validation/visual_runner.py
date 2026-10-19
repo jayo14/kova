@@ -109,7 +109,7 @@ class VisualRunner:
             reference = await self._get_visual_reference(flow_id)
 
         if not reference:
-            reason = "No visual reference uploaded. Upload a baseline via POST /api/v1/flows/{id}/visual-reference."
+            reason = "No visual reference uploaded. Upload a baseline via POST /api/v1/flows/{id}/visual-reference (Action 10)."
             return ValidationReport(
                 request=request,
                 impact_report=impact_report or ImpactReport(),
