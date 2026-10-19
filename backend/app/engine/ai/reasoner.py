@@ -36,6 +36,7 @@ from app.engine.ai.schemas import (
     ProposedStep,
     RecoveryProposal,
     ReportSummary,
+    ScenarioValidityAssessment,
     SubmitButtonProposal,
     VerificationProposal,
 )
@@ -1094,6 +1095,102 @@ class AgentReasoner:
             confidence=0.7,
             recommended_next_steps=next_steps,
         )
+
+    async def evaluate_scenario_validity(
+        self,
+        flow: dict,
+        new_page_state: dict,
+        original_graph_version: int,
+    ) -> ScenarioValidityAssessment:
+        """AI-driven assessment of whether a test scenario remains valid after UI drift.
+
+        Preserves original acceptance criteria and proposes locator updates for review.
+        """
+        if not self.provider:
+            return self._heuristic_validity_assessment(flow, new_page_state)
+
+        system_prompt = (
+            "You are evaluating whether an existing test scenario is still valid "
+            "after the application's interface has changed. "
+            "Your job: determine whether the original acceptance criteria can still be "
+            "checked against the new page state. "
+            "DO NOT propose changes to the acceptance criteria themselves — only to "
+            "the locators/selectors used to check them. "
+            "If the criteria can no longer be checked (e.g. the feature was removed), "
+            "mark is_still_valid=false and requires_review=true. "
+            "If the locators moved but the feature is intact, propose updated locators "
+            "with high confidence. "
+            "Never propose weakening the criteria to make the test pass."
+            + build_system_prompt_clause()
+        )
+        user_prompt = json.dumps({
+            "flow_objective": flow.get("objective"),
+            "flow_success_condition": flow.get("success_condition"),
+            "flow_steps_summary": [
+                {"type": s.get("type", s.get("action")), "target": s.get("target") or s.get("selector")}
+                for s in flow.get("steps", [])
+            ],
+            "new_page_state": {
+                "url": new_page_state.get("url"),
+                "available_buttons": new_page_state.get("buttons", []),
+                "available_forms": new_page_state.get("forms", []),
+                "current_locators_for_original_steps": new_page_state.get("locator_matches", []),
+            },
+            "original_graph_version": original_graph_version,
+        }, default=str)[:6000]
+
+        try:
+            res: ScenarioValidityAssessment = await self.provider.generate_structured(
+                system=system_prompt,
+                prompt=user_prompt,
+                schema=ScenarioValidityAssessment,
+            )
+            if not res.flow_id:
+                res.flow_id = str(flow.get("id", ""))
+            return res
+        except (AIProviderError, Exception) as e:
+            logger.warning("evaluate_scenario_validity AI call failed: %s", e)
+            return self._heuristic_validity_assessment(flow, new_page_state)
+
+    def _heuristic_validity_assessment(self, flow: dict, new_page_state: dict) -> ScenarioValidityAssessment:
+        """Conservative heuristic: if any locator from the original flow is missing
+        in the new page state, mark as requires_review."""
+        original_steps = flow.get("steps", [])
+        new_locator_matches = new_page_state.get("locator_matches", [])
+        matched_targets = {
+            m.get("original_target")
+            for m in new_locator_matches
+            if isinstance(m, dict) and m.get("original_target")
+        }
+        missing_locators = []
+        for s in original_steps:
+            stype = (s.get("type") or s.get("action") or "").lower()
+            target = s.get("target") or s.get("selector")
+            if stype in ("click", "input", "type", "fill", "select") and target:
+                target_str = str(target)
+                if new_locator_matches and target_str not in matched_targets:
+                    missing_locators.append(s)
+
+        requires_rev = len(missing_locators) > 0
+        return ScenarioValidityAssessment(
+            flow_id=str(flow.get("id", "")),
+            is_still_valid=len(missing_locators) == 0,
+            confidence=0.5 if requires_rev else 0.8,
+            changes_detected=[
+                f"Locator '{s.get('target') or s.get('selector')}' for step '{s.get('description', s.get('type', s.get('action')))}' not found in new page"
+                for s in missing_locators
+            ],
+            acceptance_criteria_impacted=[] if not missing_locators else ["Locators required to check criteria are missing"],
+
+            requires_review=requires_rev,
+            proposed_locator_updates=[],
+            reasoning=(
+                "Heuristic assessment: missing locators detected; cannot verify criteria without human review."
+                if requires_rev
+                else "Heuristic assessment: step locators verified in new page state."
+            ),
+        )
+
 
 
 

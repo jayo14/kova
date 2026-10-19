@@ -304,5 +304,19 @@ class ReportSummary(BaseModel):
     recommended_next_steps: list[str] = Field(default_factory=list)
 
 
+class ScenarioValidityAssessment(BaseModel):
+    """AI-driven assessment of whether a test scenario remains valid after UI drift."""
+
+    flow_id: str
+    is_still_valid: bool
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+    changes_detected: list[str] = Field(default_factory=list)
+    acceptance_criteria_impacted: list[str] = Field(default_factory=list)
+    requires_review: bool = False
+    proposed_locator_updates: list[dict] = Field(default_factory=list)
+    reasoning: str = ""
+
+
+
 
 

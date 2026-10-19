@@ -217,3 +217,35 @@ class FlowService:
             ai_proposals=ai_proposals,
         )
 
+    async def evaluate_stale_flows(self, project_id: uuid.UUID) -> dict[str, Any]:
+        """Re-evaluate all stale flows in a project against the current Product Graph."""
+        from app.engine.ai.provider import get_ai_provider
+        from app.engine.ai.reasoner import AgentReasoner
+        from app.engine.ai.test_maintainer import TestMaintainer
+        from app.modules.product_graph.repository import ProductGraphRepository
+
+        reasoner = AgentReasoner(get_ai_provider())
+        pg_repo = ProductGraphRepository(self.repo.db)
+        maintainer = TestMaintainer(reasoner=reasoner, pg_repo=pg_repo, flow_repo=self.repo)
+
+        flows = await self.repo.list_by_project(project_id)
+        assessments = []
+        still_valid = 0
+        requires_review = 0
+
+        for f in flows:
+            assessment = await maintainer.evaluate_stale_flow(f.id)
+            assessments.append(assessment.model_dump())
+            if assessment.is_still_valid:
+                still_valid += 1
+            if assessment.requires_review:
+                requires_review += 1
+
+        return {
+            "evaluated": len(assessments),
+            "still_valid": still_valid,
+            "requires_review": requires_review,
+            "assessments": assessments,
+        }
+
+
