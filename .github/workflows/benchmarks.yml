@@ -1,0 +1,37 @@
+name: Kova Benchmark
+on:
+  pull_request:
+    paths:
+      - 'backend/app/engine/ai/**'
+      - 'backend/app/engine/execution/**'
+      - 'backend/app/modules/validation/**'
+      - 'backend/benchmarks/**'
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e backend/
+      - run: python -m benchmarks.cli --output /tmp/benchmark
+        working-directory: backend
+      - name: Check metric gates
+        run: |
+          python -c "
+          import json
+          r = json.load(open('/tmp/benchmark.json'))
+          m = r.get('metrics', {})
+          assert m.get('scenario_relevance', 0) >= 0.80, f'Scenario relevance {m.get(\"scenario_relevance\")} below 0.80'
+          assert m.get('true_positive_rate', 0) >= 0.70, f'TP rate {m.get(\"true_positive_rate\")} below 0.70'
+          assert m.get('false_positive_rate', 0) <= 0.15, f'FP rate {m.get(\"false_positive_rate\")} above 0.15'
+          assert m.get('evidence_quality_score', 0) >= 0.85, f'Evidence quality {m.get(\"evidence_quality_score\")} below 0.85'
+          print('All benchmark gates passed')
+          "
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: /tmp/benchmark.*
