@@ -47,6 +47,9 @@ class Flow(Base):
     json_repr: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True)
     gherkin_repr: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+    stale_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    requires_review: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+    last_validated_against_graph_version: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
