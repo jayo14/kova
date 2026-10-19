@@ -14,6 +14,7 @@ import type {
   Credential,
 } from "@/lib/types";
 import { api, getApiBaseUrl, getBrowserSessionToken } from "./client";
+import { getErrorMessage } from "./errors";
 import { backendToCredential, type BackendCredential } from "./credentials";
 import type { BackendFlow } from "./missions";
 
@@ -678,7 +679,7 @@ export async function startExploration(
 
     return session.id;
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to start exploration";
+    const message = getErrorMessage(err, "Failed to start exploration");
     onEvent({ type: "error", message });
     onEvent({ type: "state_change", state: "failed" });
     throw err;

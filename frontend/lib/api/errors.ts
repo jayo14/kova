@@ -126,6 +126,14 @@ export function getErrorMessage(err: unknown, fallback = "An unexpected error oc
     }
 
     if (err.status >= 500) {
+      const detailsStr = typeof err.details === "string" ? err.details : typeof err.message === "string" ? err.message : "";
+      if (
+        detailsStr.includes("ProgrammingError") ||
+        detailsStr.includes("does not exist") ||
+        detailsStr.includes("equality operator for type json")
+      ) {
+        return "Backend database schema error. Please verify all database migrations have been applied.";
+      }
       return "A server error occurred. Please try again later.";
     }
 
