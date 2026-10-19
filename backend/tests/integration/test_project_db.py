@@ -169,3 +169,43 @@ async def test_runner_blocks_production_navigation_when_not_allowed():
             step_index=0,
             event_recorder=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_list_by_user_includes_member_and_org_projects_without_duplicates(db_session, user):
+    from app.modules.organizations.models import Organization, OrganizationMember, ProjectMember
+
+    other_user = User(id=uuid.uuid4(), email="other@example.com", name="Other User")
+    db_session.add(other_user)
+
+    org = Organization(id=uuid.uuid4(), name="Acme Corp", slug="acme-corp", owner_user_id=other_user.id)
+    db_session.add(org)
+    await db_session.flush()
+
+    org_member = OrganizationMember(id=uuid.uuid4(), org_id=org.id, user_id=user.id, role="member")
+    db_session.add(org_member)
+
+    repo = ProjectRepository(db_session)
+    # 1. Project owned by user
+    p_owned = await repo.create(user.id, name="Owned Project", base_url="https://owned.example.com")
+
+    # 2. Project owned by other user, but current user is a direct project member
+    p_member = await repo.create(other_user.id, name="Direct Member Project", base_url="https://member.example.com")
+    db_session.add(ProjectMember(id=uuid.uuid4(), project_id=p_member.id, user_id=user.id, role="editor"))
+
+    # 3. Project owned by other user, belonging to org where current user is org member
+    p_org = await repo.create(other_user.id, name="Org Project", base_url="https://org.example.com")
+    p_org.org_id = org.id
+
+    # 4. Unrelated project
+    await repo.create(other_user.id, name="Unrelated Project", base_url="https://unrelated.example.com")
+    await db_session.flush()
+
+    projects = await repo.list_by_user(user.id)
+    project_ids = {p.id for p in projects}
+
+    assert len(projects) == 3
+    assert p_owned.id in project_ids
+    assert p_member.id in project_ids
+    assert p_org.id in project_ids
+
