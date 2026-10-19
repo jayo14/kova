@@ -134,7 +134,6 @@ class ProjectRepository:
                     )
                 )
             )
-            .distinct()
             .offset(skip)
             .limit(limit)
         )
