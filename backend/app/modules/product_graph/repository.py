@@ -33,9 +33,15 @@ class ProductGraphRepository:
         description: str | None = None,
         persona_id: uuid.UUID | None = None,
         success_criteria: list[dict] | None = None,
+        business_rules: list[str] | None = None,
+        negative_scenarios: list[str] | None = None,
+        acceptance_criteria: list[dict] | None = None,
+        unknowns: list[str] | None = None,
+        provenance: Any = "inferred",
         source: str = "discovered",
         goal_id: uuid.UUID | None = None,
     ) -> ProductGoal:
+        prov_val = getattr(provenance, "value", str(provenance))
         goal = ProductGoal(
             id=goal_id or uuid.uuid4(),
             project_id=project_id,
@@ -43,6 +49,11 @@ class ProductGraphRepository:
             description=description,
             persona_id=persona_id,
             success_criteria=success_criteria or [],
+            business_rules=business_rules or [],
+            negative_scenarios=negative_scenarios or [],
+            acceptance_criteria=acceptance_criteria or [],
+            unknowns=unknowns or [],
+            provenance=prov_val,
             source=source,
         )
         self.db.add(goal)
@@ -84,8 +95,10 @@ class ProductGraphRepository:
         description: str | None = None,
         credentials_required: bool = False,
         default_capabilities: list[str] | None = None,
+        provenance: Any = "observed",
         persona_id: uuid.UUID | None = None,
     ) -> ProductPersona:
+        prov_val = getattr(provenance, "value", str(provenance))
         persona = ProductPersona(
             id=persona_id or uuid.uuid4(),
             project_id=project_id,
@@ -93,6 +106,7 @@ class ProductGraphRepository:
             description=description,
             credentials_required=credentials_required,
             default_capabilities=default_capabilities or [],
+            provenance=prov_val,
         )
         self.db.add(persona)
         await self.db.flush()
@@ -134,8 +148,10 @@ class ProductGraphRepository:
         requires_auth: bool = False,
         required_state: list[dict] | None = None,
         source_files: list[str] | None = None,
+        provenance: Any = "observed",
         page_id: uuid.UUID | None = None,
     ) -> ProductPage:
+        prov_val = getattr(provenance, "value", str(provenance))
         page = ProductPage(
             id=page_id or uuid.uuid4(),
             project_id=project_id,
@@ -144,6 +160,7 @@ class ProductGraphRepository:
             requires_auth=requires_auth,
             required_state=required_state or [],
             source_files=source_files or [],
+            provenance=prov_val,
         )
         self.db.add(page)
         await self.db.flush()
@@ -195,8 +212,10 @@ class ProductGraphRepository:
         action_type: str = "click",
         expected_effect: list[dict] | None = None,
         mutates: list[str] | None = None,
+        provenance: Any = "observed",
         action_id: uuid.UUID | None = None,
     ) -> ProductAction:
+        prov_val = getattr(provenance, "value", str(provenance))
         action = ProductAction(
             id=action_id or uuid.uuid4(),
             project_id=project_id,
@@ -206,6 +225,7 @@ class ProductGraphRepository:
             action_type=action_type,
             expected_effect=expected_effect or [],
             mutates=mutates or [],
+            provenance=prov_val,
         )
         self.db.add(action)
         await self.db.flush()
@@ -255,8 +275,10 @@ class ProductGraphRepository:
         source_files: list[str] | None = None,
         provider_flow_ids: list[str] | None = None,
         user_edited: bool = False,
+        provenance: Any = "observed",
         capability_id: uuid.UUID | None = None,
     ) -> ProductCapability:
+        prov_val = getattr(provenance, "value", str(provenance))
         capability = ProductCapability(
             id=capability_id or uuid.uuid4(),
             project_id=project_id,
@@ -269,6 +291,7 @@ class ProductGraphRepository:
             source_files=source_files or [],
             provider_flow_ids=provider_flow_ids or [],
             user_edited=user_edited,
+            provenance=prov_val,
         )
         self.db.add(capability)
         await self.db.flush()
@@ -388,8 +411,10 @@ class ProductGraphRepository:
         value_type: str = "bool",
         default_value: Any = None,
         description: str | None = None,
+        provenance: Any = "observed",
         state_id: uuid.UUID | None = None,
     ) -> ProductState:
+        prov_val = getattr(provenance, "value", str(provenance))
         state = ProductState(
             id=state_id or uuid.uuid4(),
             project_id=project_id,
@@ -397,6 +422,7 @@ class ProductGraphRepository:
             value_type=value_type,
             default_value=default_value,
             description=description,
+            provenance=prov_val,
         )
         self.db.add(state)
         await self.db.flush()
@@ -494,8 +520,10 @@ class ProductGraphRepository:
         assertion: dict,
         checked_by_flow_ids: list[str] | None = None,
         violated_count: int = 0,
+        provenance: Any = "observed",
         invariant_id: uuid.UUID | None = None,
     ) -> ProductInvariant:
+        prov_val = getattr(provenance, "value", str(provenance))
         inv = ProductInvariant(
             id=invariant_id or uuid.uuid4(),
             project_id=project_id,
@@ -503,6 +531,7 @@ class ProductGraphRepository:
             assertion=assertion,
             checked_by_flow_ids=checked_by_flow_ids or [],
             violated_count=violated_count,
+            provenance=prov_val,
         )
         self.db.add(inv)
         await self.db.flush()
@@ -722,3 +751,69 @@ class ProductGraphRepository:
 
         flow_id_str = str(flow.id)
         return [inv for inv in all_invs if flow_id_str in (inv.checked_by_flow_ids or [])]
+
+    # ----------------- Provenance Helpers (§4 Stage 3) -----------------
+    async def get_capabilities_by_provenance(
+        self, project_id: uuid.UUID, provenance: Any
+    ) -> list[ProductCapability]:
+        prov_val = getattr(provenance, "value", str(provenance))
+        stmt = select(ProductCapability).where(
+            ProductCapability.project_id == project_id,
+            ProductCapability.provenance == prov_val,
+        )
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all())
+
+    async def get_pages_by_provenance(
+        self, project_id: uuid.UUID, provenance: Any
+    ) -> list[ProductPage]:
+        prov_val = getattr(provenance, "value", str(provenance))
+        stmt = select(ProductPage).where(
+            ProductPage.project_id == project_id,
+            ProductPage.provenance == prov_val,
+        )
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all())
+
+    async def get_actions_by_provenance(
+        self, project_id: uuid.UUID, provenance: Any
+    ) -> list[ProductAction]:
+        prov_val = getattr(provenance, "value", str(provenance))
+        stmt = select(ProductAction).where(
+            ProductAction.project_id == project_id,
+            ProductAction.provenance == prov_val,
+        )
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all())
+
+    async def get_goals_by_provenance(
+        self, project_id: uuid.UUID, provenance: Any
+    ) -> list[ProductGoal]:
+        prov_val = getattr(provenance, "value", str(provenance))
+        stmt = select(ProductGoal).where(
+            ProductGoal.project_id == project_id,
+            ProductGoal.provenance == prov_val,
+        )
+        res = await self.db.execute(stmt)
+        return list(res.scalars().all())
+
+    async def get_observed_facts(self, project_id: uuid.UUID) -> dict[str, Any]:
+        """Return all entities with provenance='observed' — what the app actually has."""
+        return {
+            "pages": await self.get_pages_by_provenance(project_id, "observed"),
+            "actions": await self.get_actions_by_provenance(project_id, "observed"),
+            "capabilities": await self.get_capabilities_by_provenance(project_id, "observed"),
+        }
+
+    async def get_inferred_hypotheses(self, project_id: uuid.UUID) -> dict[str, Any]:
+        """Return all entities with provenance='inferred' — what the AI believes."""
+        return {
+            "goals": await self.get_goals_by_provenance(project_id, "inferred"),
+        }
+
+    async def get_expected_behavior(self, project_id: uuid.UUID) -> dict[str, Any]:
+        """Return all entities with provenance='expected' — what the user specified."""
+        return {
+            "goals": await self.get_goals_by_provenance(project_id, "expected"),
+        }
+

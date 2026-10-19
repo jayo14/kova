@@ -23,6 +23,11 @@ class ProductGoal(Base):
         ForeignKey("product_personas.id", ondelete="SET NULL"), nullable=True
     )
     success_criteria: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    business_rules: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
+    negative_scenarios: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
+    acceptance_criteria: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
+    unknowns: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list, server_default="[]")
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="inferred", server_default="inferred")
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="discovered")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -46,12 +51,14 @@ class ProductPersona(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     credentials_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     default_capabilities: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class ProductPage(Base):
@@ -70,6 +77,7 @@ class ProductPage(Base):
     requires_auth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     required_state: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     source_files: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     discovered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -97,6 +105,7 @@ class ProductAction(Base):
     action_type: Mapped[str] = mapped_column(String(32), nullable=False, default="click")
     expected_effect: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     mutates: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -128,6 +137,7 @@ class ProductCapability(Base):
     )
     provider_flow_ids: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     user_edited: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -153,6 +163,7 @@ class ProductState(Base):
         JSONCompat, nullable=True
     )
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -197,12 +208,14 @@ class ProductInvariant(Base):
     assertion: Mapped[dict] = mapped_column(JSONCompat, nullable=False)
     checked_by_flow_ids: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     violated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    provenance: Mapped[str] = mapped_column(String(32), nullable=False, default="observed", server_default="observed")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
 
 
 class ProductGraphVersion(Base):
