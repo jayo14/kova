@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+import httpx
+
+from app.config.settings import settings
+from app.engine.visual.schemas import VisualDefect
+
+logger = logging.getLogger(__name__)
+
+
+class VLMClient:
+    def __init__(self, provider: Any = None, model: str | None = None, api_key: str | None = None, base_url: str | None = None):
+        self.provider = provider
+        self.model = model or getattr(settings, "VLM_MODEL", "gpt-4o-mini")
+        self.api_key = api_key or getattr(settings, "VLM_API_KEY", "")
+        self.base_url = (base_url or getattr(settings, "VLM_BASE_URL", "https://api.openai.com/v1")).rstrip("/")
+
+    async def assess_visual_defects(
+        self,
+        baseline_screenshot_b64: str,
+        current_screenshot_b64: str,
+        diff_regions: list[dict[str, int]],
+        context: str = "",
+    ) -> dict[str, Any]:
+        """Ask the Vision-Language Model to assess if diff regions represent true visual defects."""
+        if not self.api_key:
+            logger.info("VLMClient: No API key configured. Skipping VLM assessment.")
+            return {
+                "assessment": "VLM assessment skipped: no API key configured.",
+                "defects": [],
+                "confidence": 0.0,
+            }
+
+        prompt_text = (
+            f"Context: {context}\n"
+            f"Diff bounding boxes detected: {diff_regions}\n\n"
+            "Assess whether the visual differences between the baseline (first image) and current (second image) "
+            "represent actual defects. Classify each defect with type (layout_shift, element_missing, "
+            "element_added, color_change, text_overflow, overlap, broken_image, viewport_overflow), "
+            "severity (low, medium, high), description, and confidence (0.0 to 1.0).\n"
+            "Return JSON matching: {\"assessment\": \"summary text\", \"defects\": [{\"type\": \"...\", \"severity\": \"...\", \"description\": \"...\", \"confidence\": 0.9}]}"
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You are an expert QA visual regression evaluator. Respond in strictly valid JSON.",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{baseline_screenshot_b64}"}},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{current_screenshot_b64}"}},
+                ],
+            },
+        ]
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                res = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "response_format": {"type": "json_object"},
+                    },
+                )
+                res.raise_for_status()
+                data = res.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+
+                defects = [
+                    VisualDefect(
+                        type=d.get("type", "layout_shift"),
+                        severity=d.get("severity", "medium"),
+                        description=d.get("description", "Visual defect detected by VLM"),
+                        bounding_box=d.get("bounding_box"),
+                        confidence=float(d.get("confidence", 0.8)),
+                    )
+                    for d in parsed.get("defects", [])
+                ]
+
+                return {
+                    "assessment": parsed.get("assessment", "VLM assessment completed"),
+                    "defects": defects,
+                    "confidence": float(parsed.get("confidence", 0.85)),
+                }
+        except Exception as e:
+            logger.warning("VLMClient assessment failed: %s", e)
+            return {
+                "assessment": f"VLM assessment encountered an error: {e}",
+                "defects": [],
+                "confidence": 0.0,
+            }
