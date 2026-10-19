@@ -7,7 +7,7 @@ import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
@@ -305,3 +305,72 @@ async def create_flow_execution(
     # Dispatch after the response body is sent — keep browser work off the hot path.
     response.background = BackgroundTask(_schedule_dispatch, str(execution.id))
     return execution
+
+
+@router.post("/{flow_id}/visual-reference", status_code=201)
+async def upload_visual_reference(
+    flow_id: uuid.UUID,
+    file: UploadFile | None = None,
+    screenshot_url: str | None = Form(None),
+    label: str = Form("Baseline"),
+    a11y_tree: str | None = Form(None),
+    viewport: str | None = Form(None),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Upload a baseline screenshot and metadata for visual validation of this flow."""
+    import base64
+    import json
+    from app.modules.validation.models import VisualReferenceModel
+
+    flow = await FlowService(db).get_flow(flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail="Flow not found")
+
+    project = await ProjectRepository(db).get_by_id(flow.project_id)
+    if not project or project.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this flow")
+
+    final_screenshot_url = screenshot_url
+    if file:
+        content = await file.read()
+        b64 = base64.b64encode(content).decode()
+        mime = file.content_type or "image/png"
+        final_screenshot_url = f"data:{mime};base64,{b64}"
+
+    if not final_screenshot_url:
+        raise HTTPException(status_code=422, detail="Either file or screenshot_url must be provided")
+
+    parsed_a11y = {}
+    if a11y_tree:
+        try:
+            parsed_a11y = json.loads(a11y_tree)
+        except Exception:
+            parsed_a11y = {}
+
+    parsed_viewport = {"width": 1280, "height": 720}
+    if viewport:
+        try:
+            parsed_viewport = json.loads(viewport)
+        except Exception:
+            parsed_viewport = {"width": 1280, "height": 720}
+
+    ref = VisualReferenceModel(
+        flow_id=flow_id,
+        screenshot_url=final_screenshot_url,
+        a11y_tree=parsed_a11y,
+        viewport=parsed_viewport,
+        label=label,
+    )
+    db.add(ref)
+    await db.commit()
+    await db.refresh(ref)
+
+    return {
+        "id": str(ref.id),
+        "flow_id": str(ref.flow_id),
+        "label": ref.label,
+        "screenshot_url": ref.screenshot_url if not ref.screenshot_url.startswith("data:") else "[data_uri]",
+        "created_at": ref.created_at.isoformat(),
+    }
+
