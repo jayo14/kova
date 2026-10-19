@@ -208,6 +208,9 @@ class FlowUpdate(BaseModel):
     active: bool | None = None
     json_repr: dict | None = None
     gherkin_repr: str | None = None
+    stale_reason: str | None = None
+    requires_review: bool | None = None
+    last_validated_against_graph_version: int | None = None
 
     @model_validator(mode="after")
     def unique_step_ids(self):
@@ -246,8 +249,12 @@ class FlowRead(BaseModel):
     active: bool = True
     json_repr: dict | None = None
     gherkin_repr: str | None = None
+    stale_reason: str | None = None
+    requires_review: bool = False
+    last_validated_against_graph_version: int | None = None
     created_at: datetime
     updated_at: datetime
+
 
     @field_validator("state_contract", mode="before")
     @classmethod
