@@ -186,3 +186,28 @@ class SignedUrlModel(Base):
 
     validation_report = relationship("ValidationReportModel", backref=backref("signed_urls", passive_deletes=True))
     execution = relationship("Execution", backref=backref("signed_urls", passive_deletes=True))
+
+
+class VisualReferenceModel(Base):
+    __tablename__ = "visual_references"
+    __table_args__ = (
+        Index("ix_visual_references_flow_id", "flow_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    flow_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("flows.id", ondelete="CASCADE"), nullable=False
+    )
+    screenshot_url: Mapped[str] = mapped_column(Text, nullable=False)
+    a11y_tree: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    viewport: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    label: Mapped[str] = mapped_column(String(255), nullable=False, default="Baseline")
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    flow = relationship("Flow", backref=backref("visual_references", passive_deletes=True))
+
