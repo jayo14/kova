@@ -504,24 +504,37 @@ export function ExplorePage() {
       )}
 
       {/* ── STATE: FAILED ──────────────────────────────────────────── */}
-      {state.state === "failed" && (
-        <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 animate-in fade-in duration-300">
-          <div className="w-full max-w-md text-center">
-            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-destructive/10 border border-destructive/20">
-              <MaterialIcon name="error" size={28} className="text-destructive" />
-            </div>
-            <h2 className="text-h3 text-foreground font-semibold mb-2">
-              Kova couldn&apos;t reach this website.
-            </h2>
-            <p className="text-body-sm text-muted-foreground mb-6 leading-relaxed">
-              {state.error || "Check the URL and try again."}
-            </p>
-            <div className="flex items-center justify-center gap-3">
-              <Button variant="outline" onClick={handleBack}>
-                Change URL
-              </Button>
-              <Button
-                onClick={() => {
+      {state.state === "failed" && (() => {
+        const isBackendError = Boolean(
+          state.error &&
+            (state.error.includes("ApiError") ||
+              state.error.includes("status of 5") ||
+              state.error.includes("Internal Server Error") ||
+              state.error.includes("ProgrammingError") ||
+              state.error.includes("Could not reach the server") ||
+              state.error.includes("Failed to fetch"))
+        );
+
+        return (
+          <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 animate-in fade-in duration-300">
+            <div className="w-full max-w-md text-center">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-destructive/10 border border-destructive/20">
+                <MaterialIcon name="error" size={28} className="text-destructive" />
+              </div>
+              <h2 className="text-h3 text-foreground font-semibold mb-2">
+                {isBackendError
+                  ? "Exploration service encountered an error"
+                  : "Kova couldn\u0027t reach this website."}
+              </h2>
+              <p className="text-body-sm text-muted-foreground mb-6 leading-relaxed">
+                {state.error || "Check the URL and try again."}
+              </p>
+              <div className="flex items-center justify-center gap-3">
+                <Button variant="outline" onClick={handleBack}>
+                  {isBackendError ? "Back" : "Change URL"}
+                </Button>
+                <Button
+                  onClick={() => {
                   if (state.url) {
                     abortRef.current?.abort();
                     const controller = new AbortController();
@@ -540,7 +553,8 @@ export function ExplorePage() {
             </div>
           </div>
         </div>
-      )}
+      );
+    })()}
 
       {/* ── STATE: CANCELLED ────────────────────────────────────────── */}
       {state.state === "cancelled" && (
