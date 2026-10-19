@@ -260,6 +260,13 @@ export const terminalStatuses: ExecutionStatus[] = [
   "unverified",
 ];
 
+export type ValidationMode =
+  | "functional"
+  | "workflow"
+  | "regression"
+  | "exploratory"
+  | "visual";
+
 export interface ExecutionDetail {
   id: string;
   missionId: string;
@@ -267,6 +274,7 @@ export interface ExecutionDetail {
   projectName: string;
   projectUrl: string;
   status: ExecutionStatus;
+  mode?: ValidationMode | string;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -308,6 +316,7 @@ export interface Mission {
   description: string | null;
   persona: string | null;
   objective: string;
+  mode?: ValidationMode | string;
   steps: Array<{ step_id?: string; action: string; selector?: string | null; value?: string | null; credential_id?: string | null; description?: string | null; postcondition?: Record<string, unknown> | null }>;
   /** Machine-verifiable success condition. Must stay structured — never stringified. */
   successCondition: Record<string, unknown> | null;

@@ -5,6 +5,7 @@ import type { ExecutionDetail } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { isActiveStatus } from "@/lib/executions/status";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { ModeBadge } from "@/components/shared/mode-badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { StreamConnectionStatus } from "@/lib/realtime/types";
@@ -100,6 +101,9 @@ export function ExecutionHeader({
               />
               <span>{statusConfig.label}</span>
             </span>
+
+            {/* Validation Mode Badge */}
+            <ModeBadge mode={execution.mode} />
 
             {/* Subtle Restrained Realtime Stream Indicator */}
             {isActive && connectionStatus === "connected" && (

@@ -7,6 +7,7 @@ import type { Mission } from "@/lib/types";
 import { runMission, deleteMission, updateMission } from "@/lib/api/missions";
 import { getErrorMessage } from "@/lib/api/errors";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { ModeBadge } from "@/components/shared/mode-badge";
 import { Button } from "@/components/ui/button";
 import { AdjustMissionDialog } from "./adjust-mission-dialog";
 
@@ -122,6 +123,8 @@ export function MissionDetailHeader({
             {mission.name}
           </h1>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body-sm text-muted-foreground">
+            <ModeBadge mode={mission.mode} />
+            <span aria-hidden="true">·</span>
             <Link
               href={`/projects/${mission.projectId}`}
               className="font-medium text-foreground hover:text-primary transition-colors underline-offset-4 hover:underline"
