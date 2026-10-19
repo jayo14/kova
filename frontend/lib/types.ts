@@ -474,6 +474,7 @@ export interface ProductModel {
     roles?: string[];
     is_inferred?: boolean;
     confidence?: number;
+    provenance?: "observed" | "expected" | "inferred" | "user_provided";
   }>;
   routes: Array<{ path: string; purpose?: string }>;
   roles: Array<{ role: string; description?: string }>;
