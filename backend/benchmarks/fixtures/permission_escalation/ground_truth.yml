@@ -1,0 +1,12 @@
+fixture_id: permission_escalation
+description: Teacher role can access /admin route without authorization
+known_defects:
+  - id: defect_perm_1
+    type: security
+    description: "Teacher role can access /admin route without authorization"
+    location: "/admin"
+    detection_method: authorization_check
+    expected_severity: critical
+expected_scenarios:
+  - "Verify /admin route returns 403 Forbidden for non-admin users"
+forbidden_scenarios: []

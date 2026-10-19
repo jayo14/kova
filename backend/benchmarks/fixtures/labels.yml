@@ -1,0 +1,31 @@
+fixtures:
+  - id: buggy_contact_form
+    name: "Buggy Contact Form"
+    path: "buggy_contact_form"
+    defects_count: 1
+    defect_types: ["functional"]
+  - id: working_contact_form
+    name: "Working Contact Form"
+    path: "working_contact_form"
+    defects_count: 0
+    defect_types: []
+  - id: buggy_auth_flow
+    name: "Buggy Auth Flow"
+    path: "buggy_auth_flow"
+    defects_count: 1
+    defect_types: ["functional"]
+  - id: working_auth_flow
+    name: "Working Auth Flow"
+    path: "working_auth_flow"
+    defects_count: 0
+    defect_types: []
+  - id: permission_escalation
+    name: "Permission Escalation"
+    path: "permission_escalation"
+    defects_count: 1
+    defect_types: ["security"]
+  - id: visual_regression
+    name: "Visual Regression"
+    path: "visual_regression"
+    defects_count: 1
+    defect_types: ["visual"]

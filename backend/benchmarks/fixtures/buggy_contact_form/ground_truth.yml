@@ -1,0 +1,13 @@
+fixture_id: buggy_contact_form
+description: Contact form reports UI success but POST /api/contact returns 500
+known_defects:
+  - id: defect_1
+    type: functional
+    description: "POST /api/contact returns HTTP 500 while UI shows success message"
+    location: "/contact"
+    detection_method: network_response_inspection
+    expected_severity: high
+expected_scenarios:
+  - "Submit the contact form and verify the network response"
+  - "Submit the contact form and verify the success message matches the network response"
+forbidden_scenarios: []

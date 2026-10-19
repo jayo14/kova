@@ -1,0 +1,6 @@
+fixture_id: working_auth_flow
+description: User authentication succeeds and redirects cleanly to dashboard
+known_defects: []
+expected_scenarios:
+  - "Log in with credentials and verify dashboard redirect"
+forbidden_scenarios: []

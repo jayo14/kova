@@ -1,0 +1,12 @@
+fixture_id: visual_regression
+description: Primary action button shifted 50px off-canvas causing visual clipping
+known_defects:
+  - id: defect_vis_1
+    type: visual
+    description: "Button shifted 50px off-canvas"
+    location: "/"
+    detection_method: visual_diff
+    expected_severity: medium
+expected_scenarios:
+  - "Verify visual layout matches baseline expectations without clipped elements"
+forbidden_scenarios: []
