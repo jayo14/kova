@@ -563,6 +563,9 @@ export function EvidenceViewer({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
           {activeTab === "visual_diff" && (
             <div className="space-y-6">
               {/* Visual Metrics Overview */}

@@ -1,7 +1,7 @@
 import { api, getApiBaseUrl } from "./client";
 import { mapKeysToCamel } from "./mappers";
 
-export type EvidenceType = "SCREENSHOT" | "VERIFICATION" | "ARTIFACT";
+export type EvidenceType = "SCREENSHOT" | "VERIFICATION" | "ARTIFACT" | "VISUAL";
 
 export type EvidenceStatus = "CAPTURED" | "VERIFIED" | "FAILED";
 
