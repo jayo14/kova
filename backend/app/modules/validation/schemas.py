@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.modules.validation.models import ValidationMode
+
 
 class DiscoveredCapability(BaseModel):
     name: str
@@ -102,6 +104,7 @@ class ValidationCreate(BaseModel):
     pr_number: int | None = None
     base_url: str | None = None
     scope: Literal["targeted", "expanded", "full"] = "targeted"
+    mode: ValidationMode | None = None
     changed_files: list[str] | None = None
     diff_content: str | None = None
     commit_message: str | None = None
@@ -147,6 +150,7 @@ class ValidationRequest(BaseModel):
     changed_files: list[str] | None = None
     commit_message: str | None = None
     persona: str | None = None
+    mode: ValidationMode | None = None
     timeout_seconds: int = 1800
 
 
@@ -167,10 +171,12 @@ class ValidationReport(BaseModel):
     impact_report: ImpactReport
     results: list[FlowValidationResult] = Field(default_factory=list)
     overall_status: Literal["passed", "failed", "unverified", "no_graph", "no_flows"]
+    failure_reason: str | None = None
+    discoveries: int = 0
     duration_ms: int = 0
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    evidence_summary: dict[str, int] = Field(default_factory=dict)
+    evidence_summary: dict[str, Any] = Field(default_factory=dict)
     signed_url: str | None = None
 
 
