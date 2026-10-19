@@ -160,6 +160,33 @@
     <strong>Timestamp:</strong> <span style="color: var(--text);">{{ report.finished_at }}</span>
   </div>
 
+  {% if report.summary %}
+  <!-- AI Report Summary (§5 capability H) -->
+  <div class="section report-summary">
+    <div class="card" style="border-left: 4px solid var(--accent); margin-bottom: 24px; background: rgba(56, 189, 248, 0.05);">
+      <h2 style="font-size: 18px; margin-top: 0; color: var(--accent);">{{ report.summary.headline }}</h2>
+      <p style="color: var(--text); font-size: 14px;">{{ report.summary.overall_assessment }}</p>
+      {% if report.summary.key_findings %}
+      <div style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-top: 12px;">Key Findings:</div>
+      <ul style="font-size: 13px; color: var(--text); margin: 6px 0; padding-left: 20px;">
+        {% for finding in report.summary.key_findings %}
+        <li>{{ finding }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+      {% if report.summary.recommended_next_steps %}
+      <div style="font-size: 13px; font-weight: 600; color: var(--text-muted); margin-top: 12px;">Recommended Next Steps:</div>
+      <ul style="font-size: 13px; color: var(--text); margin: 6px 0; padding-left: 20px;">
+        {% for step in report.summary.recommended_next_steps %}
+        <li>{{ step }}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+
   {% if is_diff %}
     <!-- DIFF MODE -->
     <div class="section">
@@ -332,6 +359,35 @@
             <strong>Failure reason:</strong> {{ res.failure_reason }}
           </div>
         {% endif %}
+
+        {% if res.hypothesis %}
+        <div class="ai-diagnosis" style="background: rgba(99, 102, 241, 0.1); border: 1px solid var(--info); border-radius: 6px; padding: 12px 14px; margin-bottom: 12px; font-size: 13px;">
+          <div style="font-weight: 700; color: #a5b4fc; margin-bottom: 6px; font-size: 14px;">AI Failure Diagnosis</div>
+          <p style="margin: 4px 0;"><strong>Root cause:</strong> {{ res.hypothesis.root_cause }}</p>
+          <p style="margin: 4px 0;"><strong>Confidence:</strong> {{ (res.hypothesis.confidence * 100) | round }}%</p>
+          {% if res.hypothesis.evidence_cited %}
+          <p style="margin: 4px 0;"><strong>Evidence cited:</strong> {{ res.hypothesis.evidence_cited | join(", ") }}</p>
+          {% endif %}
+          {% if res.hypothesis.alternative_explanations %}
+          <p style="margin: 4px 0;"><strong>Alternative explanations:</strong></p>
+          <ul style="margin: 4px 0; padding-left: 20px;">
+            {% for alt in res.hypothesis.alternative_explanations %}
+            <li>{{ alt }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+          <p style="margin: 4px 0;"><strong>Recommended investigation:</strong> {{ res.hypothesis.recommended_investigation }}</p>
+          {% if res.hypothesis.reproduction_steps %}
+          <p style="margin: 4px 0;"><strong>Reproduction steps:</strong></p>
+          <ol style="margin: 4px 0; padding-left: 20px;">
+            {% for step in res.hypothesis.reproduction_steps %}
+            <li>{{ step }}</li>
+            {% endfor %}
+          </ol>
+          {% endif %}
+        </div>
+        {% endif %}
+
 
         <!-- Gherkin Specification -->
         {% set gherkin = gherkin_by_flow.get(res.flow_id|string, '') %}

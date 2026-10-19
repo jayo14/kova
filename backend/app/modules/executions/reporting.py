@@ -272,8 +272,18 @@ class ReportGenerator:
         else:
             raise ValueError("ValidationReport or DB session required to generate report")
 
+        if getattr(v_report, "summary", None) is None:
+            try:
+                from app.engine.ai.provider import get_ai_provider
+                from app.engine.ai.reasoner import AgentReasoner
+                reasoner = AgentReasoner(get_ai_provider())
+                v_report.summary = await reasoner.synthesize_report_summary(v_report.model_dump())
+            except Exception:
+                pass
+
         gherkin_by_flow: dict[str, str] = {}
         evidence_by_flow: dict[str, list[dict]] = {}
+
 
         if self.db is not None:
             from sqlalchemy import select
