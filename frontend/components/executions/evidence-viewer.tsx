@@ -13,7 +13,7 @@ interface EvidenceViewerProps {
   onRefreshUrl?: (evidenceId: string) => Promise<string | null>;
 }
 
-type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "trace" | "verification";
+type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "trace" | "verification" | "visual_diff";
 
 export function EvidenceViewer({
   evidence,
@@ -33,6 +33,9 @@ export function EvidenceViewer({
   const availableTabs = useMemo(() => {
     if (!evidence) return [];
     const tabs: TabType[] = [];
+    if (evidence.metadata?.visual_result || evidence.metadata?.visualResult || evidence.type === "VISUAL" || compareEvidence) {
+      tabs.push("visual_diff");
+    }
     if (evidence.url || evidence.type === "SCREENSHOT") tabs.push("screenshot");
     if (evidence.domSnapshot) tabs.push("dom");
     if (evidence.a11yTree) tabs.push("a11y");
@@ -45,7 +48,7 @@ export function EvidenceViewer({
       tabs.push("verification");
     }
     return tabs.length > 0 ? tabs : (["screenshot"] as TabType[]);
-  }, [evidence]);
+  }, [evidence, compareEvidence]);
 
   useEffect(() => {
     if (open && evidence) {
@@ -109,6 +112,24 @@ export function EvidenceViewer({
   const checks = Array.isArray(evidence.metadata?.checks)
     ? (evidence.metadata.checks as Array<{ type: string; passed: boolean; message?: string }>)
     : [];
+
+  const visualResult = (evidence.metadata?.visual_result || evidence.metadata?.visualResult || {}) as {
+    overall_status?: string;
+    pixel_diff_percentage?: number;
+    layout_diff_count?: number;
+    a11y_diff_count?: number;
+    defects?: Array<{
+      type: string;
+      severity: string;
+      description: string;
+      bounding_box?: { x: number; y: number; width: number; height: number };
+      confidence?: number;
+    }>;
+    vlm_assessment?: string;
+    vlm_confidence?: number;
+    reference_screenshot_url?: string;
+    diff_image_url?: string;
+  };
 
   // Parse DOM snapshot if serialized JSON {before, after}
   let domBefore: string | null = null;
@@ -190,7 +211,9 @@ export function EvidenceViewer({
             >
               <MaterialIcon
                 name={
-                  tab === "screenshot"
+                  tab === "visual_diff"
+                    ? "compare"
+                    : tab === "screenshot"
                     ? "image"
                     : tab === "dom"
                     ? "code"
@@ -206,7 +229,7 @@ export function EvidenceViewer({
                 }
                 size={16}
               />
-              <span>{tab}</span>
+              <span>{tab === "visual_diff" ? "Visual Diff" : tab}</span>
             </button>
           ))}
         </div>
@@ -535,6 +558,159 @@ export function EvidenceViewer({
                         <MaterialIcon name={chk.passed ? "check_circle" : "cancel"} size={16} />
                         <span className="font-medium font-mono">{chk.type}:</span>
                         <span>{chk.message || (chk.passed ? "Check passed" : "Check failed")}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+          {activeTab === "visual_diff" && (
+            <div className="space-y-6">
+              {/* Visual Metrics Overview */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="rounded-xl border border-border bg-card/60 p-3 space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Status</div>
+                  <div className="flex items-center gap-1.5 font-semibold text-body-sm">
+                    {(() => {
+                      const st = (visualResult.overall_status || (visualResult.defects?.length ? "failed" : "passed")).toLowerCase();
+                      if (st === "passed") return <span className="text-emerald-400">Passed</span>;
+                      if (st === "failed") return <span className="text-destructive">Failed</span>;
+                      return <span className="text-amber-400">Unverified</span>;
+                    })()}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border bg-card/60 p-3 space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Pixel Diff</div>
+                  <div className="font-mono font-semibold text-body-sm text-foreground">
+                    {visualResult.pixel_diff_percentage !== undefined ? `${visualResult.pixel_diff_percentage.toFixed(2)}%` : "0.00%"}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border bg-card/60 p-3 space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Layout Regions</div>
+                  <div className="font-mono font-semibold text-body-sm text-foreground">
+                    {visualResult.layout_diff_count ?? 0}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border bg-card/60 p-3 space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">A11y Tree Diff</div>
+                  <div className="font-mono font-semibold text-body-sm text-foreground">
+                    {visualResult.a11y_diff_count ?? 0}
+                  </div>
+                </div>
+              </div>
+
+              {/* VLM Assessment Callout if available */}
+              {visualResult.vlm_assessment && (
+                <div className="p-4 rounded-xl border border-purple-500/20 bg-purple-500/5 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-purple-400 font-semibold text-caption">
+                      <MaterialIcon name="psychology" size={18} />
+                      <span>VLM Semantic Assessment</span>
+                    </div>
+                    {visualResult.vlm_confidence && (
+                      <span className="text-[11px] font-mono text-purple-400/80">
+                        confidence: {(visualResult.vlm_confidence * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-body-sm text-foreground leading-relaxed">
+                    {visualResult.vlm_assessment}
+                  </p>
+                </div>
+              )}
+
+              {/* Screenshots Tri-View: Baseline | Diff Overlay | Current */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* Baseline */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-caption font-semibold">
+                    <span className="text-primary">Baseline Reference</span>
+                  </div>
+                  <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black aspect-video flex items-center justify-center">
+                    {(visualResult.reference_screenshot_url || compareEvidence?.url) ? (
+                      <img
+                        src={visualResult.reference_screenshot_url || compareEvidence?.url || ""}
+                        alt="Baseline Screenshot"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground text-caption">No baseline image</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Diff Overlay */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-caption font-semibold">
+                    <span className="text-destructive">Diff Overlay (Pixel Shifts)</span>
+                  </div>
+                  <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black aspect-video flex items-center justify-center">
+                    {visualResult.diff_image_url ? (
+                      <img
+                        src={visualResult.diff_image_url}
+                        alt="Pixel Diff Overlay"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground text-caption">No diff overlay</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Current Run */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-caption font-semibold">
+                    <span className="text-foreground">Current Render</span>
+                  </div>
+                  <div className="relative w-full rounded-xl overflow-hidden border border-border bg-black aspect-video flex items-center justify-center">
+                    {currentUrl ? (
+                      <img
+                        src={currentUrl}
+                        alt="Current Run Screenshot"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : (
+                      <span className="text-muted-foreground text-caption">No current image</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Detected Defects List */}
+              {visualResult.defects && visualResult.defects.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <h4 className="text-caption font-semibold uppercase tracking-wider text-muted-foreground">
+                    Detected Visual Defects ({visualResult.defects.length})
+                  </h4>
+                  <div className="space-y-2">
+                    {visualResult.defects.map((defect, i) => (
+                      <div
+                        key={i}
+                        className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-lg border border-border bg-background/50"
+                      >
+                        <div className="flex items-start sm:items-center gap-2">
+                          <span
+                            className={cn(
+                              "text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded border",
+                              defect.severity === "high"
+                                ? "bg-destructive/10 border-destructive/30 text-destructive"
+                                : defect.severity === "medium"
+                                ? "bg-amber-500/10 border-amber-500/30 text-amber-400"
+                                : "bg-blue-500/10 border-blue-500/30 text-blue-400"
+                            )}
+                          >
+                            {defect.severity}
+                          </span>
+                          <span className="font-mono text-caption text-primary">{defect.type}</span>
+                          <span className="text-caption text-foreground">{defect.description}</span>
+                        </div>
+                        {defect.bounding_box && (
+                          <span className="font-mono text-[11px] text-muted-foreground shrink-0">
+                            {defect.bounding_box.width}x{defect.bounding_box.height}px at ({defect.bounding_box.x}, {defect.bounding_box.y})
+                          </span>
+                        )}
                       </div>
                     ))}
                   </div>
