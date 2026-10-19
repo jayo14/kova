@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.modules.validation.models import ValidationMode
+
 
 def _validate_unique_step_ids(steps: list[FlowStep] | None) -> None:
     if steps is None:
@@ -160,6 +162,7 @@ class FlowCreate(BaseModel):
     status: Literal["active", "stale", "disabled", "requires_review"] = "active"
     capability: str | None = None
     routes: list[str] = Field(default_factory=list)
+    mode: ValidationMode = ValidationMode.FUNCTIONAL
     criticality: Literal["critical", "high", "medium", "low"] = "medium"
     state_contract: FlowStateContract | None = None
     goal_id: uuid.UUID | None = None
@@ -194,6 +197,7 @@ class FlowUpdate(BaseModel):
     status: Literal["active", "stale", "disabled", "requires_review"] | None = None
     capability: str | None = None
     routes: list[str] | None = None
+    mode: ValidationMode | None = None
     criticality: Literal["critical", "high", "medium", "low"] | None = None
     state_contract: FlowStateContract | None = None
     goal_id: uuid.UUID | None = None
@@ -231,6 +235,7 @@ class FlowRead(BaseModel):
     status: str = "active"
     capability: str | None = None
     routes: list[str] = Field(default_factory=list)
+    mode: str = "functional"
     criticality: str = "medium"
     state_contract: FlowStateContract | None = None
     goal_id: uuid.UUID | None = None
