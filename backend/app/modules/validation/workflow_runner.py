@@ -54,14 +54,22 @@ class WorkflowRunner:
         if browser is not None and verify_persistence:
             # Simulate navigation away and reload / back
             curr_url = getattr(getattr(browser, "page", None), "url", "https://example.com/app")
-            if hasattr(browser, "navigate"):
-                await browser.navigate(curr_url)
-            elif hasattr(browser, "reload"):
-                await browser.reload()
+            if hasattr(browser, "reload"):
+                res = browser.reload()
+                if hasattr(res, "__await__"):
+                    await res
+            elif hasattr(browser, "navigate"):
+                res = browser.navigate(curr_url)
+                if hasattr(res, "__await__"):
+                    await res
 
             # Re-check state persistence
             if hasattr(browser, "check_persistence"):
-                persisted = await browser.check_persistence()
+                res = browser.check_persistence()
+                if hasattr(res, "__await__"):
+                    persisted = await res
+                else:
+                    persisted = bool(res)
             elif hasattr(browser, "is_state_persisted"):
                 persisted = bool(browser.is_state_persisted)
 
