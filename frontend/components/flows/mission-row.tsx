@@ -45,9 +45,21 @@ export function MissionRow({
       className="group flex items-center justify-between gap-4 rounded-xl border border-border/80 bg-card px-4 py-3.5 transition-all duration-200 hover:border-muted-foreground/30 hover:bg-secondary/20 shadow-xs"
     >
       <div className="min-w-0 flex-1">
-        <h3 className="text-body font-semibold text-foreground truncate group-hover:text-primary transition-colors">
-          {mission.name}
-        </h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-body font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+            {mission.name}
+          </h3>
+          {(mission.stale_reason || mission.status === "stale") && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20">
+              Stale
+            </span>
+          )}
+          {mission.requires_review && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-500/10 text-rose-500 border border-rose-500/20">
+              Requires review
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5 mt-0.5 text-body-sm text-muted-foreground">
           <span className="truncate">{mission.projectName}</span>
           {mission.persona && (

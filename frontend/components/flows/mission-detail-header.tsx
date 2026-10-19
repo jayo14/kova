@@ -117,6 +117,16 @@ export function MissionDetailHeader({
         </div>
       )}
 
+      {mission.stale_reason && (
+        <div
+          role="note"
+          className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/20 px-3.5 py-2.5 text-body-sm text-amber-500"
+        >
+          <MaterialIcon name="warning" size={16} />
+          <span><strong>Stale reason:</strong> {mission.stale_reason}</span>
+        </div>
+      )}
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-display sm:text-[2.25rem] font-bold text-foreground mb-1.5 tracking-tight truncate">
@@ -124,7 +134,18 @@ export function MissionDetailHeader({
           </h1>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body-sm text-muted-foreground">
             <ModeBadge mode={mission.mode} />
+            {(mission.stale_reason || mission.status === "stale") && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20">
+                Stale
+              </span>
+            )}
+            {mission.requires_review && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-rose-500/10 text-rose-500 border border-rose-500/20">
+                Requires review
+              </span>
+            )}
             <span aria-hidden="true">·</span>
+
             <Link
               href={`/projects/${mission.projectId}`}
               className="font-medium text-foreground hover:text-primary transition-colors underline-offset-4 hover:underline"
