@@ -326,10 +326,14 @@ export interface Mission {
   repeatability?: "repeatable" | "non_repeatable";
   resetStrategy?: string | null;
   active?: boolean;
+  status?: string;
+  stale_reason?: string | null;
+  requires_review?: boolean;
   createdAt: string;
   updatedAt: string;
   version?: number;
 }
+
 
 export interface MissionExecution {
   id: string;
