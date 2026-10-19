@@ -32,6 +32,11 @@ class ValidationStatus(str, enum.Enum):
 
 
 class ProductModel(Base):
+    """DEPRECATED: Use the relational ProductGraph in `app.modules.product_graph` instead.
+
+    This flat JSON-based model is maintained for backward compatibility.
+    Use `convert_legacy_product_model_to_graph` to convert instances to structured entities.
+    """
     __tablename__ = "product_models"
     __table_args__ = (
         Index("ix_product_models_project_id", "project_id"),
@@ -57,6 +62,33 @@ class ProductModel(Base):
     )
 
     project = relationship("Project", backref=backref("product_models", passive_deletes=True))
+
+
+def convert_legacy_product_model_to_graph(model: ProductModel) -> dict[str, Any]:
+    """Helper to convert a legacy flat ProductModel to structured ProductGraph entities."""
+    pages = [
+        {"url_pattern": r if isinstance(r, str) else r.get("path", "/"), "provenance": "observed"}
+        for r in (model.routes or [])
+    ]
+    capabilities = [
+        {"name": c if isinstance(c, str) else c.get("name", "unknown"), "provenance": "observed"}
+        for c in (model.capabilities or [])
+    ]
+    personas = [
+        {"name": p if isinstance(p, str) else p.get("name", "user"), "provenance": "observed"}
+        for p in (model.roles or [])
+    ]
+    states = [
+        {"key": e if isinstance(e, str) else e.get("key", "state"), "provenance": "observed"}
+        for e in (model.entities or [])
+    ]
+    return {
+        "project_id": str(model.project_id),
+        "pages": pages,
+        "capabilities": capabilities,
+        "personas": personas,
+        "states": states,
+    }
 
 
 class ValidationRun(Base):

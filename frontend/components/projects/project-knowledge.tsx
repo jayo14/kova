@@ -48,9 +48,35 @@ export function ProjectKnowledge({ knowledge }: ProjectKnowledgeProps) {
             <div key={i} className="rounded-lg border border-border/80 bg-background/50 p-3 space-y-1">
               <div className="flex items-center justify-between gap-1">
                 <span className="text-body-sm font-medium text-foreground">{cap.name}</span>
-                <span className="text-caption text-muted-foreground">
-                  {cap.is_inferred ? "inferred" : "verified"}
-                </span>
+                {(() => {
+                  const prov = cap.provenance || (cap.is_inferred ? "inferred" : "observed");
+                  if (prov === "user_provided") {
+                    return (
+                      <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-400">
+                        User Defined
+                      </span>
+                    );
+                  }
+                  if (prov === "observed") {
+                    return (
+                      <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-400">
+                        Observed
+                      </span>
+                    );
+                  }
+                  if (prov === "expected") {
+                    return (
+                      <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400">
+                        Expected
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded border border-purple-500/30 bg-purple-500/10 text-purple-400">
+                      Inferred
+                    </span>
+                  );
+                })()}
               </div>
               {cap.description && (
                 <p className="text-caption text-muted-foreground line-clamp-2">{cap.description}</p>

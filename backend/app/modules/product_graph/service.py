@@ -36,6 +36,20 @@ from app.modules.product_graph.schemas import (
 from app.modules.projects.models import Project
 
 
+PROVENANCE_PRECEDENCE: dict[str, int] = {
+    "user_provided": 4,
+    "observed": 3,
+    "expected": 2,
+    "inferred": 1,
+}
+
+
+def can_overwrite_provenance(existing_prov: str | None, incoming_prov: str | None) -> bool:
+    if not existing_prov:
+        return True
+    return PROVENANCE_PRECEDENCE.get(incoming_prov or "inferred", 1) >= PROVENANCE_PRECEDENCE.get(existing_prov, 1)
+
+
 def _dump_model(m: Any) -> dict:
     if hasattr(m, "model_dump"):
         return m.model_dump()
@@ -110,11 +124,15 @@ class ProductGraphService:
         # 1. Personas
         for persona in discovery_result.personas:
             p_data = _dump_model(persona)
+            prov_val = getattr(p_data.get("provenance", "observed"), "value", str(p_data.get("provenance", "observed")))
             existing_personas = await self.repo.list_personas_by_project(project_id)
             existing = next((p for p in existing_personas if p.name == p_data["name"]), None)
             if existing:
                 merged_caps = list(set((existing.default_capabilities or []) + (p_data.get("default_capabilities") or [])))
-                await self.repo.update_persona(existing.id, default_capabilities=merged_caps)
+                updates: dict[str, Any] = {"default_capabilities": merged_caps}
+                if can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                    updates["provenance"] = prov_val
+                await self.repo.update_persona(existing.id, **updates)
             else:
                 await self.repo.create_persona(
                     project_id=project_id,
@@ -123,21 +141,29 @@ class ProductGraphService:
                     description=p_data.get("description"),
                     credentials_required=p_data.get("credentials_required", False),
                     default_capabilities=p_data.get("default_capabilities", []),
+                    provenance=prov_val,
                 )
 
         # 2. Goals
         for goal in discovery_result.goals:
             g_data = _dump_model(goal)
+            prov_val = getattr(g_data.get("provenance", "inferred"), "value", str(g_data.get("provenance", "inferred")))
             existing_goals = await self.repo.list_goals_by_project(project_id)
             existing = next((g for g in existing_goals if g.name == g_data["name"]), None)
             if existing:
-                # Never overwrite a user_provided goal!
-                if existing.source != "user_provided":
+                # Never overwrite a user_provided goal or allow inferred to overwrite observed
+                existing_prov = getattr(existing, "provenance", None) or ("user_provided" if existing.source == "user_provided" else "inferred")
+                if existing.source != "user_provided" and existing_prov != "user_provided" and can_overwrite_provenance(existing_prov, prov_val):
                     await self.repo.update_goal(
                         existing.id,
                         description=g_data.get("description") or existing.description,
                         persona_id=g_data.get("persona_id") or existing.persona_id,
                         success_criteria=g_data.get("success_criteria") or existing.success_criteria,
+                        business_rules=g_data.get("business_rules") or getattr(existing, "business_rules", []),
+                        negative_scenarios=g_data.get("negative_scenarios") or getattr(existing, "negative_scenarios", []),
+                        acceptance_criteria=g_data.get("acceptance_criteria") or getattr(existing, "acceptance_criteria", []),
+                        unknowns=g_data.get("unknowns") or getattr(existing, "unknowns", []),
+                        provenance=prov_val,
                     )
             else:
                 await self.repo.create_goal(
@@ -147,6 +173,11 @@ class ProductGraphService:
                     description=g_data.get("description"),
                     persona_id=g_data.get("persona_id"),
                     success_criteria=g_data.get("success_criteria", []),
+                    business_rules=g_data.get("business_rules", []),
+                    negative_scenarios=g_data.get("negative_scenarios", []),
+                    acceptance_criteria=g_data.get("acceptance_criteria", []),
+                    unknowns=g_data.get("unknowns", []),
+                    provenance=prov_val,
                     source=g_data.get("source", "discovered"),
                 )
 
@@ -154,18 +185,21 @@ class ProductGraphService:
         page_id_map: dict[uuid.UUID, uuid.UUID] = {}
         for page in discovery_result.pages:
             pg_data = _dump_model(page)
+            prov_val = getattr(pg_data.get("provenance", "observed"), "value", str(pg_data.get("provenance", "observed")))
             orig_id = uuid.UUID(str(pg_data["id"])) if pg_data.get("id") else None
             existing = await self.repo.get_page_by_url_pattern(project_id, pg_data["url_pattern"])
             if existing:
                 if orig_id:
                     page_id_map[orig_id] = existing.id
                 merged_files = list(set((existing.source_files or []) + (pg_data.get("source_files") or [])))
-                await self.repo.update_page(
-                    existing.id,
-                    title=pg_data.get("title") or existing.title,
-                    source_files=merged_files,
-                    last_seen_at=datetime.now(timezone.utc),
-                )
+                updates = {
+                    "title": pg_data.get("title") or existing.title,
+                    "source_files": merged_files,
+                    "last_seen_at": datetime.now(timezone.utc),
+                }
+                if can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                    updates["provenance"] = prov_val
+                await self.repo.update_page(existing.id, **updates)
             else:
                 new_page_id = orig_id or uuid.uuid4()
                 if orig_id:
@@ -178,11 +212,13 @@ class ProductGraphService:
                     requires_auth=pg_data.get("requires_auth", False),
                     required_state=pg_data.get("required_state", []),
                     source_files=pg_data.get("source_files", []),
+                    provenance=prov_val,
                 )
 
         # 4. Actions
         for action in discovery_result.actions:
             act_data = _dump_model(action)
+            prov_val = getattr(act_data.get("provenance", "observed"), "value", str(act_data.get("provenance", "observed")))
             orig_page_id = uuid.UUID(str(act_data["page_id"]))
             target_page_id = page_id_map.get(orig_page_id, orig_page_id)
             target_page = await self.repo.get_page(target_page_id)
@@ -194,12 +230,14 @@ class ProductGraphService:
                 None,
             )
             if existing:
-                await self.repo.update_action(
-                    existing.id,
-                    name=act_data.get("name") or existing.name,
-                    expected_effect=act_data.get("expected_effect") or existing.expected_effect,
-                    mutates=act_data.get("mutates") or existing.mutates,
-                )
+                updates = {
+                    "name": act_data.get("name") or existing.name,
+                    "expected_effect": act_data.get("expected_effect") or existing.expected_effect,
+                    "mutates": act_data.get("mutates") or existing.mutates,
+                }
+                if can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                    updates["provenance"] = prov_val
+                await self.repo.update_action(existing.id, **updates)
             else:
                 await self.repo.create_action(
                     project_id=project_id,
@@ -210,30 +248,34 @@ class ProductGraphService:
                     action_type=act_data.get("action_type", "click"),
                     expected_effect=act_data.get("expected_effect", []),
                     mutates=act_data.get("mutates", []),
+                    provenance=prov_val,
                 )
 
         # 5. Capabilities — preserve user edits!
         for cap in discovery_result.capabilities:
             c_data = _dump_model(cap)
+            prov_val = getattr(c_data.get("provenance", "observed"), "value", str(c_data.get("provenance", "observed")))
             existing = await self.repo.get_capability_by_name(project_id, c_data["name"])
             if existing:
-                if existing.user_edited:
+                if existing.user_edited or getattr(existing, "provenance", None) == "user_provided":
                     # User edit is preserved! Only union new provider flow IDs
                     new_providers = list(set((existing.provider_flow_ids or []) + (c_data.get("provider_flow_ids") or [])))
                     await self.repo.update_capability(existing.id, provider_flow_ids=new_providers)
                 else:
                     merged_files = list(set((existing.source_files or []) + (c_data.get("source_files") or [])))
                     merged_providers = list(set((existing.provider_flow_ids or []) + (c_data.get("provider_flow_ids") or [])))
-                    await self.repo.update_capability(
-                        existing.id,
-                        description=c_data.get("description") or existing.description,
-                        requires_capabilities=c_data.get("requires_capabilities") or existing.requires_capabilities,
-                        requires_state=c_data.get("requires_state") or existing.requires_state,
-                        produces_state=c_data.get("produces_state") or existing.produces_state,
-                        kind=c_data.get("kind") or existing.kind,
-                        source_files=merged_files,
-                        provider_flow_ids=merged_providers,
-                    )
+                    updates = {
+                        "description": c_data.get("description") or existing.description,
+                        "requires_capabilities": c_data.get("requires_capabilities") or existing.requires_capabilities,
+                        "requires_state": c_data.get("requires_state") or existing.requires_state,
+                        "produces_state": c_data.get("produces_state") or existing.produces_state,
+                        "kind": c_data.get("kind") or existing.kind,
+                        "source_files": merged_files,
+                        "provider_flow_ids": merged_providers,
+                    }
+                    if can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                        updates["provenance"] = prov_val
+                    await self.repo.update_capability(existing.id, **updates)
             else:
                 await self.repo.create_capability(
                     project_id=project_id,
@@ -247,11 +289,13 @@ class ProductGraphService:
                     source_files=c_data.get("source_files", []),
                     provider_flow_ids=c_data.get("provider_flow_ids", []),
                     user_edited=False,
+                    provenance=prov_val,
                 )
 
         # 6. States
         for state in discovery_result.states:
             s_data = _dump_model(state)
+            prov_val = getattr(s_data.get("provenance", "observed"), "value", str(s_data.get("provenance", "observed")))
             existing = await self.repo.get_state_by_key(project_id, s_data["key"])
             if not existing:
                 await self.repo.create_state(
@@ -261,20 +305,26 @@ class ProductGraphService:
                     value_type=s_data.get("value_type", "bool"),
                     default_value=s_data.get("default_value"),
                     description=s_data.get("description"),
+                    provenance=prov_val,
                 )
+            elif can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                await self.repo.update_state(existing.id, provenance=prov_val)
 
         # 7. Invariants
         for inv in discovery_result.invariants:
             i_data = _dump_model(inv)
+            prov_val = getattr(i_data.get("provenance", "observed"), "value", str(i_data.get("provenance", "observed")))
             existing_invs = await self.repo.list_invariants_by_project(project_id)
             existing = next((i for i in existing_invs if i.name == i_data["name"]), None)
             if existing:
                 merged_flows = list(set((existing.checked_by_flow_ids or []) + (i_data.get("checked_by_flow_ids") or [])))
-                await self.repo.update_invariant(
-                    existing.id,
-                    assertion=i_data.get("assertion") or existing.assertion,
-                    checked_by_flow_ids=merged_flows,
-                )
+                updates = {
+                    "assertion": i_data.get("assertion") or existing.assertion,
+                    "checked_by_flow_ids": merged_flows,
+                }
+                if can_overwrite_provenance(getattr(existing, "provenance", None), prov_val):
+                    updates["provenance"] = prov_val
+                await self.repo.update_invariant(existing.id, **updates)
             else:
                 await self.repo.create_invariant(
                     project_id=project_id,
@@ -282,6 +332,7 @@ class ProductGraphService:
                     name=i_data["name"],
                     assertion=i_data["assertion"],
                     checked_by_flow_ids=i_data.get("checked_by_flow_ids", []),
+                    provenance=prov_val,
                 )
 
         # Bump version and save snapshot
@@ -309,6 +360,8 @@ class ProductGraphService:
     ) -> Any:
         """Apply a manual user edit to an entity in the product graph, marking it user-edited and bumping version."""
         project = await self._get_project(project_id)
+
+        patch["provenance"] = "user_provided"
 
         updated_entity = None
         if entity_type == "capability":
