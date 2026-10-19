@@ -7,6 +7,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 
 from app.infrastructure.database.base import Base, JSONCompat
 
+class ValidationMode(str, enum.Enum):
+    """The 5 validation modes defined in brief §9."""
+    FUNCTIONAL = "functional"        # Does a feature perform its intended operation?
+    WORKFLOW = "workflow"             # Can a user complete an end-to-end journey?
+    REGRESSION = "regression"         # Does previously verified behavior still work?
+    EXPLORATORY = "exploratory"       # Can Kova discover unexpected behaviors?
+    VISUAL = "visual"                 # Does the rendered interface match expectations?
+
 
 class ValidationScope(str, enum.Enum):
     TARGETED = "targeted"
