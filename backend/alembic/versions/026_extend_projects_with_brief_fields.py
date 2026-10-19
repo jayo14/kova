@@ -21,19 +21,23 @@ def upgrade() -> None:
     insp = sa.inspect(bind)
     cols = [c["name"] for c in insp.get_columns("projects")]
 
+    from sqlalchemy.dialects import postgresql
+
+    json_type = postgresql.JSONB() if bind.dialect.name == "postgresql" else sa.JSON()
+
     if "product_goal" not in cols:
         op.add_column("projects", sa.Column("product_goal", sa.Text(), nullable=True))
     if "env_config" not in cols:
         op.add_column(
             "projects",
-            sa.Column("env_config", sa.JSON(), server_default='{"target": "staging"}', nullable=False),
+            sa.Column("env_config", json_type, server_default='{"target": "staging"}', nullable=False),
         )
     if "execution_limits" not in cols:
         op.add_column(
             "projects",
             sa.Column(
                 "execution_limits",
-                sa.JSON(),
+                json_type,
                 server_default='{"max_duration_seconds": 300, "max_agent_turns": 60, "max_retries": 3, "max_concurrent_executions": 2, "max_evidence_storage_mb": 500}',
                 nullable=False,
             ),
@@ -43,7 +47,7 @@ def upgrade() -> None:
             "projects",
             sa.Column(
                 "safety_restrictions",
-                sa.JSON(),
+                json_type,
                 server_default='{"production_access_allowed": false, "payment_actions_allowed": false, "account_deletion_allowed": false, "destructive_action_allowlist": [], "forbidden_routes": [], "forbidden_selectors": []}',
                 nullable=False,
             ),
@@ -53,7 +57,7 @@ def upgrade() -> None:
             "projects",
             sa.Column(
                 "browser_settings",
-                sa.JSON(),
+                json_type,
                 server_default='{"viewport_width": 1280, "viewport_height": 720, "locale": "en-US", "timezone": "America/New_York", "user_agent_override": null, "block_images": false}',
                 nullable=False,
             ),
