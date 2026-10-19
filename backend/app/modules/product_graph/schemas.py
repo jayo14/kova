@@ -5,9 +5,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.flows.schemas import FlowStateContract, StateAssertion, StateMutation
+
+
+class Provenance(str, Enum):
+    """Epistemic status of product knowledge (§4 Stage 3)."""
+    OBSERVED = "observed"             # What the application actually exposes or does (from discovery)
+    EXPECTED = "expected"             # What the user or specification says should happen
+    INFERRED = "inferred"             # What the AI believes should happen based on context
+    USER_PROVIDED = "user_provided"   # Explicitly provided by the user (overrides all)
 
 
 def _normalize_path(url_pattern: str) -> str:
@@ -30,6 +40,11 @@ class Goal(BaseModel):
     description: str | None = None
     persona_id: uuid.UUID | None = None
     success_criteria: list[StateAssertion] = Field(default_factory=list)
+    business_rules: list[str] = Field(default_factory=list)
+    negative_scenarios: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[StateAssertion] = Field(default_factory=list)
+    unknowns: list[str] = Field(default_factory=list)
+    provenance: Provenance = Provenance.INFERRED
     source: Literal["user_provided", "discovered", "inferred", "ai_proposal"] = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -46,6 +61,7 @@ class Persona(BaseModel):
     description: str | None = None
     credentials_required: bool = False
     default_capabilities: list[str] = Field(default_factory=list)
+    provenance: Provenance = Provenance.OBSERVED
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -63,10 +79,12 @@ class Page(BaseModel):
     requires_auth: bool = False
     required_state: list[StateAssertion] = Field(default_factory=list)
     source_files: list[str] = Field(default_factory=list)
+    provenance: Provenance = Provenance.OBSERVED
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_seen_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -88,6 +106,7 @@ class Action(BaseModel):
     action_type: Literal["click", "input", "select", "upload", "scroll", "submit"] = "click"
     expected_effect: list[StateAssertion] = Field(default_factory=list)
     mutates: list[str] = Field(default_factory=list)
+    provenance: Provenance = Provenance.OBSERVED
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -110,6 +129,7 @@ class Capability(BaseModel):
     discovered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     provider_flow_ids: list[str] = Field(default_factory=list)
     user_edited: bool = False
+    provenance: Provenance = Provenance.OBSERVED
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -144,6 +164,7 @@ class State(BaseModel):
     value_type: Literal["bool", "string", "id", "int", "json"] = "bool"
     default_value: Any = None
     description: str | None = None
+    provenance: Provenance = Provenance.OBSERVED
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -163,6 +184,7 @@ class FlowGraphNode(BaseModel):
     repeatability: str = "repeatable"
     status: str = "active"
     criticality: str = "medium"
+    provenance: Provenance = Provenance.OBSERVED
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -190,12 +212,14 @@ class Invariant(BaseModel):
     assertion: StateAssertion
     checked_by_flow_ids: list[str] = Field(default_factory=list)
     violated_count: int = 0
+    provenance: Provenance = Provenance.OBSERVED
     source: str = "discovered"
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     model_config = ConfigDict(from_attributes=True)
+
 
 
 class ProductGraphVersionRead(BaseModel):
