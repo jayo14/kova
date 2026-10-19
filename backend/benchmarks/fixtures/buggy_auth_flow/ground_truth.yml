@@ -1,0 +1,12 @@
+fixture_id: buggy_auth_flow
+description: User authentication fails unexpectedly and stays stranded on login
+known_defects:
+  - id: defect_auth_1
+    type: functional
+    description: "User login fails verification and remains stranded on login page"
+    location: "/login"
+    detection_method: auth_verification
+    expected_severity: high
+expected_scenarios:
+  - "Log in with credentials and verify dashboard redirect"
+forbidden_scenarios: []

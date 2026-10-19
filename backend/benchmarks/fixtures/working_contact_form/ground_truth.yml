@@ -1,0 +1,6 @@
+fixture_id: working_contact_form
+description: Contact form functions normally with HTTP 200 and UI success
+known_defects: []
+expected_scenarios:
+  - "Submit the contact form and verify successful submission"
+forbidden_scenarios: []

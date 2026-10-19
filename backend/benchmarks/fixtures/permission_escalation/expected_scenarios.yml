@@ -1,0 +1,1 @@
+- "Verify /admin route returns 403 Forbidden for non-admin users"
