@@ -52,6 +52,14 @@ if settings.SENTRY_DSN:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.workers.recovery import recovery_loop
+    from app.infrastructure.database.migrations import verify_database_schema
+    from app.infrastructure.database.session import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            await verify_database_schema(session)
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Database schema pre-check encountered an issue: %s", exc)
 
     recovery_task = asyncio.create_task(recovery_loop(), name="execution-recovery")
     try:
