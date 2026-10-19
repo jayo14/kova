@@ -95,3 +95,6 @@ class EventTypes:
     AGENT_LOOP_STARTED = "agent.loop_started"
     AGENT_LOOP_TURN = "agent.loop_turn"
     AGENT_LOOP_OUTCOME = "agent.loop_outcome"
+
+    # Validation Modes
+    DEFECT_DISCOVERED = "defect_discovered"
