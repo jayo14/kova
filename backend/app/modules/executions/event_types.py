@@ -98,3 +98,13 @@ class EventTypes:
 
     # Validation Modes
     DEFECT_DISCOVERED = "defect_discovered"
+
+    # AI Failure Diagnosis & Report Synthesis
+    FAILURE_HYPOTHESIS_PROPOSED = "ai.failure_hypothesis_proposed"
+    REPORT_SUMMARY_SYNTHESIZED = "ai.report_summary_synthesized"
+
+    # Continuous Validation / Test Maintenance
+    FLOW_MARKED_STALE = "flow.marked_stale"
+    FLOW_VALIDATED_AGAINST_NEW_GRAPH = "flow.validated_against_new_graph"
+    FLOW_REQUIRES_REVIEW = "flow.requires_review"
+

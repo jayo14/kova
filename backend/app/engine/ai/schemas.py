@@ -283,4 +283,26 @@ class ProposedFlowList(BaseModel):
     flows: list[ProposedFlow] = Field(default_factory=list)
 
 
+class FailureHypothesis(BaseModel):
+    """AI-proposed failure hypothesis correlating assertions and evidence."""
+
+    root_cause: str
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    evidence_cited: list[str] = Field(default_factory=list)
+    alternative_explanations: list[str] = Field(default_factory=list)
+    recommended_investigation: str
+    reproduction_steps: list[str] = Field(default_factory=list)
+
+
+class ReportSummary(BaseModel):
+    """AI-synthesized human-readable report summary."""
+
+    headline: str
+    key_findings: list[str] = Field(default_factory=list)
+    overall_assessment: str
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+    recommended_next_steps: list[str] = Field(default_factory=list)
+
+
+
 

@@ -29,11 +29,13 @@ from app.engine.ai.schemas import (
     AuthEntranceSemanticResult,
     AuthFormSemanticResult,
     AuthPageClassification,
+    FailureHypothesis,
     GoalInterpretation,
     JourneyPlan,
     ProposedFlowList,
     ProposedStep,
     RecoveryProposal,
+    ReportSummary,
     SubmitButtonProposal,
     VerificationProposal,
 )
@@ -932,6 +934,167 @@ class AgentReasoner:
                 "reasoning": f"Heuristic flow proposal for unresolved goal '{goal_name}'",
             }
         ]
+
+    async def propose_failure_hypothesis(
+        self,
+        execution_id: str,
+        events: list[dict],
+        verification_checks: list[dict],
+        evidence_summary: dict,
+    ) -> FailureHypothesis | None:
+        """AI-driven failure diagnosis.
+
+        Correlates failed assertions, browser observations, screenshots, and network
+        evidence to propose a plausible root cause.
+        """
+        if not self.provider:
+            return self._heuristic_failure_hypothesis(events, verification_checks)
+
+        failure_events = [e for e in events if "fail" in e.get("type", "").lower() or "error" in e.get("type", "").lower()]
+        failed_checks = [c for c in verification_checks if c.get("verdict") == "failed"]
+
+        # Collect all valid evidence IDs present in events or checks
+        valid_evidence_ids = set()
+        for e in events:
+            if "evidence_id" in e:
+                valid_evidence_ids.add(str(e["evidence_id"]))
+            if "id" in e and "evidence" in e.get("type", "").lower():
+                valid_evidence_ids.add(str(e["id"]))
+        for c in verification_checks:
+            for eid in c.get("evidence_ids", []):
+                valid_evidence_ids.add(str(eid))
+
+        system_prompt = (
+            "You are diagnosing the root cause of a failed software validation run. "
+            "Correlate the failed assertions, browser observations, and network evidence "
+            "to propose the most plausible root cause. "
+            "Cite specific evidence IDs in your hypothesis. "
+            "If the evidence is insufficient to determine a root cause, say so explicitly — "
+            "do not invent an explanation. "
+            "Provide 1-2 alternative explanations ranked by likelihood. "
+            "Recommend a concrete next investigation step."
+            + build_system_prompt_clause()
+        )
+        user_prompt = json.dumps({
+            "execution_id": execution_id,
+            "failure_events": failure_events[:20],
+            "failed_verification_checks": failed_checks,
+            "evidence_summary": {
+                "screenshot_count": evidence_summary.get("screenshot_count", 0),
+                "network_log_entries": evidence_summary.get("network_log_entries", [])[:10],
+                "dom_snapshots": evidence_summary.get("dom_snapshot_count", 0),
+                "console_errors": evidence_summary.get("console_errors", [])[:10],
+            },
+        }, default=str)[:6000]
+
+        try:
+            res: FailureHypothesis = await self.provider.generate_structured(
+                system=system_prompt,
+                prompt=user_prompt,
+                schema=FailureHypothesis,
+            )
+            # Anti-hallucination guard: filter cited evidence IDs to known valid IDs if known IDs exist
+            if valid_evidence_ids:
+                res.evidence_cited = [eid for eid in res.evidence_cited if eid in valid_evidence_ids]
+            return res
+        except (AIProviderError, Exception) as e:
+            logger.warning("propose_failure_hypothesis AI call failed: %s", e)
+            return self._heuristic_failure_hypothesis(events, verification_checks)
+
+    def _heuristic_failure_hypothesis(self, events: list[dict], verification_checks: list[dict]) -> FailureHypothesis:
+        """Conservative heuristic: cite the first failed check as the root cause."""
+        failed = [c for c in verification_checks if c.get("verdict") == "failed"]
+        if not failed:
+            return FailureHypothesis(
+                root_cause="No failed verification checks found; the failure may be environmental.",
+                confidence=0.3,
+                evidence_cited=[],
+                alternative_explanations=[],
+                recommended_investigation="Check the execution logs for unexpected errors.",
+                reproduction_steps=[],
+            )
+        first_failure = failed[0]
+        check_name = first_failure.get("name", "unknown")
+        check_reason = first_failure.get("reason", "no reason provided")
+        evidence_ids = [str(eid) for eid in first_failure.get("evidence_ids", [])]
+
+        return FailureHypothesis(
+            root_cause=f"Verification check '{check_name}' failed: {check_reason}",
+            confidence=0.5,
+            evidence_cited=evidence_ids,
+            alternative_explanations=["The check itself may be incorrectly specified"],
+            recommended_investigation=f"Inspect the evidence linked to check '{check_name}' and verify the assertion is correct.",
+            reproduction_steps=[],
+        )
+
+    async def synthesize_report_summary(
+        self,
+        validation_report: dict,
+    ) -> ReportSummary | None:
+        """AI-driven report synthesis for the human-readable summary section."""
+        if not self.provider:
+            return self._heuristic_report_summary(validation_report)
+
+        system_prompt = (
+            "You are writing a concise summary of a software validation report for an engineer. "
+            "The summary should help the engineer quickly understand: "
+            "(1) what was validated, (2) what passed, (3) what failed, (4) what to do next. "
+            "Be specific and actionable. Avoid generic statements like 'investigate the issue'. "
+            "Cite specific flows, evidence, or failure categories. "
+            "If the validation passed cleanly, say so concisely."
+            + build_system_prompt_clause()
+        )
+        user_prompt = json.dumps({
+            "overall_status": validation_report.get("overall_status"),
+            "flows_count": len(validation_report.get("results", [])),
+            "passed_count": sum(1 for r in validation_report.get("results", []) if r.get("status") == "passed"),
+            "failed_count": sum(1 for r in validation_report.get("results", []) if r.get("status") == "failed"),
+            "unverified_count": sum(1 for r in validation_report.get("results", []) if r.get("status") == "unverified"),
+            "failed_flows": [
+                {"name": r.get("flow_name"), "failure_reason": r.get("failure_reason")}
+                for r in validation_report.get("results", [])
+                if r.get("status") == "failed"
+            ][:5],
+            "duration_seconds": validation_report.get("duration_ms", 0) / 1000,
+        }, default=str)[:4000]
+
+        try:
+            res: ReportSummary = await self.provider.generate_structured(
+                system=system_prompt,
+                prompt=user_prompt,
+                schema=ReportSummary,
+            )
+            return res
+        except (AIProviderError, Exception) as e:
+            logger.warning("synthesize_report_summary AI call failed: %s", e)
+            return self._heuristic_report_summary(validation_report)
+
+    def _heuristic_report_summary(self, validation_report: dict) -> ReportSummary:
+        """Deterministic summary when AI is unavailable."""
+        results = validation_report.get("results", [])
+        passed = sum(1 for r in results if r.get("status") == "passed")
+        failed = sum(1 for r in results if r.get("status") == "failed")
+        overall = validation_report.get("overall_status", "unknown")
+
+        failed_names = [r.get("flow_name", "unnamed") for r in results if r.get("status") == "failed"]
+        next_steps = (
+            [f"Review failures in: {', '.join(failed_names)}"]
+            if failed_names
+            else ["Proceed with build and deployment."]
+        )
+
+        return ReportSummary(
+            headline=f"Validation {overall}: {passed} passed, {failed} failed, {len(results)} total flows",
+            key_findings=[
+                f"Overall status: {overall}",
+                f"Passed: {passed}/{len(results)}",
+                f"Failed: {failed}/{len(results)}",
+            ],
+            overall_assessment=f"The validation run completed with overall status '{overall}'. See per-flow results for details.",
+            confidence=0.7,
+            recommended_next_steps=next_steps,
+        )
+
 
 
 # ── Semantic helpers (§7: no exact-string matching) ─────────────────
