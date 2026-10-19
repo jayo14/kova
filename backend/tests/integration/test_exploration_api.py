@@ -295,3 +295,54 @@ async def test_promote_mission_endpoint(client, db_session):
     )
     assert bad_res.status_code == 404
 
+
+@pytest.mark.asyncio
+async def test_exploration_project_resolution_with_extended_fields(client, db_session, monkeypatch):
+    from app.modules.exploration.service import ExplorationService
+    from app.modules.projects.repository import ProjectRepository
+
+    async def mock_execute(*args, **kwargs):
+        pass
+    monkeypatch.setattr(ExplorationService, "_execute_exploration_flow", mock_execute)
+
+    from app.modules.users.models import User
+    from sqlalchemy import select
+    res = await db_session.execute(select(User).limit(1))
+    test_user = res.scalar_one()
+
+    # Pre-create a project with extended fields
+    proj_repo = ProjectRepository(db_session)
+    existing_proj = await proj_repo.create(
+        user_id=test_user.id,
+        name="Resolved App",
+        base_url="https://resolved.example.com",
+        product_goal="Verify signin flow",
+        env_config={"target": "staging"},
+    )
+    await db_session.flush()
+
+    # 1. Exploration on matching host uses existing project
+    res1 = await client.post(
+        "/api/v1/exploration/",
+        json={"url": "https://resolved.example.com/dashboard", "goal": "check dashboard"},
+    )
+    assert res1.status_code == 201, res1.text
+    data1 = res1.json()
+    assert data1["project_id"] == str(existing_proj.id)
+
+    # 2. Exploration on new host auto-creates project with extended fields
+    res2 = await client.post(
+        "/api/v1/exploration/",
+        json={"url": "https://newapp.example.com/welcome", "goal": "check welcome"},
+    )
+    assert res2.status_code == 201, res2.text
+    data2 = res2.json()
+    assert data2["project_id"] is not None
+    assert data2["project_id"] != str(existing_proj.id)
+
+    new_proj = await proj_repo.get_by_id(uuid.UUID(data2["project_id"]))
+    assert new_proj is not None
+    assert new_proj.base_url == "https://newapp.example.com"
+    assert isinstance(new_proj.env_config, dict)
+
+
