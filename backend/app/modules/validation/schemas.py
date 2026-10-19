@@ -154,6 +154,9 @@ class ValidationRequest(BaseModel):
     timeout_seconds: int = 1800
 
 
+from app.engine.ai.schemas import FailureHypothesis, ReportSummary
+
+
 class FlowValidationResult(BaseModel):
     flow_id: uuid.UUID
     flow_name: str
@@ -163,6 +166,7 @@ class FlowValidationResult(BaseModel):
     evidence_ids: list[uuid.UUID] = Field(default_factory=list)
     failure_reason: str | None = None
     state_changes: dict[str, Any] = Field(default_factory=dict)
+    hypothesis: FailureHypothesis | None = None
 
 
 class ValidationReport(BaseModel):
@@ -178,6 +182,8 @@ class ValidationReport(BaseModel):
     finished_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     evidence_summary: dict[str, Any] = Field(default_factory=dict)
     signed_url: str | None = None
+    summary: ReportSummary | None = None
+
 
 
 class FlowResultDiff(BaseModel):

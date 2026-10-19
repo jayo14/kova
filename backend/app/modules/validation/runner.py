@@ -66,16 +66,45 @@ class ValidationRunner:
 
         if mode == ValidationMode.REGRESSION:
             runner = RegressionRunner(criteria=criteria, db=self.db, execution_service=self.execution_service)
-            return await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+            report = await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
         elif mode == ValidationMode.EXPLORATORY:
             runner = ExploratoryRunner(criteria=criteria, db=self.db, execution_service=self.execution_service)
-            return await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+            report = await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
         elif mode == ValidationMode.WORKFLOW:
             runner = WorkflowRunner(criteria=criteria, db=self.db, execution_service=self.execution_service)
-            return await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+            report = await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
         elif mode == ValidationMode.VISUAL:
             runner = VisualRunner(criteria=criteria, db=self.db, execution_service=self.execution_service)
-            return await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+            report = await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
         else:  # FUNCTIONAL
             runner = FunctionalRunner(criteria=criteria, db=self.db, execution_service=self.execution_service)
-            return await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+            report = await runner.run(request, plan=plan, impact_report=impact_report, **kwargs)
+
+        # AI Failure Diagnosis and Report Synthesis (§5 capabilities E & H)
+        try:
+            from app.engine.ai.reasoner import AgentReasoner
+            from app.engine.ai.provider import get_ai_provider
+            reasoner = AgentReasoner(get_ai_provider())
+
+            for res in report.results:
+                if res.status == "failed" and res.hypothesis is None:
+                    res.hypothesis = await reasoner.propose_failure_hypothesis(
+                        execution_id=str(res.flow_id),
+                        events=[],
+                        verification_checks=[
+                            {
+                                "name": res.flow_name,
+                                "verdict": "failed",
+                                "reason": res.failure_reason or "Flow validation assertion failed",
+                                "evidence_ids": [str(eid) for eid in res.evidence_ids],
+                            }
+                        ],
+                        evidence_summary=report.evidence_summary or {},
+                    )
+            if report.summary is None:
+                report.summary = await reasoner.synthesize_report_summary(report.model_dump())
+        except Exception:
+            pass
+
+        return report
+
