@@ -20,9 +20,24 @@ class ExecutionService:
         self.event_repo = ExecutionEventRepository(db)
         self.event_service = EventService(db)
 
-    async def create_execution(self, data: ExecutionCreate, *, flow_version: int = 1, flow_snapshot: dict | None = None):
-        """Create a new execution record."""
-        execution = await self.repo.create(flow_id=data.flow_id, flow_version=flow_version, flow_snapshot=flow_snapshot)
+    async def create_execution(self, data: ExecutionCreate, *, flow_version: int = 1, flow_snapshot: dict | None = None, mode: str | None = None):
+        """Create a new execution record, inheriting validation mode from the flow."""
+        if mode is None:
+            try:
+                from sqlalchemy import select
+                from app.modules.flows.models import Flow
+                f_res = await self.db.execute(select(Flow.mode).where(Flow.id == data.flow_id))
+                mode_val = f_res.scalar_one_or_none()
+                if mode_val:
+                    mode = mode_val
+            except Exception:
+                pass
+        execution = await self.repo.create(
+            flow_id=data.flow_id,
+            flow_version=flow_version,
+            flow_snapshot=flow_snapshot,
+            mode=mode or "functional",
+        )
         await self.event_service.record_execution_created(execution.id)
 
         try:

@@ -31,6 +31,7 @@ class Flow(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", server_default="active")
     capability: Mapped[str | None] = mapped_column(String(128), nullable=True)
     routes: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="functional", server_default="functional")
     criticality: Mapped[str] = mapped_column(String(32), nullable=False, default="medium", server_default="medium")
     state_contract: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True, default=dict, server_default="{}")
     goal_id: Mapped[uuid.UUID | None] = mapped_column(

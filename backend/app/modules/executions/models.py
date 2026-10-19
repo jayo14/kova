@@ -47,6 +47,7 @@ class Execution(Base):
     )
     flow_version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
     flow_snapshot: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="regression", server_default="regression")
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=ExecutionStatus.CREATED.value
     )
