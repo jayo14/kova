@@ -175,6 +175,18 @@ def set_product_graph_entities(project_id: str, entity_type: str, count: int) ->
     PRODUCT_GRAPH_ENTITIES.labels(project_id=str(project_id), entity_type=str(entity_type)).set(count)
 
 
+# 6. Benchmark metrics
+benchmark_scenario_relevance = Gauge("kova_benchmark_scenario_relevance", "Scenario relevance score (0..1)")
+benchmark_true_positive_rate = Gauge("kova_benchmark_true_positive_rate", "TP rate (0..1)")
+benchmark_false_positive_rate = Gauge("kova_benchmark_false_positive_rate", "FP rate (0..1)")
+benchmark_false_negative_rate = Gauge("kova_benchmark_false_negative_rate", "FN rate (0..1)")
+benchmark_evidence_quality = Gauge("kova_benchmark_evidence_quality", "Evidence quality score (0..1)")
+benchmark_manual_intervention_rate = Gauge("kova_benchmark_manual_intervention_rate", "Manual intervention rate (0..1)")
+benchmark_cost_per_validation = Gauge("kova_benchmark_cost_per_validation_usd", "Cost per validation in USD")
+benchmark_time_per_validation = Gauge("kova_benchmark_time_per_validation_seconds", "Time per validation in seconds")
+
+
 def generate_metrics_text() -> tuple[bytes, str]:
     """Generate Prometheus exposition text format bytes and content type."""
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
+
