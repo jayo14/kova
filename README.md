@@ -49,12 +49,14 @@ playwright install chromium
 cp .env.example .env
 # Edit .env with your RumptyCloud credentials (see below)
 
-# Run database migrations
+# Run database migrations (or python scripts/run_migrations.py)
 alembic upgrade head
 
 # Start FastAPI server
 uvicorn app.main:app --reload --port 8000
 ```
+
+> **Database Note**: All JSON columns on PostgreSQL must use `JSONB` (`JSONCompat` in SQLAlchemy) to support equality operations, indexing, and prevent distinct query failures.
 
 ### 2. Frontend Setup
 
