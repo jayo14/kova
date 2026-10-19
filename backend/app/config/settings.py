@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     FAIL_ON_NETWORK_ERRORS: bool = True
     AGENT_EXECUTION_ENABLED: bool = False  # default off in code; enabled via env in deployment
     AGENT_EXECUTION_MAX_DURATION_SECONDS: int = 600
+    VLM_ENABLED: bool = False
+    VLM_MODEL: str = "gpt-4o-mini"
+    VLM_API_KEY: str = ""
+    VLM_BASE_URL: str = "https://api.openai.com/v1"
 
     @model_validator(mode="after")
     def validate_production_keys(self) -> "Settings":
