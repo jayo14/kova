@@ -46,12 +46,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
+          cache-dependency-path: "backend/pyproject.toml"
 
       - name: Install Backend Dependencies
         run: |
           python -m venv backend/.venv
           backend/.venv/bin/pip install --upgrade pip
-          backend/.venv/bin/pip install -e backend/
+          backend/.venv/bin/pip install -e "backend/[dev]"
 
       - name: Run Smoke Test Suite
         env:
