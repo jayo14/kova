@@ -191,7 +191,7 @@ class ExplorationEngine:
             )
 
     async def _capture_and_emit_screenshot(self, page) -> dict | None:
-        """Capture screenshot, upload to Supabase Storage, emit public URL."""
+        """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
         if not self._browser or not self._browser.is_started:
             return None
         try:
@@ -201,25 +201,40 @@ class ExplorationEngine:
             if parsed.query:
                 path += f"?{parsed.query}"
 
-            # Upload screenshot off the event loop (sync httpx blocks otherwise)
-            storage_meta = await asyncio.to_thread(
-                screenshot_storage.save,
-                str(self.exploration_id),
-                screenshot_bytes,
-                page.url,
-            )
+            import base64
+            b64_img = base64.b64encode(screenshot_bytes).decode("ascii")
+            data_uri = f"data:image/png;base64,{b64_img}"
 
             screenshot_meta = {
                 "url": page.url,
                 "path": path,
-                "screenshot_key": storage_meta["screenshot_key"],
-                "screenshot_size_bytes": storage_meta["screenshot_size_bytes"],
+                "screenshot": data_uri,
+                "screenshot_key": f"{self.exploration_id}_{uuid.uuid4().hex[:8]}.png",
+                "screenshot_size_bytes": len(screenshot_bytes),
             }
-            # Include public URL if available (Supabase Storage)
-            if storage_meta.get("screenshot_url"):
-                screenshot_meta["screenshot_url"] = storage_meta["screenshot_url"]
 
+            # Emit immediately so frontend viewport renders in real-time without S3 latency
             await self._emit("browser.screenshot", screenshot_meta)
+
+            # Upload to S3 asynchronously with non-blocking timeout
+            async def _bg_upload():
+                try:
+                    storage_meta = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            screenshot_storage.save,
+                            str(self.exploration_id),
+                            screenshot_bytes,
+                            page.url,
+                        ),
+                        timeout=4.0,
+                    )
+                    if storage_meta.get("screenshot_url"):
+                        screenshot_meta["screenshot_url"] = storage_meta["screenshot_url"]
+                        await self._emit("browser.screenshot", screenshot_meta)
+                except Exception as s3_err:
+                    logger.debug("S3 background upload skipped or timed out: %s", s3_err)
+
+            self._spawn_bg(_bg_upload())
             return screenshot_meta
         except Exception as e:
             logger.warning("Could not capture screenshot: %s", e)
@@ -1815,37 +1830,40 @@ class ExplorationEngine:
         return "navigation"
 
     def _detect_personas(self, route_map: list[dict]) -> list[str]:
-        """Auto-detect relevant personas based on route analysis."""
+        """Auto-detect relevant auditing personas based on route analysis."""
         personas = []
         categories = {r["category"] for r in route_map}
         paths = {r["path"].lower() for r in route_map}
 
+        # Developer / Engineering platforms (GitHub, GitLab, developer tools, API docs)
+        dev_indicators = [
+            "/features/code", "/apps/", "/pulls", "/issues", "/commit",
+            "/docs", "/api", "/sdk", "/developer", "repository", "copilot", "desktop"
+        ]
+        if any(any(ind in p for ind in dev_indicators) for p in paths):
+            personas.append("developer")
+            personas.append("visitor")
+
         # SaaS / App personas
         if "auth" in categories:
             if any("dashboard" in p or "home" in p for p in paths):
-                personas.append("new_user")
-                personas.append("returning_user")
+                personas.append("user")
             if any("admin" in p or "settings" in p for p in paths):
                 personas.append("admin")
 
         # E-commerce personas
         if any("cart" in p or "checkout" in p for p in paths):
-            personas.append("buyer")
+            personas.append("shopper")
         if any("seller" in p or "vendor" in p or "merchant" in p for p in paths):
             personas.append("seller")
 
-        # Content personas
-        if any("create" in p or "new" in p or "upload" in p for p in paths):
-            personas.append("creator")
-        if any("editor" in p or "manage" in p for p in paths):
-            personas.append("editor")
-
-        # Tool personas
+        # Tool / Workspace personas
         if any("project" in p or "workspace" in p for p in paths):
-            personas.append("power_user")
+            personas.append("member")
 
-        # Default to user if no personas detected
+        # Default to user / visitor if no specific personas detected
         if not personas:
+            personas.append("visitor")
             personas.append("user")
 
         return personas

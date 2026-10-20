@@ -81,7 +81,7 @@ export function CredentialRow({
 
         {/* Last used */}
         <div className="col-span-1 min-w-0 text-right">
-          <span className="text-caption text-muted-foreground whitespace-nowrap">
+          <span suppressHydrationWarning className="text-caption text-muted-foreground whitespace-nowrap">
             {relativeTime(credential.lastUsedAt)}
           </span>
         </div>

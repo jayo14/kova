@@ -35,7 +35,7 @@ from app.modules.projects.schemas import ProjectCreate
 logger = logging.getLogger(__name__)
 
 # Maximum time an exploration can run before being forcibly timed out
-EXPLORATION_TIMEOUT_SECONDS = 240
+EXPLORATION_TIMEOUT_SECONDS = 75
 
 # Active browser sessions keyed by exploration session ID
 _active_browser_sessions: dict[uuid.UUID, BrowserSession] = {}

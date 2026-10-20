@@ -76,8 +76,7 @@ async def _run_execution_async(task, execution_id: str):
 
         if execution.status == ExecutionStatus.CREATED.value:
             await exec_repo.update_status(exec_uuid, ExecutionStatus.QUEUED)
-        await exec_repo.update_status(exec_uuid, ExecutionStatus.INITIALIZING)
-        await db.commit()
+            await db.commit()
 
         # Extract snapshot and flow configuration upfront so we never rely on expired ORM attributes
         flow_id = execution.flow_id
@@ -145,7 +144,7 @@ async def _run_execution_async(task, execution_id: str):
         org_service = OrganizationService(db) if org_id else None
         slot_acquired = False
         if org_service and org_id:
-            slot_acquired = await org_service.acquire_execution_slot(org_id, queue_timeout=300)
+            slot_acquired = await org_service.acquire_execution_slot(org_id, queue_timeout=120)
             if not slot_acquired:
                 logger.warning("Org %s at capacity, failing execution %s", org_id, execution_id)
                 await exec_repo.update_status(
@@ -157,6 +156,10 @@ async def _run_execution_async(task, execution_id: str):
                 await event_svc.record(exec_uuid, EventTypes.EXECUTION_FAILED, {"error": "org_at_capacity"})
                 await db.commit()
                 return {"status": "failed", "reason": "org_at_capacity"}
+
+        # Slot acquired; transition to INITIALIZING to launch browser
+        await exec_repo.update_status(exec_uuid, ExecutionStatus.INITIALIZING)
+        await db.commit()
 
         import time
         from app.observability.metrics import (

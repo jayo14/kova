@@ -62,7 +62,7 @@ export function ExecutionRow({ execution }: ExecutionRowProps) {
           <span>{statusConfig.label}</span>
         </span>
 
-        <span className="text-caption text-muted-foreground hidden sm:inline min-w-[65px] text-right">
+        <span suppressHydrationWarning className="text-caption text-muted-foreground hidden sm:inline min-w-[65px] text-right">
           {relativeTime(execution.createdAt)}
         </span>
 

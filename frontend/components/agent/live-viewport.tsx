@@ -30,6 +30,7 @@ interface ViewportMessage {
 interface LiveViewportProps {
   executionId: string;
   className?: string;
+  fallbackScreenshot?: string | null;
   onTakeover?: () => void;
   onRelease?: () => void;
 }
@@ -76,6 +77,7 @@ function toWsUrl(path: string, token: string): string {
 export function LiveViewport({
   executionId,
   className,
+  fallbackScreenshot,
   onTakeover,
   onRelease,
 }: LiveViewportProps) {
@@ -84,6 +86,7 @@ export function LiveViewport({
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const framePendingRef = useRef(false);
+  const [hasReceivedFrame, setHasReceivedFrame] = useState(false);
   const [state, setState] = useState<ViewportState>("connecting");
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -143,6 +146,7 @@ export function LiveViewport({
             const ctx = canvas.getContext("2d");
             if (ctx) {
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+              setHasReceivedFrame(true);
             }
           }
           URL.revokeObjectURL(objectUrl);
@@ -397,15 +401,24 @@ export function LiveViewport({
       </div>
 
       {/* Viewport canvas */}
-      <div className="relative aspect-video bg-black">
+      <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+        {fallbackScreenshot && !hasReceivedFrame && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={fallbackScreenshot}
+            alt="Browser preview"
+            className="absolute inset-0 w-full h-full object-contain pointer-events-none select-none opacity-80"
+          />
+        )}
         <canvas
           ref={canvasRef}
           width={BROWSER_VIEWPORT.width}
           height={BROWSER_VIEWPORT.height}
           tabIndex={isHumanControlled ? 0 : -1}
           className={cn(
-            "w-full h-full object-contain outline-none",
-            isHumanControlled ? "cursor-pointer focus:ring-1 focus:ring-primary/30" : "cursor-default"
+            "w-full h-full object-contain outline-none relative z-10",
+            isHumanControlled ? "cursor-pointer focus:ring-1 focus:ring-primary/30" : "cursor-default",
+            !hasReceivedFrame && fallbackScreenshot && "opacity-0"
           )}
           style={{ imageRendering: "auto" }}
           onMouseDown={handleCanvasMouseDown}

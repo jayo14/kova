@@ -196,12 +196,17 @@ async def rate_limit_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
+    forwarded = request.headers.get("x-forwarded-for")
+    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "anon")
     auth_header = request.headers.get("authorization", "")
     token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
-    client_id = f"tok_{token[:16]}" if token else (request.client.host if request.client else "anon")
+    client_id = f"tok_{token[:16]}" if token else f"ip_{client_ip}"
 
-    # In development or debug, use generous limit (600 req/min) so pair programming and multi-tab loads don't get throttled
-    limit = 600 if (not settings.is_production or settings.DEBUG) else 60
+    # In development or debug, use generous limit (600 req/min).
+    # In production, use RATE_LIMIT_PER_MINUTE (default 300 req/min, 5 req/sec sustained) so multi-flow execution, SSE, and real-time polling don't get throttled.
+    limit = getattr(app.state, "rate_limit_override", None) or (
+        600 if (not settings.is_production or settings.DEBUG) else settings.RATE_LIMIT_PER_MINUTE
+    )
     allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=limit, window_seconds=60)
     if not allowed:
         headers = _cors_headers_for_request(request)

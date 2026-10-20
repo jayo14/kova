@@ -13,8 +13,9 @@ import time
 from typing import AsyncGenerator
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,14 +76,11 @@ async def _verify_execution_ownership(
 @router.post("/", response_model=ExecutionRead, status_code=201)
 async def create_execution(
     data: ExecutionCreate,
+    response: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Create a new execution for a flow.
-
-    The execution is created in CREATED status.
-    Use POST /flows/{flow_id}/executions to create and enqueue.
-    """
+    """Create a new execution for a flow and schedule dispatch."""
     # Validate FK: flow must exist and user must own it via project
     result = await db.execute(select(Flow).where(Flow.id == data.flow_id))
     flow = result.scalar_one_or_none()
@@ -95,7 +93,12 @@ async def create_execution(
         raise HTTPException(status_code=404, detail="Flow not found")
 
     service = ExecutionService(db)
-    return await service.create_execution(data)
+    execution = await service.create_execution(data)
+    await db.commit()
+
+    from app.api.routes.flows import _schedule_dispatch
+    response.background = BackgroundTask(_schedule_dispatch, str(execution.id))
+    return execution
 
 
 class BatchExecutionRequest(BaseModel):

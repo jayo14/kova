@@ -72,8 +72,8 @@ async def _dispatch_execution(execution_id: str) -> None:
             inspector = celery_app.control.inspect(timeout=0.2)
             return inspector.ping() if inspector else None
 
-        active_workers = await asyncio.to_thread(_ping)
-        if active_workers:
+        active_workers = await asyncio.wait_for(asyncio.to_thread(_ping), timeout=0.5)
+        if active_workers and isinstance(active_workers, dict) and any(active_workers.values()):
             await asyncio.to_thread(run_execution.delay, execution_id)
             logger.info(
                 "Dispatched execution %s to Celery worker: %s",

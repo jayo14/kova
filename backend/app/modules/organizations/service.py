@@ -90,11 +90,11 @@ class OrganizationService:
         return _memory_concurrent_counts.get(str(org_id), 0)
 
     async def acquire_execution_slot(
-        self, org_id: uuid.UUID, queue_timeout: int = 300, poll_interval: float = 1.0
+        self, org_id: uuid.UUID, queue_timeout: int = 120, poll_interval: float = 0.5
     ) -> bool:
         """Acquire a concurrent execution slot, waiting up to queue_timeout seconds if at capacity."""
         quota = await self.repo.get_quota(org_id)
-        max_concurrent = quota.max_concurrent_executions if quota else 2
+        max_concurrent = quota.max_concurrent_executions if quota else 4
 
         start_time = time.time()
         key = f"org_concurrent:{org_id}"

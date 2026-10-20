@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     EVIDENCE_CAPTURE_VIDEO: bool = True
     EVIDENCE_CAPTURE_TRACE: bool = False
     EVIDENCE_VIDEO_DIR: str = "/tmp/kova_videos"
+    RATE_LIMIT_PER_MINUTE: int = 300
     DISCOVERY_MAX_DEPTH: int = 3
     DISCOVERY_MAX_PAGES: int = 50
 

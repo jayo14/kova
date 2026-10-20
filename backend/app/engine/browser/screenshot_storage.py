@@ -6,6 +6,7 @@ Uploads screenshots to a public S3 bucket.
 import logging
 import uuid
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from app.config.settings import settings
@@ -22,12 +23,18 @@ class ScreenshotStorage:
 
     def _get_s3_client(self):
         if not self._s3_client:
+            s3_config = Config(
+                connect_timeout=3,
+                read_timeout=4,
+                retries={"max_attempts": 1},
+            )
             self._s3_client = boto3.client(
                 "s3",
                 endpoint_url=settings.RUMPTYCLOUD_S3_ENDPOINT,
                 aws_access_key_id=settings.RUMPTYCLOUD_ACCESS_KEY_ID,
                 aws_secret_access_key=settings.RUMPTYCLOUD_SECRET_ACCESS_KEY,
                 region_name="us-east-1",
+                config=s3_config,
             )
         return self._s3_client
 
