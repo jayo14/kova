@@ -95,7 +95,7 @@ export function MissionRow({
               )}
             />
             <span>{statusConfig.label}</span>
-            <span className="text-muted-foreground/60 font-normal">
+            <span suppressHydrationWarning className="text-muted-foreground/60 font-normal">
               · {relativeTime(lastExecution.createdAt)}
             </span>
           </span>

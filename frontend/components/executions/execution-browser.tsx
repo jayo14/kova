@@ -197,6 +197,7 @@ export function ExecutionBrowser({
           <div className="absolute inset-0 w-full h-full z-20">
             <LiveViewport
               executionId={executionId}
+              fallbackScreenshot={latestScreenshot}
               className="w-full h-full rounded-none border-0"
             />
           </div>

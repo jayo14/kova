@@ -67,7 +67,7 @@ export function ProjectRow({ project }: ProjectRowProps) {
         {counts && (
           <span className="text-caption hidden sm:inline">{counts}</span>
         )}
-        <span className="text-caption text-muted-foreground hidden md:inline">
+        <span suppressHydrationWarning className="text-caption text-muted-foreground hidden md:inline">
           {formatRelativeTime(project.updatedAt)}
         </span>
         <MaterialIcon

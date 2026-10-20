@@ -122,7 +122,7 @@ export function ProjectActivity({ activities }: ProjectActivityProps) {
                   <p className="text-body-sm font-medium text-foreground group-hover:text-primary transition-colors truncate">
                     {activity.title}
                   </p>
-                  <span className="text-caption text-muted-foreground shrink-0">
+                  <span suppressHydrationWarning className="text-caption text-muted-foreground shrink-0">
                     {formatRelativeTime(activity.createdAt)}
                   </span>
                 </div>

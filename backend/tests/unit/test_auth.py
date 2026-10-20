@@ -596,6 +596,7 @@ async def test_rate_limit_per_user(db_session: AsyncSession):
     """61st request within a minute returns 429 with Retry-After."""
     from app.modules.auth.rate_limiter import rate_limiter
 
+    app.state.rate_limit_override = 60
     rate_limiter.reset_in_memory()
 
     async def override_get_session():
@@ -628,6 +629,7 @@ async def test_rate_limit_per_user(db_session: AsyncSession):
             assert "Retry-After" in resp61.headers
             assert int(resp61.headers["Retry-After"]) >= 1
     finally:
+        app.state.rate_limit_override = None
         rate_limiter.reset_in_memory()
         app.dependency_overrides.clear()
 

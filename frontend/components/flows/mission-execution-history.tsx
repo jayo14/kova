@@ -192,7 +192,7 @@ export function MissionExecutionHistory({
                       {statusConfig.label}
                     </span>
                   </div>
-                  <span className="text-caption text-muted-foreground">
+                  <span suppressHydrationWarning className="text-caption text-muted-foreground">
                     {relativeTime(exec.createdAt)}
                   </span>
                 </Link>

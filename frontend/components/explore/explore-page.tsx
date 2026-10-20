@@ -429,26 +429,22 @@ export function ExplorePage() {
 
     if (createdMissions.length > 0) {
       try {
-        // Create executions for all missions
-        const executions = [];
+        // Create executions for all missions sequentially with gentle spacing to respect rate limits
+        const executions: string[] = [];
         for (const mission of createdMissions) {
           const execution = await createExecution(mission.id);
           if (execution?.id) {
             executions.push(execution.id);
           }
+          await new Promise((r) => setTimeout(r, 80));
         }
 
         if (executions.length > 0) {
-          // If parallel and multiple executions, use the batch endpoint
+          // If parallel and multiple executions, trigger batch runner coordination
           if (parallel && executions.length > 1) {
-            const batchResult = await runBatchExecutions(executions, true);
-            if (batchResult) {
-              // Redirect to the first execution for now
-              router.push(`/executions/${executions[0]}`);
-              return;
-            }
+            runBatchExecutions(executions, true).catch(() => {});
           }
-          // Sequential or single: run first, redirect to it
+          // Redirect to the first execution immediately so user sees live runner
           router.push(`/executions/${executions[0]}`);
           return;
         }
