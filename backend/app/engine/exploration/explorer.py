@@ -99,6 +99,9 @@ class ExplorationEngine:
         self._visited_urls: set[str] = set()
         self._bg_tasks: set[asyncio.Task] = set()
         self._ai_recommendation_reason: str | None = None
+        self._last_route_map: list[dict] = []
+        self._last_interactive_elements: list[dict] = []
+        self._last_persona: str = "User"
 
     def _spawn_bg(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -279,9 +282,9 @@ class ExplorationEngine:
                 for attempt in range(max_retries + 1):
                     try:
                         response = await page.goto(self.url, wait_until="domcontentloaded")
-                        # Short networkidle check — 3s max, swallow timeout
+                        # Short networkidle check — 1s max, swallow timeout
                         try:
-                            await page.wait_for_load_state("networkidle", timeout=3000)
+                            await page.wait_for_load_state("networkidle", timeout=1000)
                         except Exception:
                             pass
                         # Minimal pause for SPA hydration
@@ -522,6 +525,14 @@ class ExplorationEngine:
                         "candidate_missions": [],
                     }
 
+            # Fast-path candidate missions (emitted immediately from initial DOM observation in <3s)
+            fast_missions = self._generate_fast_path_missions(page, observation, self.goal)
+            if fast_missions:
+                await self._emit("missions", {
+                    "missions": [m.model_dump() for m in fast_missions],
+                    "recommendation": self._generate_recommendation(fast_missions),
+                })
+
             # 6. Discover workflows and map journeys
             await self._emit("state_change", {"status": "DISCOVERING"})
             await self._emit("progress", {
@@ -548,17 +559,14 @@ class ExplorationEngine:
             # Ensure missions and discoveries are processed before ready state_change
             await asyncio.sleep(0.05)
 
-            # Run structured DiscoveryPipeline to capture Product Graph entities
-            discovery_result = None
-            try:
-                from app.engine.exploration.discovery.pipeline import DiscoveryPipeline
-                disc_pipeline = DiscoveryPipeline(
-                    project_id=self.exploration_id,
-                    base_url=self.url,
-                )
-                discovery_result = await disc_pipeline.discover(page)
-            except Exception as disc_err:
-                logger.warning("Discovery pipeline run in explorer encountered: %s", disc_err)
+            # Fast synthesis of DiscoveryResult without blocking READY
+            discovery_result = self._synthesize_fast_discovery_result(
+                page_url=getattr(page, "url", self.url),
+                page_title=observation.get("title", ""),
+                route_map=self._last_route_map,
+                interactive_elements=self._last_interactive_elements,
+                persona_name=self._last_persona,
+            )
 
             await self._emit("state_change", {"status": "READY"})
             await self._emit("ready", {})
@@ -1482,7 +1490,7 @@ class ExplorationEngine:
         prioritized = self._prioritize_routes(route_map)
 
         # Step 4: Probe top routes via API request (exclude DOM buttons from HTTP probe)
-        network_targets = [r for r in prioritized if not r.get("is_button")][:16]
+        network_targets = [r for r in prioritized if not r.get("is_button")][:6]
         button_targets = [r for r in prioritized if r.get("is_button")][:8]
         if network_targets:
             results = await asyncio.gather(
@@ -1506,7 +1514,7 @@ class ExplorationEngine:
         sitemap_url = f"{base_parsed.scheme}://{base_parsed.netloc}/sitemap.xml"
 
         try:
-            response = await page.request.get(sitemap_url, timeout=3000, fail_on_status_code=False)
+            response = await page.request.get(sitemap_url, timeout=800, fail_on_status_code=False)
             if response.status >= 400:
                 return sitemap_routes
 
@@ -1724,7 +1732,7 @@ class ExplorationEngine:
 
         try:
             response = await page.request.get(
-                route["url"], timeout=3000, fail_on_status_code=False
+                route["url"], timeout=1200, fail_on_status_code=False
             )
             route_info["status"] = response.status
             route_info["accessible"] = 200 <= response.status < 400
@@ -1948,6 +1956,11 @@ class ExplorationEngine:
                 seen_labels.add(name.lower())
                 interactive_elements.append(el)
 
+        # Cache discovery state for fast DiscoveryResult synthesis
+        self._last_route_map = route_map
+        self._last_interactive_elements = interactive_elements
+        self._last_persona = persona_name
+
         # Surface observed interactive elements as discoveries even when route
         # analysis finds nothing (unit tests / SPA shells without crawlable links)
         if not route_map and interactive_elements:
@@ -1987,10 +2000,11 @@ class ExplorationEngine:
 
         if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
+                # Prune and compact page summary tokens to keep LLM response fast
                 page_text = (
-                    (observation.get("text") or "")[:1200]
+                    (observation.get("text") or "")[:400]
                     + " "
-                    + " ".join([el.get("name", "") for el in interactive_elements[:30] if el.get("name")])
+                    + " ".join([el.get("name", "") for el in interactive_elements[:15] if el.get("name")])
                 ).strip()
                 ai_journeys_result = await asyncio.wait_for(
                     ai_reasoner.synthesize_journeys(
@@ -1998,12 +2012,12 @@ class ExplorationEngine:
                         title=title,
                         goal=self.goal,
                         persona=persona_name,
-                        routes=route_map,
-                        interactive_elements=interactive_elements,
+                        routes=route_map[:8],
+                        interactive_elements=interactive_elements[:15],
                         page_summary=page_text,
                         max_journeys=max_missions - mission_count,
                     ),
-                    timeout=25.0,
+                    timeout=10.0,
                 )
                 if ai_journeys_result and ai_journeys_result.journeys:
                     self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
@@ -2287,6 +2301,219 @@ class ExplorationEngine:
 
         return criteria
 
+    def _generate_fast_path_missions(
+        self,
+        page: Any,
+        observation: dict[str, Any],
+        goal: str | None,
+    ) -> list[DiscoveredMission]:
+        """Generate fast candidate missions immediately from initial DOM observation without waiting for deep AI or route crawling."""
+        elements = observation.get("elements", [])
+        title = observation.get("title", "")
+        current_url = getattr(page, "url", self.url)
+        missions: list[DiscoveredMission] = []
+
+        # 1. Goal mission if provided
+        if goal:
+            goal_mission = self._build_route_walk_mission(
+                goal=goal,
+                base_url=current_url,
+                title=title,
+                persona="User",
+                elements=elements,
+            )
+            goal_mission.recommended = True
+            missions.append(goal_mission)
+
+        # 2. Extract top 2-3 prominent interactive elements
+        seen_names: set[str] = set()
+        if goal:
+            seen_names.add(goal.lower())
+
+        priority_keywords = [
+            "start", "get started", "explore", "sign up", "register", "login",
+            "search", "new", "create", "pricing", "features", "dashboard",
+            "docs", "documentation", "try", "demo"
+        ]
+
+        scored_elements: list[tuple[int, dict]] = []
+        for el in elements:
+            name = (el.get("name") or "").strip()
+            if not name or len(name) < 3 or len(name) > 50:
+                continue
+            name_lower = name.lower()
+            if name_lower in seen_names or name_lower in {"sign out", "logout", "close", "cancel", "ok", "yes", "no", "back"}:
+                continue
+
+            score = 0
+            if el.get("type") in ("button", "a"):
+                score += 2
+            for kw in priority_keywords:
+                if kw in name_lower:
+                    score += 5
+                    break
+            scored_elements.append((score, el))
+
+        scored_elements.sort(key=lambda x: x[0], reverse=True)
+
+        for _, el in scored_elements[: (3 if not goal else 2)]:
+            name = el["name"].strip()
+            seen_names.add(name.lower())
+            clean_name = name.replace("'", "\\'")
+            selector = el.get("selector") or f"button:has-text('{clean_name}'), a:has-text('{clean_name}')"
+            is_rec = len(missions) == 0
+
+            missions.append(
+                DiscoveredMission(
+                    id=f"mission-{uuid.uuid4().hex[:8]}",
+                    name=f"Explore {name}",
+                    title=f"Explore {name}",
+                    description=f"Interact with '{name}' on {title or 'application'} to test functionality.",
+                    objective=f"Verify that interacting with '{name}' executes as expected.",
+                    persona="User",
+                    category="feature",
+                    journey=[
+                        f"Visit {title or 'application'}",
+                        f"Click '{name}'",
+                        "Verify visible feedback or navigation",
+                    ],
+                    steps=[
+                        {"type": "navigate", "url": current_url},
+                        {"type": "click", "target": selector},
+                        {"type": "wait", "value": "500"},
+                    ],
+                    successCondition={"url_changed_to": {"from": current_url}},
+                    confidence=0.85,
+                    recommended=is_rec,
+                    route_analysis={"accessible": True, "source": "fast_path"},
+                    estimated_time_seconds=10,
+                    expectation_source="fast_path",
+                    review_required=False,
+                )
+            )
+
+        return missions
+
+    def _synthesize_fast_discovery_result(
+        self,
+        page_url: str,
+        page_title: str,
+        route_map: list[dict] | None = None,
+        interactive_elements: list[dict] | None = None,
+        persona_name: str | None = None,
+    ) -> Any:
+        """Construct a valid DiscoveryResult payload immediately from available route and DOM data."""
+        from app.modules.product_graph.schemas import (
+            Action,
+            Capability,
+            DiscoveryResult,
+            Goal,
+            Page,
+            Persona,
+        )
+
+        pid = self.project_id or self.exploration_id
+        if not pid:
+            return None
+
+        route_list = route_map or []
+        elem_list = interactive_elements or []
+        p_name = persona_name or "User"
+
+        # Persona
+        persona = Persona(
+            project_id=pid,
+            name=p_name,
+            description=f"Standard {p_name} interacting with the application",
+            confidence=0.9,
+        )
+
+        # Primary Page
+        parsed = urlparse(page_url)
+        path = parsed.path or "/"
+        main_page = Page(
+            project_id=pid,
+            url_pattern=path,
+            title=page_title or "Home",
+            confidence=1.0,
+        )
+        pages = [main_page]
+
+        # Additional pages from discovered routes
+        seen_paths = {main_page.url_pattern}
+        for r in route_list[:25]:
+            r_path = r.get("path")
+            if not r_path or r_path in seen_paths:
+                continue
+            seen_paths.add(r_path)
+            pages.append(
+                Page(
+                    project_id=pid,
+                    url_pattern=r_path,
+                    title=r.get("title") or r.get("text") or r_path,
+                    requires_auth=bool(r.get("requires_auth", False)),
+                    confidence=0.85,
+                )
+            )
+
+        # Actions on main page
+        actions: list[Action] = []
+        for el in elem_list[:20]:
+            name = (el.get("name") or "").strip()
+            if not name:
+                continue
+            clean_name = name.replace("'", "\\'")
+            selector = el.get("selector") or f"text={clean_name}"
+            actions.append(
+                Action(
+                    project_id=pid,
+                    page_id=main_page.id,
+                    name=f"Click {name[:50]}",
+                    selector=selector,
+                    action_type="click",
+                    confidence=0.85,
+                )
+            )
+
+        # Capabilities
+        capabilities: list[Capability] = []
+        for p in pages[:10]:
+            clean_p = p.url_pattern.strip("/").replace("-", " ").replace("_", " ").title()
+            cap_name = f"Access {clean_p or 'Home'}"
+            capabilities.append(
+                Capability(
+                    project_id=pid,
+                    name=cap_name,
+                    description=f"Navigate to and access {p.url_pattern}",
+                    kind="primary",
+                    confidence=0.85,
+                )
+            )
+
+        # Goals
+        goals: list[Goal] = []
+        if self.goal:
+            goals.append(
+                Goal(
+                    project_id=pid,
+                    name=self.goal,
+                    description=f"User goal: {self.goal}",
+                    persona_id=persona.id,
+                    confidence=0.9,
+                )
+            )
+
+        coverage = {p.url_pattern: "discovered" for p in pages}
+
+        return DiscoveryResult(
+            goals=goals,
+            personas=[persona],
+            pages=pages,
+            actions=actions,
+            capabilities=capabilities,
+            coverage_map=coverage,
+        )
+
     def _build_route_walk_mission(
         self, goal: str, base_url: str, title: str, persona: str, elements: list[dict],
     ) -> DiscoveredMission:
@@ -2304,7 +2531,7 @@ class ExplorationEngine:
 
         steps = [{"type": "navigate", "url": base_url}]
         steps.append({"type": "click", "target": target_selector})
-        steps.append({"type": "wait", "value": "2000"})
+        steps.append({"type": "wait", "value": "500"})
 
         is_matching = bool(matching_el)
         return DiscoveredMission(
@@ -2438,7 +2665,7 @@ class ExplorationEngine:
 
         steps = [
             {"type": "navigate", "url": auth_route["url"]},
-            {"type": "wait", "value": "2000"},
+            {"type": "wait", "value": "500"},
         ]
         if auth_route.get("has_form"):
             if not credential_id:
@@ -2476,7 +2703,7 @@ class ExplorationEngine:
                 {"type": "click", "target": password_selector},
                 {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
                 {"type": "click", "target": "button[type='submit'], button:has-text('Sign in'), button:has-text('Sign In'), button:has-text('Log in'), button:has-text('Log In'), button:has-text('Sign up'), button:has-text('Sign Up'), button:has-text('Create'), button:has-text('Continue'), input[type='submit']"},
-                {"type": "wait", "value": "3000"},
+                {"type": "wait", "value": "500"},
             ])
 
         # Strong verification: URL changed + password field absent + optional indicator
@@ -2605,7 +2832,7 @@ class ExplorationEngine:
 
         steps.extend([
             {"type": "click", "target": submit_signup_selector},
-            {"type": "wait", "value": "2000"},
+            {"type": "wait", "value": "500"},
             {"type": "navigate", "url": login_url},
             {"type": "wait", "value": "1000"},
             {"type": "click", "target": email_selector},
@@ -2626,7 +2853,7 @@ class ExplorationEngine:
 
         steps.extend([
             {"type": "click", "target": submit_login_selector},
-            {"type": "wait", "value": "2000"},
+            {"type": "wait", "value": "500"},
         ])
 
         success_condition = {
@@ -2685,7 +2912,7 @@ class ExplorationEngine:
             {"type": "click", "target": "textarea, input[name*='message'], input[id*='message'], input[placeholder*='message']"},
             {"type": "type", "target": "textarea, input[name*='message'], input[id*='message'], input[placeholder*='message']", "value": "This is an automated test message from Kova."},
             {"type": "click", "target": "button[type='submit'], input[type='submit'], button:has-text('Submit'), button:has-text('Send'), form button"},
-            {"type": "wait", "value": "2000"},
+            {"type": "wait", "value": "500"},
         ]
 
         # Expect confirmation and no failed request
@@ -2761,7 +2988,7 @@ class ExplorationEngine:
                 {"type": "navigate", "url": base_url},
                 {"type": "wait", "value": "1000"},
                 {"type": "click", "target": {"css": route["selector"]}},
-                {"type": "wait", "value": "2000"},
+                {"type": "wait", "value": "500"},
             ]
             journey_desc = [
                 f"Open {title or 'the application'}",
@@ -2777,7 +3004,7 @@ class ExplorationEngine:
         else:
             steps = [
                 {"type": "navigate", "url": route["url"]},
-                {"type": "wait", "value": "2000"},
+                {"type": "wait", "value": "500"},
             ]
             journey_desc = [
                 f"Open {title or 'the application'}",
@@ -2829,7 +3056,7 @@ class ExplorationEngine:
 
         steps = [
             {"type": "navigate", "url": route["url"]},
-            {"type": "wait", "value": "2000"},
+            {"type": "wait", "value": "500"},
         ]
 
         return DiscoveredMission(
@@ -3005,11 +3232,11 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                     {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
                     {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
                     {"type": "click", "target": "button[type='submit'], button:has-text('Sign up'), button:has-text('Sign Up'), button:has-text('Create'), button:has-text('Register'), button:has-text('Continue'), input[type='submit']"},
-                    {"type": "wait", "value": "3000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "auth_verified": {"auth_path": "/register"},
@@ -3041,10 +3268,10 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                     {"type": "type", "target": search_input, "value": "course"},
                     {"type": "click", "target": "button[type='submit'], button:has-text('Search')"},
-                    {"type": "wait", "value": "3000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 # Outcome proof: at least one result link rendered, OR the URL
                 # began reflecting the query. Weak/absent result states are
@@ -3076,7 +3303,7 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "url_changed_to": {"from": base_url},
@@ -3103,7 +3330,7 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 # State change proof: page must actually present a heading.
                 # Structural containers are deliberately NOT accepted as proof.
@@ -3152,11 +3379,11 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                     {"type": "type", "target": email_selector, "credential_id": credential_id, "credential_field": "email"},
                     {"type": "type", "target": password_selector, "credential_id": credential_id, "credential_field": "password"},
                     {"type": "click", "target": "button[type='submit'], button:has-text('Log in'), button:has-text('Log In'), button:has-text('Sign in'), button:has-text('Sign In'), button:has-text('Continue'), input[type='submit']"},
-                    {"type": "wait", "value": "3000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "auth_verified": {"auth_path": "/login"},
@@ -3182,7 +3409,7 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "url_changed_to": {"from": base_url},
@@ -3210,7 +3437,7 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "url_changed_to": {"from": base_url},
@@ -3236,7 +3463,7 @@ class ExplorationEngine:
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "2000"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
                     "url_changed_to": {"from": base_url},
@@ -3263,7 +3490,7 @@ class ExplorationEngine:
             "steps": [
                 {"type": "navigate", "url": base_url},
                 {"type": "click", "target": selector},
-                {"type": "wait", "value": "2000"},
+                {"type": "wait", "value": "500"},
             ],
             "success_condition": {
                 "url_changed_to": {"from": base_url},
