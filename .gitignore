@@ -25,8 +25,8 @@ skills-lock.json
 kova-launch-prompts/
 
 # Internal design mockups, audits, draft docs, and worklogs
-/redesign pages/
-/docs/
+/docs/*
+!/docs/alerts/
 /AUDIT.md
 /WORKLOG.md
 /PRD.md
