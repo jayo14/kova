@@ -33,7 +33,7 @@ function MissionEditForm({ mission, onSave, onCancel }: MissionEditFormProps) {
   const [objective, setObjective] = useState(
     mission.objective || mission.description || ""
   );
-  const [persona, setPersona] = useState(mission.persona || "Student");
+  const [persona, setPersona] = useState(mission.persona || "Visitor");
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();

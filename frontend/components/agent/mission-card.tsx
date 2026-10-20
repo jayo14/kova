@@ -120,7 +120,10 @@ export function MissionCard({
             {/* Tags and Metadata */}
             <div className="flex items-center gap-2 text-caption flex-wrap">
               {mission.persona && (
-                <span className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-secondary/40 px-2 py-0.5 text-foreground/80 font-medium">
+                <span
+                  title={mission.personaEvidence || `Perspective: ${mission.persona}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-border/80 bg-secondary/40 px-2 py-0.5 text-foreground/80 font-medium cursor-help"
+                >
                   <MaterialIcon name="person" size={12} className="text-muted-foreground" />
                   {mission.persona}
                 </span>
