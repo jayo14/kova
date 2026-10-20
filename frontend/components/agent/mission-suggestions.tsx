@@ -126,7 +126,7 @@ export function MissionSuggestions({
         </div>
 
         <h2 className="text-h2 font-semibold text-foreground mb-2">
-          I found {missions.length} useful journeys.
+          I mapped {missions.length} user flows.
         </h2>
 
         {recommendation ? (
@@ -135,7 +135,7 @@ export function MissionSuggestions({
           </p>
         ) : (
           <p className="text-body-sm text-muted-foreground">
-            Select the journeys you want Kova to run or start with the recommendation.
+            Select the flows you want Kova to run or start with the recommendation.
           </p>
         )}
       </div>
@@ -178,11 +178,11 @@ export function MissionSuggestions({
         <div>
           <p className="text-body-sm font-medium text-foreground">
             {selected.size === 0
-              ? "No journey selected"
-              : `Ready to run ${selected.size} journey${selected.size > 1 ? "s" : ""}`}
+              ? "No flow selected"
+              : `Ready to verify ${selected.size} flow${selected.size > 1 ? "s" : ""}`}
           </p>
           <p className="text-caption text-muted-foreground">
-            Kova will execute the steps autonomously in an isolated session
+            Kova will run the steps autonomously and generate visual proof (screenshots &amp; step logs)
           </p>
         </div>
 
@@ -221,7 +221,7 @@ export function MissionSuggestions({
               onClick={onOpenProject}
               className="flex-1 sm:flex-initial"
             >
-              Open project
+              View project flows
             </Button>
           )}
 
@@ -230,7 +230,7 @@ export function MissionSuggestions({
             onClick={handleRun}
             className="flex-1 sm:flex-initial font-medium px-5"
           >
-            {selected.size > 1 ? `Run ${selected.size} journeys` : "Let Kova run it"}
+            {selected.size > 1 ? `Run & verify ${selected.size} flows` : "Run & verify flow"}
             <MaterialIcon name="arrow_forward" size={16} />
           </Button>
         </div>

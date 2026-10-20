@@ -99,7 +99,7 @@ export function MissionDetailHeader({
           className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
         >
           <MaterialIcon name="arrow_back" size={16} />
-          <span>Missions</span>
+          <span>Flows</span>
         </Link>
         <span className="text-border">/</span>
         <span className="text-foreground font-medium truncate max-w-[200px] sm:max-w-xs">

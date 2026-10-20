@@ -15,9 +15,10 @@ interface NavItem {
 
 const primaryNav: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", icon: "dashboard" },
-  { label: "Projects", href: "/projects", icon: "folder" },
+  { label: "Explore Studio", href: "/explore", icon: "explore" },
   { label: "Flows", href: "/flows", icon: "account_tree" },
-  { label: "Executions", href: "/executions", icon: "play_circle" },
+  { label: "Proof & Runs", href: "/executions", icon: "verified" },
+  { label: "Projects", href: "/projects", icon: "folder" },
 ];
 
 const secondaryNav: NavItem[] = [

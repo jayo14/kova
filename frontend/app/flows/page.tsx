@@ -12,8 +12,8 @@ import { cn } from "@/lib/utils";
 import type { MissionExecution } from "@/lib/types";
 
 export const metadata: Metadata = {
-  title: "Missions — Kova",
-  description: "Things you've asked Kova to accomplish.",
+  title: "Flows — Kova",
+  description: "Product journeys mapped and monitored by Kova.",
 };
 
 interface FlowsPageProps {
@@ -62,10 +62,10 @@ export default async function FlowsPage({ searchParams }: FlowsPageProps) {
         <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h1 className="text-display sm:text-[2.25rem] font-bold text-foreground mb-1.5 tracking-tight">
-              Missions
+              Flows
             </h1>
             <p className="text-body-sm text-muted-foreground leading-relaxed">
-              Things you&apos;ve asked Kova to accomplish.
+              Product journeys mapped and monitored by Kova.
             </p>
           </div>
 
@@ -76,7 +76,7 @@ export default async function FlowsPage({ searchParams }: FlowsPageProps) {
               "inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-body-sm font-medium shadow-sm shrink-0"
             )}
           >
-            <span>+ Give Kova a job</span>
+            <span>+ Explore new flow</span>
             <MaterialIcon name="arrow_forward" size={16} />
           </Link>
         </div>
