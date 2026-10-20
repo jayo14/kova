@@ -607,6 +607,7 @@ export function ExplorePage() {
               authMode={state.authMode}
               onCredentialSubmit={handleCredentialSubmit}
               onAuthChoice={handleAuthChoice}
+              onResetAuthMode={() => setAuthMode("choice")}
               credentialError={credentialError}
               credentialLoading={credentialLoading}
               onUrlChange={handleUrlChange}

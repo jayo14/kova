@@ -26,6 +26,7 @@ export interface AgentBrowserViewportProps {
   credentialLoading?: boolean;
   onUrlChange?: (url: string, path: string) => void;
   onThumbnailClick?: (index: number) => void;
+  onResetAuthMode?: () => void;
   className?: string;
   projectId?: string | null;
   sessionId?: string | null;
@@ -55,6 +56,7 @@ export function AgentBrowserViewport({
   credentialError,
   credentialLoading,
   onThumbnailClick,
+  onResetAuthMode,
   className,
   projectId,
   sessionId,
@@ -213,6 +215,7 @@ export function AgentBrowserViewport({
             state={state}
             onAuthChoice={onAuthChoice}
             onCredentialSubmit={onCredentialSubmit}
+            onBack={onResetAuthMode}
             credentialLoading={credentialLoading}
           />
         )}
@@ -255,6 +258,7 @@ function ManualLoginOverlay({
   state,
   onAuthChoice,
   onCredentialSubmit,
+  onBack,
   credentialLoading,
 }: {
   hostname: string;
@@ -263,6 +267,7 @@ function ManualLoginOverlay({
   state: ExploreState;
   onAuthChoice?: (choice: AuthChoice, details?: { email: string; password: string }) => void;
   onCredentialSubmit?: (email: string, password: string, save?: boolean) => void;
+  onBack?: () => void;
   credentialLoading?: boolean;
 }) {
   const [email, setEmail] = useState("");
@@ -288,8 +293,8 @@ function ManualLoginOverlay({
             </span>
           </div>
           <button
-            onClick={() => onAuthChoice ? onAuthChoice("manual_login") : undefined}
-            className="text-caption text-muted-foreground hover:text-foreground transition-colors"
+            onClick={onBack || (() => onAuthChoice ? onAuthChoice("manual_login") : undefined)}
+            className="text-caption text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           >
             Back
           </button>
