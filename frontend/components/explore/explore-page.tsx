@@ -156,14 +156,20 @@ export function ExplorePage() {
     }
 
     if (!initialUrl) return;
-    if (startedUrlRef.current === initialUrl) return;
-    startedUrlRef.current = initialUrl;
+    const cleanInitialUrl = /^https?:\/\//i.test(initialUrl.trim())
+      ? initialUrl.trim()
+      : /^(?:localhost|127\.0\.0\.1)/i.test(initialUrl.trim())
+      ? `http://${initialUrl.trim()}`
+      : `https://${initialUrl.trim()}`;
+
+    if (startedUrlRef.current === cleanInitialUrl) return;
+    startedUrlRef.current = cleanInitialUrl;
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     startExploration(
-      initialUrl,
+      cleanInitialUrl,
       initialIntent,
       (ev) => handleEventRef.current(ev),
       controller.signal
@@ -187,8 +193,16 @@ export function ExplorePage() {
   }, [initialUrl, initialIntent, initialSessionId]);
 
   const handleSubmit = (intent: KovaIntent) => {
-    const submittedUrl = intent.url || "";
+    let submittedUrl = (intent.url || intent.raw || "").trim();
     if (!submittedUrl) return;
+
+    if (!/^https?:\/\//i.test(submittedUrl)) {
+      if (/^(?:localhost|127\.0\.0\.1)/i.test(submittedUrl)) {
+        submittedUrl = `http://${submittedUrl}`;
+      } else if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(submittedUrl)) {
+        submittedUrl = `https://${submittedUrl}`;
+      }
+    }
 
     if (startedUrlRef.current === submittedUrl && state.state !== "idle" && state.state !== "failed" && state.state !== "cancelled") {
       return;
