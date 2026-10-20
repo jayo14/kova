@@ -72,7 +72,7 @@ jobs:
             promtool check rules docs/alerts/kova-alerts.yml
           else
             echo "promtool not installed in runner; checking YAML syntax"
-            python -c "import yaml; yaml.safe_load(open('docs/alerts/kova-alerts.yml'))"
+            backend/.venv/bin/python -c "import yaml; yaml.safe_load(open('docs/alerts/kova-alerts.yml'))"
           fi
 
       - name: Set up Node.js & pnpm
