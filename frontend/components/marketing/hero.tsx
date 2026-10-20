@@ -8,8 +8,15 @@ export function Hero() {
   const router = useRouter();
 
   const handleSubmit = (intent: KovaIntent) => {
-    const target = intent.url || intent.raw;
+    let target = (intent.url || intent.raw || "").trim();
     if (target) {
+      if (!/^https?:\/\//i.test(target)) {
+        if (/^(?:localhost|127\.0\.0\.1)/i.test(target)) {
+          target = `http://${target}`;
+        } else if (/^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/.test(target)) {
+          target = `https://${target}`;
+        }
+      }
       const query = new URLSearchParams();
       query.set("url", target);
       const goal = intent.goal || intent.instruction;

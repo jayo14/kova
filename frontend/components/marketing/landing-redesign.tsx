@@ -14,7 +14,12 @@ export function LandingRedesign() {
   const handleExplore = (targetUrl: string) => {
     const clean = targetUrl.trim();
     if (clean) {
-      router.push(`/explore?url=${encodeURIComponent(clean)}`);
+      const formatted = /^https?:\/\//i.test(clean)
+        ? clean
+        : /^(?:localhost|127\.0\.0\.1)/i.test(clean)
+        ? `http://${clean}`
+        : `https://${clean}`;
+      router.push(`/explore?url=${encodeURIComponent(formatted)}`);
     } else {
       router.push("/explore");
     }

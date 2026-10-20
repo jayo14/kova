@@ -31,3 +31,11 @@ def test_exploration_create_schema():
     create = ExplorationCreate(url="https://tastiq.app.vercel.app", goal="test quiz")
     assert create.url == "https://tastiq.app.vercel.app"
     assert create.goal == "test quiz"
+
+
+def test_exploration_create_normalizes_bare_domain():
+    create = ExplorationCreate(url="github.com", goal="explore")
+    assert create.url == "https://github.com"
+
+    create_localhost = ExplorationCreate(url="localhost:3000", goal="test")
+    assert create_localhost.url == "http://localhost:3000"

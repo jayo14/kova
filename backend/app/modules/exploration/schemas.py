@@ -1,6 +1,7 @@
+import re
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 from typing import Any
@@ -57,6 +58,17 @@ class CredentialRequest(BaseModel):
 class ExplorationCreate(BaseModel):
     url: str = Field(min_length=1, pattern=r"^https?://.+")
     goal: str | None = None
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def normalize_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            if v and not re.match(r"^https?://", v, re.IGNORECASE):
+                if re.match(r"^(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/.*)?$", v, re.IGNORECASE):
+                    return f"http://{v}"
+                return f"https://{v}"
+        return v
 
 
 class ExplorationCredentialSubmit(BaseModel):

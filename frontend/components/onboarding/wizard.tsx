@@ -141,10 +141,16 @@ export function OnboardingWizard({ initialStep = 0 }: WizardProps) {
     abortControllerRef.current = controller;
 
     try {
+      const cleanBaseUrl = /^https?:\/\//i.test(baseUrl.trim())
+        ? baseUrl.trim()
+        : /^(?:localhost|127\.0\.0\.1)/i.test(baseUrl.trim())
+        ? `http://${baseUrl.trim()}`
+        : `https://${baseUrl.trim()}`;
+
       let session: BackendExplorationSession;
       try {
         session = await createExplorationSession(
-          baseUrl.trim(),
+          cleanBaseUrl,
           "Discover user routes, navigation flows, and interactive features"
         );
       } catch (err: unknown) {
@@ -156,7 +162,7 @@ export function OnboardingWizard({ initialStep = 0 }: WizardProps) {
 
       // Add base path
       try {
-        const parsed = new URL(baseUrl.trim());
+        const parsed = new URL(cleanBaseUrl);
         setDiscoveredPages([parsed.pathname || "/"]);
       } catch {
         setDiscoveredPages(["/"]);

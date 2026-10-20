@@ -100,14 +100,25 @@ export function normalizeExploreStatus(status: string): ExploreState {
   }
 }
 
+export function normalizeTargetUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/^(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/.*)?$/i.test(trimmed)) {
+    return `http://${trimmed}`;
+  }
+  return `https://${trimmed}`;
+}
+
 export async function createExplorationSession(
   url: string,
   goal?: string,
   token?: string
 ): Promise<BackendExplorationSession> {
+  const cleanUrl = normalizeTargetUrl(url);
   return await api.post<BackendExplorationSession>(
     "/api/v1/exploration/",
-    { url, goal },
+    { url: cleanUrl, goal },
     { token, timeoutMs: 60000 }
   );
 }
@@ -586,11 +597,12 @@ export async function startExploration(
   signal?: AbortSignal,
   token?: string
 ): Promise<string> {
-  onEvent({ type: "started", url });
+  const cleanUrl = normalizeTargetUrl(url);
+  onEvent({ type: "started", url: cleanUrl });
   onEvent({ type: "state_change", state: "connecting" });
 
   try {
-    const session = await createExplorationSession(url, intent, token);
+    const session = await createExplorationSession(cleanUrl, intent, token);
     currentSessionId = session.id;
     if (session.project_id) {
       currentProjectId = session.project_id;

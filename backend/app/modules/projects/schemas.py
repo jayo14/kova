@@ -1,6 +1,7 @@
+import re
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -49,6 +50,17 @@ class ProjectCreate(BaseModel):
     browser_settings: BrowserSettings = Field(default_factory=BrowserSettings)
     test_credentials_ref: uuid.UUID | None = None
 
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def normalize_base_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            if v and not re.match(r"^https?://", v, re.IGNORECASE):
+                if re.match(r"^(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/.*)?$", v, re.IGNORECASE):
+                    return f"http://{v}"
+                return f"https://{v}"
+        return v
+
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
@@ -60,6 +72,17 @@ class ProjectUpdate(BaseModel):
     safety_restrictions: SafetyRestrictions | None = None
     browser_settings: BrowserSettings | None = None
     test_credentials_ref: uuid.UUID | None = None
+
+    @field_validator("base_url", mode="before")
+    @classmethod
+    def normalize_base_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            if v and not re.match(r"^https?://", v, re.IGNORECASE):
+                if re.match(r"^(?:localhost|127\.0\.0\.1)(?::\d+)?(?:\/.*)?$", v, re.IGNORECASE):
+                    return f"http://{v}"
+                return f"https://{v}"
+        return v
 
 
 class ProjectRead(BaseModel):
