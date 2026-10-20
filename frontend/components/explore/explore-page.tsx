@@ -690,7 +690,7 @@ export function ExplorePage() {
             className="shadow-xl font-medium px-6 py-3 rounded-full flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <MaterialIcon name="auto_awesome" size={20} />
-            <span>Review {state.missions.length} Journeys</span>
+            <span>Review {state.missions.length} Flows</span>
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse ml-1" />
           </Button>
         </div>

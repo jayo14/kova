@@ -28,10 +28,10 @@ export function FlowEmptyState({ projectId, baseUrl }: FlowEmptyStateProps) {
         />
       </div>
       <h3 className="text-body font-semibold text-foreground mb-1.5">
-        No missions yet
+        No flows yet
       </h3>
       <p className="text-body-sm text-muted-foreground max-w-sm mx-auto mb-5 leading-relaxed">
-        Give Kova a job and let it figure out how to accomplish it.
+        Explore your website to automatically discover flows, or give Kova a goal.
       </p>
       <Link
         href={exploreHref}
@@ -40,7 +40,7 @@ export function FlowEmptyState({ projectId, baseUrl }: FlowEmptyStateProps) {
           "inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-body-sm font-medium shadow-sm transition-all"
         )}
       >
-        <span>Give Kova a job</span>
+        <span>Explore your product</span>
         <MaterialIcon name="arrow_forward" size={16} />
       </Link>
     </section>

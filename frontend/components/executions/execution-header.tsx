@@ -56,11 +56,11 @@ export function ExecutionHeader({
           className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
         >
           <MaterialIcon name="arrow_back" size={16} />
-          <span>Mission</span>
+          <span>Flow</span>
         </Link>
         <span className="text-border">/</span>
         <span className="text-foreground font-medium truncate max-w-[200px] sm:max-w-xs">
-          Execution
+          Proof Run
         </span>
       </nav>
 

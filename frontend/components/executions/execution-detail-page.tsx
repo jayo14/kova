@@ -445,7 +445,7 @@ export function ExecutionDetailPage({
           <div className="pt-3 border-t border-border/70 flex flex-wrap items-center justify-between gap-3">
             <span className="text-caption text-muted-foreground">
               {reportStatus === "completed"
-                ? "Mission verified successfully. Re-run anytime to test regression."
+                ? "Flow verified successfully. Re-run anytime to test regression."
                 : "Review observations and re-run with latest updates."}
             </span>
             <Button

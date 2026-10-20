@@ -17,10 +17,10 @@ export function ExecutionEmptyState() {
         />
       </div>
       <h3 className="text-body font-semibold text-foreground mb-1.5">
-        No executions yet
+        No runs yet
       </h3>
       <p className="text-body-sm text-muted-foreground max-w-sm mx-auto mb-5 leading-relaxed">
-        Run a mission and Kova will show you what happened.
+        Run a flow to generate visual proof, action traces, and regressions.
       </p>
       <Link
         href="/flows"
@@ -29,7 +29,7 @@ export function ExecutionEmptyState() {
           "inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-body-sm font-medium shadow-sm transition-all"
         )}
       >
-        <span>View missions</span>
+        <span>View flows</span>
         <MaterialIcon name="arrow_forward" size={16} />
       </Link>
     </section>
