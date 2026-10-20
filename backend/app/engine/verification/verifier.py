@@ -1033,7 +1033,7 @@ class Verifier:
         return checks
 
     async def _resolve_target(self, target: Any):
-        """Resolve a target specification to a Playwright Locator.
+        """Resolve a target specification to a Playwright Locator with resilient multi-strategy fallback.
 
         Accepts either dict specification or raw CSS/selector string.
         """
@@ -1046,30 +1046,42 @@ class Verifier:
             try:
                 return await self.resolver.resolve(target_str)
             except Exception:
-                return self.page.locator(target_str).first
+                try:
+                    return await self.resolver.resolve_first_visible(target_str)
+                except Exception:
+                    return self.page.locator(target_str).first
 
         if not isinstance(target, dict):
             raise VerificationError("Invalid target specification", "resolve")
 
-        if "test_id" in target and target["test_id"]:
-            return await self.resolver.resolve(
-                target["test_id"], strategy=ResolutionStrategy.TEST_ID
-            )
-        if "role" in target and "name" in target and target["role"] and target["name"]:
-            return await self.resolver.resolve(
-                target["name"], role=target["role"], strategy=ResolutionStrategy.ROLE_NAME
-            )
-        if "label" in target and target["label"]:
-            return await self.resolver.resolve(
-                target["label"], strategy=ResolutionStrategy.LABEL
-            )
-        if "text" in target and target["text"]:
-            return await self.resolver.resolve(
-                target["text"], strategy=ResolutionStrategy.TEXT
-            )
-        if "css" in target and target["css"]:
-            return self.page.locator(target["css"]).first
-        if "name" in target and target["name"]:
-            return await self.resolver.resolve(target["name"])
+        # Ranked candidate specifications from most specific to broadest
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        if target.get("test_id"):
+            candidates.append((target["test_id"], {"strategy": ResolutionStrategy.TEST_ID}))
+        if target.get("role") and target.get("name"):
+            candidates.append((target["name"], {"role": target["role"], "strategy": ResolutionStrategy.ROLE_NAME}))
+        if target.get("label"):
+            candidates.append((target["label"], {"strategy": ResolutionStrategy.LABEL}))
+        if target.get("text"):
+            candidates.append((target["text"], {"strategy": ResolutionStrategy.TEXT}))
+        if target.get("name"):
+            candidates.append((target["name"], {}))
+        if target.get("css"):
+            candidates.append((target["css"], {"strategy": ResolutionStrategy.CSS}))
 
-        raise VerificationError("Invalid target specification", "resolve")
+        for target_val, kwargs in candidates:
+            try:
+                return await self.resolver.resolve(target_val, **kwargs)
+            except Exception:
+                continue
+
+        for target_val, kwargs in candidates:
+            try:
+                return await self.resolver.resolve_first_visible(target_val, **kwargs)
+            except Exception:
+                continue
+
+        if target.get("css"):
+            return self.page.locator(target["css"]).first
+
+        raise VerificationError(f"Target not found: {target}", "resolve")

@@ -5,6 +5,7 @@ Priority order: data-testid → role+name → label → text → CSS selector.
 """
 
 import logging
+import re
 from enum import Enum
 from typing import Any
 
@@ -142,6 +143,17 @@ class TargetResolver:
             except Exception:
                 continue
 
+        # Multi-strategy resilient self-healing pass before failing
+        try:
+            healed = await self._resolve_resilient_fallback(target, role)
+            if healed is not None:
+                logger.info("Resilient self-healing locator resolved '%s'", target)
+                return healed
+        except AmbiguousTargetError:
+            raise
+        except Exception as e:
+            logger.debug("Resilient fallback attempt encountered: %s", e)
+
         raise TargetNotFoundError(target)
 
     async def _resolve_with_strategy(
@@ -242,6 +254,102 @@ class TargetResolver:
     async def _by_css(self, target: str, role: str) -> Locator:
         """Resolve by CSS selector (last resort)."""
         return self.page.locator(target)
+
+    async def _resolve_resilient_fallback(
+        self, target: str, role: str = ""
+    ) -> Locator | None:
+        """Attempt self-healing resilient resolution when standard strategies fail.
+
+        Handles selector drift such as:
+        - CSS text pseudo-classes (:has-text('...'), :text('...'))
+        - Playwright text selectors (text=...)
+        - Test IDs or IDs that changed slightly (e.g., 'submit-button' -> 'submit')
+        - Tag shifts (button vs div[role='button'] vs a)
+        - Substring matching for ARIA labels and title attributes
+        """
+        clean_targets: list[str] = []
+
+        # 1. Extract inner text if CSS text selector was used
+        has_text_match = re.search(r":(?:has-text|text)\(['\"]?([^'\")]+)['\"]?\)", target)
+        if has_text_match:
+            clean_targets.append(has_text_match.group(1).strip())
+
+        text_prefix_match = re.match(r"^text=[\"']?([^\"']+)[\"']?$", target.strip())
+        if text_prefix_match:
+            clean_targets.append(text_prefix_match.group(1).strip())
+
+        # 2. Extract potential label/text from data-testid or id-like slug (e.g. "submit-btn" -> "submit")
+        slug_match = re.match(r"^[a-zA-Z0-9_\-]+$", target.strip())
+        if slug_match and not (" " in target):
+            parts = [p for p in re.split(r"[-_]", target.strip()) if p]
+            meaningful_parts = [
+                p for p in parts
+                if p.lower() not in {"btn", "button", "input", "field", "txt", "link"}
+            ]
+            if meaningful_parts:
+                clean_targets.append(" ".join(meaningful_parts))
+            # Also try individual meaningful parts
+            for mp in meaningful_parts:
+                if len(mp) >= 2 and mp not in clean_targets:
+                    clean_targets.append(mp)
+            # Also try all words joined
+            joined = " ".join(parts)
+            if joined not in clean_targets:
+                clean_targets.append(joined)
+
+        # Always also consider the stripped original target
+        stripped = target.strip()
+        if stripped not in clean_targets:
+            clean_targets.append(stripped)
+
+        # Generate candidates to probe
+        for text_candidate in clean_targets:
+            if not text_candidate or len(text_candidate) < 2:
+                continue
+
+            probes: list[Locator] = []
+
+            # (a) Role with case-insensitive name match
+            roles_to_try = [role] if role else ["button", "link", "textbox", "combobox", "tab", "menuitem"]
+            for r in roles_to_try:
+                if r:
+                    probes.append(self.page.get_by_role(r, name=text_candidate, exact=False))
+
+            # (b) Visible text (case-insensitive substring)
+            probes.append(self.page.get_by_text(text_candidate, exact=False))
+
+            # (c) Accessible labels and placeholders
+            probes.append(self.page.get_by_label(text_candidate, exact=False))
+            probes.append(self.page.get_by_placeholder(text_candidate, exact=False))
+
+            # (d) Attribute substring (aria-label, title, name, alt)
+            safe_text = re.sub(r"['\"\\]", "", text_candidate)
+            if safe_text:
+                probes.append(self.page.locator(f"[aria-label*='{safe_text}' i]"))
+                probes.append(self.page.locator(f"[title*='{safe_text}' i]"))
+                probes.append(self.page.locator(f"input[name*='{safe_text}' i], textarea[name*='{safe_text}' i]"))
+
+            for probe in probes:
+                try:
+                    count = await probe.count()
+                    if count == 1:
+                        if await probe.is_visible():
+                            return probe
+                    elif count > 1:
+                        visible_enabled: list[Locator] = []
+                        for i in range(count):
+                            nth = probe.nth(i)
+                            try:
+                                if await nth.is_visible() and await nth.is_enabled():
+                                    visible_enabled.append(nth)
+                            except Exception:
+                                pass
+                        if len(visible_enabled) == 1:
+                            return visible_enabled[0]
+                except Exception:
+                    continue
+
+        return None
 
     # --- Helpers ---
 
