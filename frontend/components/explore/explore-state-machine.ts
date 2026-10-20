@@ -168,19 +168,54 @@ export function exploreReducer(
       };
 
     case "SET_MISSIONS": {
-      const recommendedIds = action.missions
-        .filter((m) => m.recommended)
-        .map((m) => m.id);
-      const defaultSelected =
-        recommendedIds.length > 0
-          ? recommendedIds
-          : action.missions.slice(0, 1).map((m) => m.id);
+      const incoming = action.missions;
+      if (state.missions.length === 0) {
+        const recommendedIds = incoming
+          .filter((m) => m.recommended)
+          .map((m) => m.id);
+        const defaultSelected =
+          recommendedIds.length > 0
+            ? recommendedIds
+            : incoming.slice(0, 1).map((m) => m.id);
+
+        return {
+          ...state,
+          missions: incoming,
+          recommendationNote: action.recommendation,
+          selectedMissionIds: defaultSelected,
+        };
+      }
+
+      // Merge and deduplicate by title or id so progressive streaming preserves selection
+      const mergedMap = new Map<string, SuggestedMission>();
+      for (const m of state.missions) {
+        mergedMap.set(m.id, m);
+      }
+      for (const m of incoming) {
+        const existingEntry = Array.from(mergedMap.entries()).find(
+          ([, em]) => em.title?.trim().toLowerCase() === m.title?.trim().toLowerCase()
+        );
+        if (existingEntry) {
+          mergedMap.set(existingEntry[0], { ...existingEntry[1], ...m, id: existingEntry[0] });
+        } else {
+          mergedMap.set(m.id, m);
+        }
+      }
+
+      const mergedMissions = Array.from(mergedMap.values());
+      const validSelectedIds = state.selectedMissionIds.filter((id) =>
+        mergedMissions.some((m) => m.id === id)
+      );
+      const finalSelected =
+        validSelectedIds.length > 0
+          ? validSelectedIds
+          : mergedMissions.filter((m) => m.recommended).map((m) => m.id).slice(0, 1);
 
       return {
         ...state,
-        missions: action.missions,
-        recommendationNote: action.recommendation,
-        selectedMissionIds: defaultSelected,
+        missions: mergedMissions,
+        recommendationNote: action.recommendation || state.recommendationNote,
+        selectedMissionIds: finalSelected,
       };
     }
 

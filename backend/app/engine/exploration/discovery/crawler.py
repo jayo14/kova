@@ -89,8 +89,7 @@ class DiscoveryCrawler:
                     continue
 
                 logger.debug("Crawling URL: %s at depth %d", current_url, depth)
-                await browser_page.goto(current_url, wait_until="domcontentloaded", timeout=15000)
-                await browser_page.wait_for_timeout(500)
+                await browser_page.goto(current_url, wait_until="domcontentloaded", timeout=10000)
 
                 # Extract page info
                 title = await browser_page.title()
