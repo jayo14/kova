@@ -24,6 +24,7 @@ class DiscoveredMission(BaseModel):
     route_analysis: dict | None = None  # {path, accessible, status, elements_count}
     estimated_time_seconds: int | None = None
     expectation_source: str = "unspecified"
+    persona_evidence: str | None = None
     review_required: bool = True
     discovery_evidence: list[dict] = Field(default_factory=list)
 

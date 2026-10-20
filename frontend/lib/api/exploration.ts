@@ -515,6 +515,7 @@ function mapCandidateMissions(rawList: unknown[]): SuggestedMission[] {
       description: String(m.description || m.objective || ""),
       objective: String(m.objective || m.description || ""),
       persona: m.persona ? String(m.persona) : undefined,
+      personaEvidence: m.persona_evidence ? String(m.persona_evidence) : undefined,
       steps: rawSteps.map((s) => (typeof s === "object" && s !== null ? (s as Record<string, unknown>) : String(s))),
       journey: Array.isArray(m.journey) ? m.journey.map(String) : undefined,
       // CRITICAL: keep the success condition structured. Stringifying it here

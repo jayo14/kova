@@ -1424,42 +1424,192 @@ class ExplorationEngine:
         return None
 
     async def _detect_roles(self, page, observation: dict) -> list[dict]:
-        """Detects if application provides role switching (e.g. Student, Lecturer, Admin)."""
-        text = observation.get("text", "").lower()
-        elements = observation.get("elements", [])
+        """Detects if application provides distinct roles or candidate workspaces.
 
-        roles = []
-        role_candidates = [
-            ("student", "Student", "Learner workspace with material access and quiz tools", "school"),
-            ("lecturer", "Lecturer", "Teaching workspace with course creation and grading tools", "psychology"),
-            ("admin", "Administrator", "System settings, organization and member controls", "settings"),
-            ("teacher", "Teacher", "Educator workspace with assignment and student tracking", "school"),
-            ("creator", "Creator", "Content authoring and publishing dashboard", "edit"),
-        ]
+        Detection sources:
+        1. Explicit DOM role switchers (<select name="role">, radio options, data-role attributes).
+        2. Explicit multi-role login entry points ("Sign in as Student", "Sign in as Instructor").
+        3. Multi-namespace route structure discovered from on-page navigation links (/admin vs /app, /seller vs /buyer).
 
-        for r_id, label, desc, icon in role_candidates:
-            # Look for role in buttons, links, or text
-            mentioned_in_elements = any(
-                r_id in el.get("name", "").lower() for el in elements
-            )
-            mentioned_in_text = r_id in text
-            if mentioned_in_elements or mentioned_in_text:
-                roles.append({
-                    "id": r_id,
-                    "label": label,
-                    "description": desc,
-                    "icon": icon,
-                })
+        Returns a list of role option dicts for AgentQuestion if 2 or more distinct roles/workspaces
+        are detected. Returns empty list if unified or public.
+        """
+        roles_by_id: dict[str, dict] = {}
 
-        return roles
+        # 1. Inspect DOM strictly for role-switcher controls, select dropdowns, and portal buttons
+        if page:
+            try:
+                dom_roles = await page.evaluate("""
+                    () => {
+                        const detected = [];
+                        // Check select dropdowns
+                        document.querySelectorAll('select').forEach(sel => {
+                            const name = (sel.name || sel.id || sel.getAttribute('aria-label') || '').toLowerCase();
+                            if (name.includes('role') || name.includes('user_type') || name.includes('account_type') || name.includes('persona')) {
+                                Array.from(sel.options).forEach(opt => {
+                                    const val = (opt.value || '').trim();
+                                    const txt = (opt.textContent || '').trim();
+                                    const label = txt || val;
+                                    if (label && label.length < 30 && !['select', 'choose', 'all', 'none'].includes(label.toLowerCase())) {
+                                        const cleanId = (val || txt).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+                                        detected.push({
+                                            id: cleanId,
+                                            label: label,
+                                            description: `Role option from ${sel.name || 'role selector'}`,
+                                            icon: cleanId.includes('admin') ? 'admin_panel_settings' : 'person',
+                                            source: 'select'
+                                        });
+                                    }
+                                });
+                            }
+                        });
 
-    async def _analyze_routes(self, page, base_url: str) -> list[dict]:
+                        // Check explicit data attributes
+                        document.querySelectorAll('[data-role], [data-persona], [data-account-type]').forEach(el => {
+                            const r = (el.getAttribute('data-role') || el.getAttribute('data-persona') || el.getAttribute('data-account-type') || '').trim();
+                            if (r && r.length < 30 && !['button', 'tab', 'menu'].includes(r.toLowerCase())) {
+                                const cleanId = r.toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+                                detected.push({
+                                    id: cleanId,
+                                    label: r.charAt(0).toUpperCase() + r.slice(1),
+                                    description: `Workspace indicated by [data-role="${r}"]`,
+                                    icon: cleanId.includes('admin') ? 'admin_panel_settings' : 'badge',
+                                    source: 'data_attribute'
+                                });
+                            }
+                        });
+
+                        // Check explicit action buttons with 'sign in as <role>', 'login as <role>', or '<role> portal'
+                        const roleMatches = [
+                            ['admin', 'Administrator', 'System management, organization settings, and member controls', 'admin_panel_settings'],
+                            ['student', 'Student', 'Learner workspace with material access and courses', 'school'],
+                            ['instructor', 'Instructor', 'Teaching workspace with course creation and grading tools', 'psychology'],
+                            ['teacher', 'Teacher', 'Educator workspace with assignment and student tracking', 'school'],
+                            ['seller', 'Seller / Vendor', 'Merchant catalog, inventory, and sales management', 'storefront'],
+                            ['buyer', 'Customer / Shopper', 'Product catalog, shopping cart, and orders', 'shopping_bag'],
+                            ['driver', 'Driver', 'Driver dispatch, rides, and route tracking', 'directions_car'],
+                            ['rider', 'Rider / Passenger', 'Passenger ride booking and trip history', 'hail'],
+                            ['partner', 'Partner', 'Partner integration and agency dashboard', 'handshake'],
+                        ];
+
+                        document.querySelectorAll('button, a[href]').forEach(el => {
+                            const txt = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                            for (const [rId, rLabel, rDesc, rIcon] of roleMatches) {
+                                if (
+                                    txt === `sign in as ${rId}` ||
+                                    txt === `login as ${rId}` ||
+                                    txt === `log in as ${rId}` ||
+                                    txt === `${rId} login` ||
+                                    txt === `${rId} portal` ||
+                                    txt === `${rId} sign in`
+                                ) {
+                                    detected.push({
+                                        id: rId,
+                                        label: `${rLabel} Portal`,
+                                        description: rDesc,
+                                        icon: rIcon,
+                                        source: 'portal_button'
+                                    });
+                                }
+                            }
+                        });
+
+                        return detected;
+                    }
+                """)
+                for r in dom_roles:
+                    if r["id"] not in roles_by_id:
+                        roles_by_id[r["id"]] = r
+            except Exception as e:
+                logger.debug("DOM role inspection encountered: %s", e)
+
+        # 2. Inspect discovered links for multiple candidate application namespaces (/admin, /app, etc.)
+        try:
+            current_url = getattr(page, "url", self.url) if page else self.url
+            base_parsed = urlparse(current_url)
+            page_links = await self._extract_page_links(page, base_parsed) if page else []
+            paths = [l.get("path", "").lower() for l in page_links if l.get("path")]
+
+            namespace_catalog = {
+                "admin": {
+                    "prefixes": ("/admin", "/administrator", "/console", "/manage"),
+                    "label": "Admin Console (/admin)",
+                    "description": "System administration, user access control, and settings",
+                    "icon": "admin_panel_settings",
+                },
+                "app": {
+                    "prefixes": ("/app", "/dashboard", "/workspace", "/portal"),
+                    "label": "Application Workspace (/app)",
+                    "description": "Main application dashboard and product workflows",
+                    "icon": "dashboard",
+                },
+                "seller": {
+                    "prefixes": ("/seller", "/vendor", "/merchant", "/supplier"),
+                    "label": "Seller Portal (/seller)",
+                    "description": "Inventory listings, orders, and storefront management",
+                    "icon": "storefront",
+                },
+                "buyer": {
+                    "prefixes": ("/shop", "/store", "/products", "/marketplace", "/catalog"),
+                    "label": "Customer Storefront",
+                    "description": "Product browsing, cart, and consumer purchasing",
+                    "icon": "shopping_bag",
+                },
+                "instructor": {
+                    "prefixes": ("/instructor", "/teacher", "/educator"),
+                    "label": "Instructor Workspace",
+                    "description": "Course creation, curriculum management, and grading",
+                    "icon": "school",
+                },
+                "student": {
+                    "prefixes": ("/student", "/learn", "/courses"),
+                    "label": "Student Learning Workspace",
+                    "description": "Course access, lessons, and assignments",
+                    "icon": "menu_book",
+                },
+                "developer": {
+                    "prefixes": ("/developer", "/dev", "/docs", "/api"),
+                    "label": "Developer Platform (/docs)",
+                    "description": "API references, SDK documentation, and developer tools",
+                    "icon": "code",
+                },
+            }
+
+            for ns_id, ns_info in namespace_catalog.items():
+                if any(any(p.startswith(pref) for pref in ns_info["prefixes"]) for p in paths):
+                    if ns_id not in roles_by_id:
+                        roles_by_id[ns_id] = {
+                            "id": ns_id,
+                            "label": ns_info["label"],
+                            "description": ns_info["description"],
+                            "icon": ns_info["icon"],
+                            "source": "route_namespace",
+                        }
+        except Exception as e:
+            logger.debug("Namespace inspection encountered: %s", e)
+
+        # Only present role selection question if there are 2 or more distinct roles/workspaces
+        if len(roles_by_id) >= 2:
+            options = list(roles_by_id.values())
+            # Add public visitor option so the user can choose to explore the public site
+            options.append({
+                "id": "visitor",
+                "label": "Public Surface",
+                "description": "Explore the public landing page, general features, and visitor journeys",
+                "icon": "public",
+                "source": "fallback",
+            })
+            return options
+
+        return []
+
+    async def _analyze_routes(self, page, base_url: str, selected_role: str | None = None) -> list[dict]:
         """Bounded exploration: build an application map.
 
         Strategy:
         1. Try sitemap.xml first (fast, comprehensive)
         2. Scan page DOM for links (a[href], nav, buttons)
-        3. Prioritize by keywords (auth, dashboard, settings)
+        3. Prioritize by keywords and selected role (elevating chosen role/workspace)
         4. Detect auth boundaries
         5. Cap at 10 routes probed in parallel via API request
 
@@ -1501,8 +1651,8 @@ class ExplorationEngine:
 
         logger.info("DOM scan found %d additional routes/buttons", len(page_links))
 
-        # Step 3: Prioritize by keywords
-        prioritized = self._prioritize_routes(route_map)
+        # Step 3: Prioritize by keywords and selected role
+        prioritized = self._prioritize_routes(route_map, selected_role=selected_role)
 
         # Step 4: Probe top routes via API request (exclude DOM buttons from HTTP probe)
         network_targets = [r for r in prioritized if not r.get("is_button")][:6]
@@ -1670,8 +1820,8 @@ class ExplorationEngine:
 
         return links
 
-    def _prioritize_routes(self, routes: list[dict]) -> list[dict]:
-        """Prioritize routes by feature importance, elevating core workflows over auth."""
+    def _prioritize_routes(self, routes: list[dict], selected_role: str | None = None) -> list[dict]:
+        """Prioritize routes by feature importance, elevating core workflows and selected workspace over auth."""
         priority_map = {
             # Highest priority: Dashboards and core application workspaces
             "dashboard": 0,
@@ -1679,7 +1829,15 @@ class ExplorationEngine:
             "app": 0,
             "portal": 0,
             "console": 0,
-            # Core feature actions and CRUD workflows (educational / productivity)
+            # Core feature actions and CRUD workflows
+            "create": 1,
+            "new": 1,
+            "manage": 1,
+            "project": 1,
+            "repo": 1,
+            "code": 1,
+            "api": 1,
+            "docs": 1,
             "quiz": 1,
             "study": 1,
             "exam": 1,
@@ -1692,14 +1850,10 @@ class ExplorationEngine:
             "review": 1,
             "generate": 1,
             "generator": 1,
-            "create": 1,
-            "new": 1,
             "edit": 1,
-            "manage": 1,
             "course": 1,
             "document": 1,
             "note": 1,
-            "project": 1,
             "upload": 1,
             "analytics": 1,
             # Content discovery and library
@@ -1734,6 +1888,10 @@ class ExplorationEngine:
             path_lower = route["path"].lower()
             text_lower = (route.get("text") or "").lower()
             combined = f"{path_lower} {text_lower}"
+            if selected_role and selected_role.lower() != "visitor":
+                r_clean = selected_role.lower()
+                if f"/{r_clean}" in path_lower or r_clean in text_lower:
+                    return -1
             for kw, priority in priority_map.items():
                 if kw in combined:
                     return priority
@@ -1896,7 +2054,7 @@ class ExplorationEngine:
         missions: list[DiscoveredMission] = []
 
         # Phase 1: Route analysis
-        route_map = await self._analyze_routes(page, current_url)
+        route_map = await self._analyze_routes(page, current_url, selected_role=selected_role)
         accessible_routes = [r for r in route_map if r["accessible"]]
         auth_routes = [r for r in route_map if r["category"] == "auth"]
         form_routes = [
@@ -1958,8 +2116,13 @@ class ExplorationEngine:
 
         # Phase 2: Persona detection
         detected_personas = self._detect_personas(route_map)
-        persona_name = selected_role.capitalize() if selected_role else (detected_personas[0].capitalize() if detected_personas else "User")
-        logger.info("Detected personas: %s, using: %s", detected_personas, persona_name)
+        persona_name = selected_role.capitalize() if selected_role else (detected_personas[0].capitalize() if detected_personas else "Visitor")
+        persona_evidence = (
+            f"Selected workspace ({selected_role})"
+            if selected_role
+            else ("Grounded from developer platform routes" if any("developer" in p for p in detected_personas) else "Public visitor perspective")
+        )
+        logger.info("Detected personas: %s, using: %s (%s)", detected_personas, persona_name, persona_evidence)
 
         # Collect interactive elements for fallback
         seen_labels: set[str] = set()
@@ -2009,6 +2172,7 @@ class ExplorationEngine:
                 for gm in goal_missions:
                     if mission_count >= max_missions:
                         break
+                    gm.persona_evidence = persona_evidence
                     missions.append(gm)
                     mission_count += 1
 
@@ -2056,6 +2220,7 @@ class ExplorationEngine:
                                 description=j.description,
                                 objective=j.objective,
                                 persona=j.persona or persona_name,
+                                persona_evidence=persona_evidence,
                                 category=j.category,
                                 journey=j.journey,
                                 steps=j.steps,

@@ -68,6 +68,7 @@ export interface SuggestedMission {
   steps: Array<string | Record<string, unknown>>;
   journey?: string[];
   persona?: string;
+  personaEvidence?: string;
   objective?: string;
   category?: string; // auth, feature, content, navigation
   /** Structured verification condition — must stay an object end-to-end. */
@@ -365,6 +366,7 @@ export interface UpdateMissionInput {
   name?: string;
   description?: string;
   persona?: string;
+  personaEvidence?: string;
   objective?: string;
   steps?: Array<string | Record<string, unknown>>;
   /** Structured verification condition — passed through verbatim to the backend. */
