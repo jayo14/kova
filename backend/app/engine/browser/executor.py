@@ -86,7 +86,10 @@ class ActionExecutor:
         """
         # Step 1: Validate
         try:
-            action = validate_action(raw_action)
+            if isinstance(raw_action, Action):
+                action = raw_action
+            else:
+                action = validate_action(raw_action)
         except ActionValidationError as e:
             logger.warning("Action validation failed: %s", e)
             return {
@@ -100,9 +103,9 @@ class ActionExecutor:
             }
 
         # Step 2: Resolve credential reference (if present)
-        credential_id = raw_action.get("credential_id")
+        credential_id = raw_action.get("credential_id") if isinstance(raw_action, dict) else getattr(raw_action, "credential_id", None)
         if credential_id:
-            credential_field = raw_action.get("credential_field", "password")
+            credential_field = raw_action.get("credential_field", "password") if isinstance(raw_action, dict) else getattr(raw_action, "credential_field", "password")
             try:
                 resolved_value = await self._resolve_credential(
                     credential_id, action, field=credential_field
@@ -236,65 +239,54 @@ class ActionExecutor:
             ) from None
 
     async def _resolve_target(self, action: Action):
-        """Resolve action target to a Playwright Locator."""
+        """Resolve action target to a Playwright Locator with resilient multi-strategy fallback."""
         target = action.target
 
-        try:
-            # Map ActionTarget fields to resolver
-            if target.test_id:
-                return await self.resolver.resolve(
-                    target.test_id, strategy=ResolutionStrategy.TEST_ID
-                )
-            if target.role and target.name:
-                return await self.resolver.resolve(
-                    target.name, role=target.role, strategy=ResolutionStrategy.ROLE_NAME
-                )
-            if target.label:
-                return await self.resolver.resolve(
-                    target.label, strategy=ResolutionStrategy.LABEL
-                )
-            if target.text:
-                return await self.resolver.resolve(
-                    target.text, strategy=ResolutionStrategy.TEXT
-                )
-            if target.css:
-                return await self.resolver.resolve(
-                    target.css, strategy=ResolutionStrategy.CSS
-                )
-            if target.name:
-                # Try name as generic target
-                return await self.resolver.resolve(target.name)
-        except AmbiguousTargetError as amb_err:
-            logger.info(
-                "Ambiguous target '%s' (%d matches); resolving to first visible element",
-                amb_err.target,
-                amb_err.count,
-            )
+        # Ranked candidate specifications from most specific to broadest
+        candidates: list[tuple[str, dict[str, Any]]] = []
+        if target.test_id:
+            candidates.append((target.test_id, {"strategy": ResolutionStrategy.TEST_ID}))
+        if target.role and target.name:
+            candidates.append((target.name, {"role": target.role, "strategy": ResolutionStrategy.ROLE_NAME}))
+        if target.label:
+            candidates.append((target.label, {"strategy": ResolutionStrategy.LABEL}))
+        if target.text:
+            candidates.append((target.text, {"strategy": ResolutionStrategy.TEXT}))
+        if target.name:
+            candidates.append((target.name, {}))
+        if target.css:
+            candidates.append((target.css, {"strategy": ResolutionStrategy.CSS}))
+
+        # 1. Primary pass: try candidates in prioritized order
+        last_ambiguous_err: AmbiguousTargetError | None = None
+        for target_val, kwargs in candidates:
             try:
-                if target.test_id:
-                    return await self.resolver.resolve_first_visible(
-                        target.test_id, strategy=ResolutionStrategy.TEST_ID
-                    )
-                if target.role and target.name:
-                    return await self.resolver.resolve_first_visible(
-                        target.name, role=target.role, strategy=ResolutionStrategy.ROLE_NAME
-                    )
-                if target.label:
-                    return await self.resolver.resolve_first_visible(
-                        target.label, strategy=ResolutionStrategy.LABEL
-                    )
-                if target.text:
-                    return await self.resolver.resolve_first_visible(
-                        target.text, strategy=ResolutionStrategy.TEXT
-                    )
-                if target.css:
-                    return await self.resolver.resolve_first_visible(
-                        target.css, strategy=ResolutionStrategy.CSS
-                    )
-                if target.name:
-                    return await self.resolver.resolve_first_visible(target.name)
+                return await self.resolver.resolve(target_val, **kwargs)
+            except AmbiguousTargetError as amb_err:
+                last_ambiguous_err = amb_err
+                # Attempt first visible element for this candidate
+                try:
+                    return await self.resolver.resolve_first_visible(target_val, **kwargs)
+                except Exception:
+                    pass
+            except TargetNotFoundError:
+                continue
             except Exception:
-                pass
+                continue
+
+        # 2. Resilient fallback pass: unconstrained resolution across any available identifiers
+        fallback_targets = [t for t in [target.test_id, target.name, target.text, target.label, target.css] if t]
+        for ft in fallback_targets:
+            try:
+                return await self.resolver.resolve_first_visible(ft)
+            except Exception:
+                continue
+
+        if last_ambiguous_err:
+            logger.info(
+                "Target resolution ambiguous across all candidates: %s",
+                last_ambiguous_err,
+            )
 
         raise TargetNotFoundError(str(target.to_dict()))
 
