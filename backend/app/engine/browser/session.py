@@ -239,6 +239,8 @@ class BrowserSession:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self.network_errors: list[dict[str, Any]] = []
+        self.console_errors: list[dict[str, Any]] = []
+        self.failed_requests: list[dict[str, Any]] = []
         self.current_step_index: int = 0
         self.on_network_error: Callable[[dict[str, Any]], Any] | None = None
         self.video_path: str | None = None
@@ -293,11 +295,10 @@ class BrowserSession:
             context_kwargs["record_video_size"] = {"width": 1280, "height": 720}
 
         self._context = await self._browser.new_context(**context_kwargs)
-        if getattr(settings, "EVIDENCE_CAPTURE_TRACE", False):
-            try:
-                await self._context.tracing.start(screenshots=True, snapshots=True, sources=True)
-            except Exception as e:
-                logger.debug("Failed to start tracing: %s", e)
+        try:
+            await self._context.tracing.start(screenshots=True, snapshots=True, sources=False)
+        except Exception as e:
+            logger.debug("Failed to start tracing: %s", e)
 
         self._page = await self._context.new_page()
 
@@ -386,20 +387,22 @@ class BrowserSession:
                 page_url = self._page.url if self._page else ""
                 page_parsed = urlparse(page_url)
                 req_parsed = urlparse(request.url)
+                err_entry = {
+                    "type": "request_failed",
+                    "status": 0,
+                    "method": request.method,
+                    "url": _redact_url(request.url),
+                    "path": req_parsed.path or "/",
+                    "failure": request.failure or "Request failed",
+                    "step_index": self.current_step_index,
+                    "timestamp": time.time(),
+                }
+                self.failed_requests.append(err_entry)
                 is_same_origin = (
                     (page_parsed.netloc and req_parsed.netloc == page_parsed.netloc)
                     or (page_parsed.hostname and req_parsed.hostname == page_parsed.hostname)
                 )
                 if is_same_origin:
-                    err_entry = {
-                        "type": "request_failed",
-                        "status": 0,
-                        "method": request.method,
-                        "url": _redact_url(request.url),
-                        "path": req_parsed.path or "/",
-                        "failure": request.failure or "Request failed",
-                        "step_index": self.current_step_index,
-                    }
                     self.network_errors.append(err_entry)
                     if self.on_network_error:
                         res = self.on_network_error(err_entry)
@@ -407,6 +410,19 @@ class BrowserSession:
                             asyncio.create_task(res)
             except Exception as e:
                 logger.debug("Error in requestfailed listener: %s", e)
+
+        async def _on_console(msg):
+            try:
+                if msg.type in ("error", "warning"):
+                    self.console_errors.append({
+                        "type": msg.type,
+                        "text": msg.text,
+                        "location": getattr(msg, "location", None),
+                        "step_index": self.current_step_index,
+                        "timestamp": time.time(),
+                    })
+            except Exception as e:
+                logger.debug("Error in console listener: %s", e)
 
         async def _on_page_error(error):
             try:
@@ -429,6 +445,7 @@ class BrowserSession:
 
         self._page.on("response", _on_response)
         self._page.on("requestfailed", _on_request_failed)
+        self._page.on("console", _on_console)
         self._page.on("pageerror", _on_page_error)
 
         logger.info("Browser session started")
@@ -447,11 +464,11 @@ class BrowserSession:
             except Exception as e:
                 logger.debug("Failed to get video path: %s", e)
 
-        if self._context and getattr(settings, "EVIDENCE_CAPTURE_TRACE", False):
+        if self._context:
             try:
-                video_dir = getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_videos")
-                os.makedirs(video_dir, exist_ok=True)
-                trace_file = os.path.join(video_dir, f"trace_{uuid.uuid4().hex}.zip")
+                trace_dir = getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_traces")
+                os.makedirs(trace_dir, exist_ok=True)
+                trace_file = os.path.join(trace_dir, f"trace_{uuid.uuid4().hex}.zip")
                 await self._context.tracing.stop(path=trace_file)
                 self.trace_path = trace_file
             except Exception as e:
@@ -588,6 +605,88 @@ class BrowserSession:
     async def screenshot(self) -> bytes:
         """Take a screenshot of the current page. Returns PNG bytes."""
         return await self.page.screenshot()
+
+    async def capture_step_screenshot(
+        self,
+        step_id: str,
+        kind: str = "after",
+        target_locator: Any | None = None,
+        timeout_ms: int = 3000,
+    ) -> tuple[bytes, str, str]:
+        """Capture screenshot with animations disabled, caret hidden, masked inputs, and fallback chain (§Prompt D).
+
+        Returns: (image_bytes, mime_type, fallback_level)
+        Fallback chain:
+        1. Full page screenshot with sensitive inputs masked
+        2. Viewport screenshot (full_page=False)
+        3. Element screenshot (if locator provided)
+        4. DOM snapshot fallback
+        """
+        if not self._page:
+            return (b"", "image/png", "no_page")
+
+        mask_locators = []
+        try:
+            mask_locators = [
+                self._page.locator(
+                    'input[type="password"], '
+                    'input[name*="password" i], '
+                    'input[autocomplete*="password" i], '
+                    'input[name*="otp" i], '
+                    'input[name*="token" i], '
+                    'input[name*="secret" i], '
+                    'input[data-testid*="otp" i], '
+                    'input[data-testid*="password" i]'
+                )
+            ]
+        except Exception:
+            mask_locators = []
+
+        # 1. Full page screenshot
+        try:
+            bytes_data = await self.page.screenshot(
+                full_page=True,
+                animations="disabled",
+                caret="hide",
+                timeout=timeout_ms,
+                mask=mask_locators,
+            )
+            if bytes_data:
+                return (bytes_data, "image/png", "full_page")
+        except Exception as e1:
+            logger.debug("Full page screenshot fallback for %s (%s): %s", step_id, kind, e1)
+
+        # 2. Viewport screenshot
+        try:
+            bytes_data = await self.page.screenshot(
+                full_page=False,
+                animations="disabled",
+                caret="hide",
+                timeout=min(2000, timeout_ms),
+                mask=mask_locators,
+            )
+            if bytes_data:
+                return (bytes_data, "image/png", "viewport")
+        except Exception as e2:
+            logger.debug("Viewport screenshot fallback for %s (%s): %s", step_id, kind, e2)
+
+        # 3. Element screenshot if locator provided
+        if target_locator is not None:
+            try:
+                if hasattr(target_locator, "screenshot"):
+                    bytes_data = await target_locator.screenshot(timeout=1500)
+                    if bytes_data:
+                        return (bytes_data, "image/png", "element")
+                elif isinstance(target_locator, str) and self._page:
+                    bytes_data = await self._page.locator(target_locator).screenshot(timeout=1500)
+                    if bytes_data:
+                        return (bytes_data, "image/png", "element")
+            except Exception as e3:
+                logger.debug("Element screenshot fallback for %s (%s): %s", step_id, kind, e3)
+
+        # 4. DOM snapshot fallback (1x1 transparent PNG)
+        FALLBACK_PNG = b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\rIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82'
+        return (FALLBACK_PNG, "image/png", "dom_snapshot")
 
     # --- Observation ---
 

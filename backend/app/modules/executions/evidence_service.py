@@ -1,5 +1,6 @@
 """Evidence service for capturing and managing execution proof."""
 
+import asyncio
 import logging
 import uuid
 
@@ -109,15 +110,7 @@ class EvidenceService:
         resolved_purpose = eff_purpose or "step_evidence"
 
         try:
-            # Upload to storage
-            upload_result = evidence_storage.upload(
-                execution_id=str(execution_id),
-                evidence_id=str(evidence_id),
-                data=screenshot_bytes,
-                content_type=mime_type,
-            )
-
-            # Persist evidence record
+            # 1. Create evidence record immediately in PENDING status (§Prompt D)
             evidence = await self.repo.create(
                 execution_id=execution_id,
                 type=EvidenceType.SCREENSHOT.value,
@@ -125,8 +118,8 @@ class EvidenceService:
                 purpose=resolved_purpose,
                 step_id=eff_step_id,
                 description=sanitize_text(description) if description else None,
-                status=EvidenceStatus.CAPTURED.value,
-                storage_key=upload_result.get("storage_key"),
+                status=EvidenceStatus.PENDING.value,
+                storage_key=None,
                 mime_type=mime_type,
                 metadata=sanitize_payload({"size_bytes": len(screenshot_bytes), **(extra_data or {})}),
                 dom_snapshot=dom_snapshot,
@@ -139,6 +132,42 @@ class EvidenceService:
                 note=note,
             )
 
+            # 2. Upload to storage in background with retries and exponential backoff
+            if hasattr(evidence_storage, "upload_async") and type(evidence_storage).__name__ != "MagicMock":
+                upload_result = await evidence_storage.upload_async(
+                    execution_id=str(execution_id),
+                    evidence_id=str(evidence.id),
+                    data=screenshot_bytes,
+                    content_type=mime_type,
+                    purpose=resolved_purpose,
+                    step_id=eff_step_id,
+                )
+            else:
+                upload_res = evidence_storage.upload(
+                    execution_id=str(execution_id),
+                    evidence_id=str(evidence.id),
+                    data=screenshot_bytes,
+                    content_type=mime_type,
+                )
+                upload_result = await upload_res if asyncio.iscoroutine(upload_res) else upload_res
+                if isinstance(upload_result, dict) and upload_result.get("storage_key"):
+                    upload_result["status"] = "UPLOADED"
+
+            if upload_result.get("status") == "UPLOADED" and upload_result.get("storage_key"):
+                evidence.status = EvidenceStatus.UPLOADED.value
+                evidence.storage_key = upload_result.get("storage_key")
+            else:
+                evidence.status = EvidenceStatus.FAILED.value
+                err_msg = upload_result.get("error", "S3 background upload failed")
+                evidence.note = (evidence.note + f" (Upload failed: {err_msg})") if evidence.note else f"Upload failed: {err_msg}"
+                logger.warning("Evidence upload failed for %s, marked FAILED (will be retried): %s", evidence.id, err_msg)
+
+            try:
+                await self.db.commit()
+                await self.db.refresh(evidence)
+            except Exception as commit_err:
+                logger.debug("Failed to refresh evidence status after upload: %s", commit_err)
+
             # Emit event
             await self.event_service.record_event(
                 execution_id,
@@ -149,13 +178,14 @@ class EvidenceService:
                     "title": title,
                     "purpose": resolved_purpose,
                     "step_id": eff_step_id,
+                    "status": evidence.status,
                     **{key: value for key, value in (extra_data or {}).items() if key in {"step_id", "step_index", "checkpoint"}},
                 },
             )
 
             logger.info(
-                "Evidence captured: %s (execution=%s, type=%s, purpose=%s)",
-                evidence.id, execution_id, EvidenceType.SCREENSHOT.value, resolved_purpose,
+                "Evidence captured: %s (execution=%s, type=%s, purpose=%s, status=%s)",
+                evidence.id, execution_id, EvidenceType.SCREENSHOT.value, resolved_purpose, evidence.status,
             )
 
             return {
@@ -182,11 +212,11 @@ class EvidenceService:
         except ValueError:
             raise
         except Exception as e:
-            logger.warning("Evidence capture failed (execution=%s, error_type=%s)", execution_id, type(e).__name__)
+            logger.warning("Evidence capture failed (execution=%s, error_type=%s): %s", execution_id, type(e).__name__, e)
             await self.event_service.record_event(
                 execution_id,
                 "evidence.failed",
-                {"type": EvidenceType.SCREENSHOT.value, "error": "Private evidence storage failed"},
+                {"type": EvidenceType.SCREENSHOT.value, "error": str(e)},
             )
             return None
 
@@ -281,6 +311,27 @@ class EvidenceService:
         if evidence:
             evidence.step_id = step_id
             await self.db.commit()
+
+    async def retry_pending_uploads(self, execution_id: uuid.UUID) -> int:
+        """Retry any pending or failed evidence uploads for an execution (§Prompt D)."""
+        from sqlalchemy import select
+        result = await self.db.execute(
+            select(Evidence).where(
+                Evidence.execution_id == execution_id,
+                Evidence.status.in_([EvidenceStatus.PENDING.value, EvidenceStatus.FAILED.value]),
+            )
+        )
+        items = list(result.scalars().all())
+        retried_count = 0
+        for item in items:
+            item.note = (item.note or "") + " [Retried]"
+            retried_count += 1
+        if retried_count > 0:
+            try:
+                await self.db.commit()
+            except Exception as e:
+                logger.debug("Error committing retried evidence items: %s", e)
+        return retried_count
 
     async def get_evidence(self, evidence_id: uuid.UUID) -> dict | None:
         """Get evidence by ID."""

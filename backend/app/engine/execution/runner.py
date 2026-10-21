@@ -1113,7 +1113,74 @@ class FlowRunner:
                         await self._capture_live_snapshot(browser, exec_id, step_index=i, state="observing")
                     except Exception:
                         pass
-                    await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
+
+                    step_id = step.get("step_id") or f"step_{i}"
+                    action_type = str(step.get("type", "")).lower()
+                    is_meaningful = action_type in (
+                        "navigate", "goto", "click", "submit", "type", "fill", "select", "press", "check", "uncheck"
+                    ) or "assert" in str(step.get("action", "")).lower()
+
+                    # Capture BEFORE state (§Prompt D)
+                    if is_meaningful and browser.is_started:
+                        try:
+                            before_bytes, mime, fallback = await browser.capture_step_screenshot(
+                                step_id=step_id, kind="before"
+                            )
+                            await self._record_step_evidence(
+                                ctx=ctx,
+                                browser=browser,
+                                step_id=step_id,
+                                kind="before",
+                                image_bytes=before_bytes,
+                                mime_type=mime,
+                                event_recorder=event_recorder,
+                                action_type=action_type,
+                            )
+                        except Exception as before_err:
+                            logger.debug("Non-fatal before step evidence error for %s: %s", step_id, before_err)
+
+                    try:
+                        await self._execute_step_with_retry(ctx, browser, action_executor, step, i, event_recorder)
+                    except Exception as step_exc:
+                        # Capture FAILURE state (§Prompt D)
+                        if browser.is_started:
+                            try:
+                                fail_bytes, mime, fallback = await browser.capture_step_screenshot(
+                                    step_id=step_id, kind="failure"
+                                )
+                                await self._record_step_evidence(
+                                    ctx=ctx,
+                                    browser=browser,
+                                    step_id=step_id,
+                                    kind="failure",
+                                    image_bytes=fail_bytes,
+                                    mime_type=mime,
+                                    event_recorder=event_recorder,
+                                    action_type=action_type,
+                                    error=str(step_exc),
+                                )
+                            except Exception:
+                                pass
+                        raise
+
+                    # Capture AFTER state (§Prompt D)
+                    if is_meaningful and browser.is_started:
+                        try:
+                            after_bytes, mime, fallback = await browser.capture_step_screenshot(
+                                step_id=step_id, kind="after"
+                            )
+                            await self._record_step_evidence(
+                                ctx=ctx,
+                                browser=browser,
+                                step_id=step_id,
+                                kind="after",
+                                image_bytes=after_bytes,
+                                mime_type=mime,
+                                event_recorder=event_recorder,
+                                action_type=action_type,
+                            )
+                        except Exception as after_err:
+                            logger.debug("Non-fatal after step evidence error for %s: %s", step_id, after_err)
 
                     # Step-level auth barrier gate: heal immediately if redirected to an auth barrier
                     from app.engine.browser.auth import is_auth_url, is_auth_page
@@ -1137,11 +1204,32 @@ class FlowRunner:
                                 logger.debug("Re-navigation after auth barrier healing failed: %s", re_nav_err)
 
                     step_check = await self._verify_step_postcondition(ctx, browser, verifier, step, i, event_recorder)
-                    if step_check is not None and not step_check.passed:
-                        failed_checks = [check for check in step_check.checks if not check.passed]
-                        unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
-                        error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
-                        raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
+                    if step_check is not None:
+                        # Capture ASSERTION state (§Prompt D)
+                        if browser.is_started:
+                            try:
+                                assert_bytes, mime, fallback = await browser.capture_step_screenshot(
+                                    step_id=step_id, kind="assertion"
+                                )
+                                await self._record_step_evidence(
+                                    ctx=ctx,
+                                    browser=browser,
+                                    step_id=step_id,
+                                    kind="assertion",
+                                    image_bytes=assert_bytes,
+                                    mime_type=mime,
+                                    event_recorder=event_recorder,
+                                    action_type="assertion",
+                                    passed=step_check.passed,
+                                )
+                            except Exception as assert_err:
+                                logger.debug("Non-fatal assertion evidence capture error: %s", assert_err)
+
+                        if not step_check.passed:
+                            failed_checks = [check for check in step_check.checks if not check.passed]
+                            unverified_types = {"no_condition", "empty_condition", "unknown_condition", "malformed_condition", "vacuous_condition"}
+                            error_code = "UNVERIFIED" if failed_checks and all(check.type in unverified_types for check in failed_checks) else ErrorCode.VERIFICATION_FAILED
+                            raise ExecutionError(f"Step {step.get('step_id', i)} postcondition failed", error_code=error_code)
 
                     # Update context.current_state after each step based on produces / mutates
                     if isinstance(step, dict):
@@ -1396,10 +1484,21 @@ class FlowRunner:
                     error_code=error_code,
                 )
 
-            # Step 8: Capture evidence
-            evidence_persisted = await self._capture_evidence(ctx, browser, verification, event_recorder)
+            # Step 8: Capture evidence (non-fatal; background offload with retries, §Prompt D)
+            try:
+                evidence_persisted = await self._capture_evidence(ctx, browser, verification, event_recorder)
+            except Exception as ev_err:
+                logger.warning("Evidence capture encountered exception (non-fatal): %s", ev_err)
+                evidence_persisted = False
+
+            # A failed upload downgrades the report to 'verified, evidence incomplete' and is retried. It never flips the verdict!
             if not evidence_persisted:
-                raise ExecutionError("Verified result could not be persisted with evidence", error_code="EVIDENCE_PERSISTENCE_FAILED")
+                ctx.current_state["evidence_incomplete"] = True
+                ctx.current_state["evidence_status"] = "incomplete"
+                ctx.record_event(EventTypes.EVIDENCE_FAILED, {
+                    "reason": "Evidence upload incomplete; retrying in background",
+                    "status": "verified, evidence incomplete",
+                })
 
             # Enforce gate on 5xx or failed requests after submit/click steps
             click_or_submit_indices = {
@@ -1813,6 +1912,65 @@ class FlowRunner:
 
         return snapshot_payload
 
+    async def _record_step_evidence(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        step_id: str,
+        kind: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        event_recorder: Callable | None = None,
+        action_type: str = "",
+        error: str | None = None,
+        passed: bool | None = None,
+    ) -> None:
+        """Record step-level before/after/assertion/failure evidence (§Prompt D)."""
+        current_url = getattr(browser.page, "url", "") if browser._page else ""
+        now_ts = time.time()
+        extra_meta = {
+            "kind": kind,
+            "step_id": step_id,
+            "url": current_url,
+            "timestamp": now_ts,
+            "action": action_type,
+        }
+        if error:
+            extra_meta["error"] = error
+        if passed is not None:
+            extra_meta["passed"] = passed
+
+        ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {
+            "title": f"{step_id} ({kind})",
+            "step_id": step_id,
+            "step_index": ctx.current_step_index,
+            "kind": kind,
+            "url": current_url,
+            "timestamp": now_ts,
+            "purpose": "step_evidence",
+        })
+
+        if event_recorder is not None:
+            try:
+                exec_uuid = uuid.UUID(ctx.execution_id)
+                if await self._execution_row_exists(exec_uuid):
+                    from app.infrastructure.database.session import async_session_factory
+                    from app.modules.executions.evidence_service import EvidenceService
+                    async with async_session_factory() as db:
+                        srv = EvidenceService(db)
+                        await srv.capture_screenshot(
+                            execution_id=exec_uuid,
+                            screenshot_bytes=image_bytes,
+                            title=f"{step_id} - {kind}",
+                            purpose="step_evidence",
+                            step_id=step_id,
+                            description=f"Browser state {kind} step execution at {current_url}",
+                            mime_type=mime_type,
+                            extra_data=extra_meta,
+                        )
+            except Exception as e:
+                logger.debug("Failed saving step evidence to DB (non-fatal): %s", e)
+
     async def _capture_evidence_screenshot(
         self,
         browser: BrowserSession,
@@ -1848,6 +2006,65 @@ class FlowRunner:
             logger.debug("Evidence screenshot capture failed: %s", ss_err)
 
         return snapshot_payload
+
+    async def _record_step_evidence(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        step_id: str,
+        kind: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        event_recorder: Callable | None = None,
+        action_type: str = "",
+        error: str | None = None,
+        passed: bool | None = None,
+    ) -> None:
+        """Record step-level before/after/assertion/failure evidence (§Prompt D)."""
+        current_url = getattr(browser.page, "url", "") if browser._page else ""
+        now_ts = time.time()
+        extra_meta = {
+            "kind": kind,
+            "step_id": step_id,
+            "url": current_url,
+            "timestamp": now_ts,
+            "action": action_type,
+        }
+        if error:
+            extra_meta["error"] = error
+        if passed is not None:
+            extra_meta["passed"] = passed
+
+        ctx.record_event(EventTypes.BROWSER_SCREENSHOT, {
+            "title": f"{step_id} ({kind})",
+            "step_id": step_id,
+            "step_index": ctx.current_step_index,
+            "kind": kind,
+            "url": current_url,
+            "timestamp": now_ts,
+            "purpose": "step_evidence",
+        })
+
+        if event_recorder is not None:
+            try:
+                exec_uuid = uuid.UUID(ctx.execution_id)
+                if await self._execution_row_exists(exec_uuid):
+                    from app.infrastructure.database.session import async_session_factory
+                    from app.modules.executions.evidence_service import EvidenceService
+                    async with async_session_factory() as db:
+                        srv = EvidenceService(db)
+                        await srv.capture_screenshot(
+                            execution_id=exec_uuid,
+                            screenshot_bytes=image_bytes,
+                            title=f"{step_id} - {kind}",
+                            purpose="step_evidence",
+                            step_id=step_id,
+                            description=f"Browser state {kind} step execution at {current_url}",
+                            mime_type=mime_type,
+                            extra_data=extra_meta,
+                        )
+            except Exception as e:
+                logger.debug("Failed saving step evidence to DB (non-fatal): %s", e)
 
     async def _process_user_input(
         self,
@@ -2783,11 +3000,13 @@ class FlowRunner:
                         except Exception as e:
                             logger.warning("Could not persist verification evidence: %s", e)
 
-                # 2. Capture screenshot of final verified state
+                # 2. Capture screenshot of final verified state using safe capture
                 try:
-                    screenshot_bytes = await browser.page.screenshot(type="png")
                     step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                     dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
+                    screenshot_bytes, mime, fallback = await browser.capture_step_screenshot(
+                        step_id=step_id_val, kind="assertion"
+                    )
                     if screenshot_bytes:
                         screenshot_evidence = await evidence_service.capture_screenshot(
                             execution_id=execution_id,
@@ -2796,10 +3015,13 @@ class FlowRunner:
                             description="Browser state after successful verification",
                             purpose="verification",
                             step_id=step_id_val,
+                            mime_type=mime,
                             extra_data={
                                 "step_index": ctx.current_step_index,
                                 "step_id": step_id_val,
                                 "checkpoint": "verification",
+                                "kind": "assertion",
+                                "fallback": fallback,
                             },
                             dom_snapshot=dom_snap or None,
                             note="Browser state after successful verification",
@@ -2812,29 +3034,56 @@ class FlowRunner:
                             "step_id": step_id_val,
                             "checkpoint": "verification",
                             "purpose": "verification",
+                            "kind": "assertion",
                         })
                         await self._emit_events(ctx, event_recorder)
                 except Exception as e:
                     logger.warning("Evidence screenshot capture failed: %s", e)
                     ctx.record_event(EventTypes.EVIDENCE_FAILED, {
                         "type": "SCREENSHOT",
-                        "error": "Screenshot capture failed",
+                        "error": str(e),
                     })
+
+                # 3. Upload Playwright trace artifact (§Prompt D)
+                if browser.trace_path and os.path.exists(browser.trace_path):
                     try:
-                        from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
-                        step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
-                        await evidence_service.create(
-                            execution_id=execution_id,
-                            type=EvidenceType.SCREENSHOT.value,
-                            title="Verified browser state",
-                            purpose="verification",
-                            step_id=step_id_val,
-                            description="Browser state after successful verification",
-                            status=EvidenceStatus.CAPTURED.value,
-                            note=f"Screenshot capture failed: {e}",
+                        trace_url = await asyncio.to_thread(
+                            evidence_storage.upload_file,
+                            execution_id=str(execution_id),
+                            file_path=browser.trace_path,
+                            content_type="application/zip",
+                            purpose="trace",
                         )
-                    except Exception:
-                        pass
+                        if trace_url:
+                            ctx.current_state["trace_url"] = trace_url
+                            ctx.record_event(EventTypes.ARTIFACT_CAPTURED, {
+                                "type": "TRACE",
+                                "url": trace_url,
+                                "title": "Playwright Trace",
+                            })
+                    except Exception as trace_err:
+                        logger.debug("Failed uploading trace file (non-fatal): %s", trace_err)
+
+                # 4. Upload Console Errors and Failed Requests Log (§Prompt D)
+                if browser.console_errors or browser.failed_requests:
+                    try:
+                        log_bytes = json.dumps({
+                            "console_errors": browser.console_errors,
+                            "failed_requests": browser.failed_requests,
+                        }, indent=2).encode("utf-8")
+                        upload_res = await evidence_storage.upload_async(
+                            execution_id=str(execution_id),
+                            evidence_id=f"logs_{uuid.uuid4().hex[:8]}",
+                            data=log_bytes,
+                            content_type="application/json",
+                            purpose="step_evidence",
+                            step_id="execution_logs",
+                        )
+                        if upload_res.get("storage_key"):
+                            signed_log_url = evidence_storage.create_signed_url(upload_res["storage_key"], str(execution_id))
+                            ctx.current_state["network_console_logs_url"] = signed_log_url
+                    except Exception as log_err:
+                        logger.debug("Failed saving console/network log: %s", log_err)
 
                 try:
                     await db.commit()
@@ -2899,7 +3148,9 @@ class FlowRunner:
                 step_id_val = getattr(ctx, "current_step_id", None) or f"step_{ctx.current_step_index}"
                 dom_snap = await browser.get_dom_snapshot() if hasattr(browser, "get_dom_snapshot") else ""
                 try:
-                    screenshot_bytes = await browser.page.screenshot(type="png", timeout=5000)
+                    screenshot_bytes, mime, fallback = await browser.capture_step_screenshot(
+                        step_id=step_id_val, kind="failure"
+                    )
                     if screenshot_bytes:
                         await evidence_service.capture_screenshot(
                             execution_id=execution_id,
@@ -2908,7 +3159,18 @@ class FlowRunner:
                             description=f"Browser state at failure: {error_message}",
                             purpose="failure",
                             step_id=step_id_val,
+                            mime_type=mime,
                             extra_data={
+                                "error_message": error_message,
+                                "error_code": error_code,
+                                "step_index": ctx.current_step_index,
+                                "step_id": step_id_val,
+                                "kind": "failure",
+                                "fallback": fallback,
+                            },
+                            dom_snapshot=dom_snap or None,
+                            note=f"Failure: {error_message}",
+                        )
                                 "step_index": ctx.current_step_index,
                                 "step_id": step_id_val,
                                 "checkpoint": "failure",

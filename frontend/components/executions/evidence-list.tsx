@@ -22,6 +22,8 @@ const typeLabels: Record<string, string> = {
 };
 
 const statusColors: Record<string, string> = {
+  PENDING: "text-amber-500",
+  UPLOADED: "text-muted-foreground",
   CAPTURED: "text-muted-foreground",
   VERIFIED: "text-emerald-600",
   FAILED: "text-destructive",
@@ -84,6 +86,29 @@ export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
         </div>
       )}
 
+      {(() => {
+        const traceItem = validEvidence.find((e) => e.traceUrl);
+        if (!traceItem?.traceUrl) return null;
+        return (
+          <div className="flex items-center justify-between p-3 rounded-xl border border-border bg-card/80 text-body-sm">
+            <div className="flex items-center gap-2 text-foreground">
+              <MaterialIcon name="timeline" size={18} className="text-primary" />
+              <span className="font-medium">Playwright Trace Recording</span>
+            </div>
+            <a
+              href={traceItem.traceUrl}
+              download
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-caption font-medium hover:bg-primary/20 transition-colors"
+            >
+              <MaterialIcon name="download" size={14} />
+              <span>Download Trace (.zip)</span>
+            </a>
+          </div>
+        );
+      })()}
+
       {stepGroups.map((group, groupIdx) => (
         <div key={group.stepId} className="relative pl-6 border-l-2 border-border/60 ml-3 space-y-3">
           {/* Timeline bullet */}
@@ -99,6 +124,100 @@ export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
               {group.items.length} {group.items.length === 1 ? "artifact" : "artifacts"}
             </span>
           </div>
+
+          {/* Step Progression (Before & After states, Assertion, Network Errors) §Prompt D */}
+          {(() => {
+            const beforeItem = group.items.find((i) => i.kind === "before" || i.title.toLowerCase().includes("before"));
+            const afterItem = group.items.find((i) => i.kind === "after" || i.title.toLowerCase().includes("after"));
+            const assertionItem = group.items.find((i) => i.kind === "assertion" || i.type === "VERIFICATION");
+            const failureItem = group.items.find((i) => i.kind === "failure" || i.status === "FAILED");
+            const networkErrors = group.items.filter((i) => {
+              const meta = i.metadata || {};
+              return Boolean(meta.error || (Array.isArray(i.networkLog) && i.networkLog.length > 0));
+            });
+
+            if (!beforeItem && !afterItem && !assertionItem && !failureItem) return null;
+
+            return (
+              <div className="p-3 rounded-xl border border-border/80 bg-background/50 space-y-2.5">
+                {(beforeItem || afterItem) && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {beforeItem ? (
+                      <div
+                        onClick={() => onEvidenceClick?.(beforeItem)}
+                        className="cursor-pointer group rounded-lg border border-border overflow-hidden bg-muted/30 p-1.5 transition-all hover:border-primary/40"
+                      >
+                        <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground mb-1 px-1">
+                          <span>Before action</span>
+                          <MaterialIcon name="visibility" size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                        {beforeItem.url ? (
+                          <div className="aspect-video w-full rounded overflow-hidden bg-black/5 flex items-center justify-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={beforeItem.url} alt="Before step" className="h-full w-full object-cover" />
+                          </div>
+                        ) : (
+                          <div className="aspect-video w-full rounded bg-muted/40 flex items-center justify-center text-[10px] text-muted-foreground">
+                            Screenshot pending
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="aspect-video rounded-lg border border-dashed border-border/60 flex items-center justify-center text-[11px] text-muted-foreground/60">
+                        No before snapshot
+                      </div>
+                    )}
+
+                    {afterItem ? (
+                      <div
+                        onClick={() => onEvidenceClick?.(afterItem)}
+                        className="cursor-pointer group rounded-lg border border-border overflow-hidden bg-muted/30 p-1.5 transition-all hover:border-primary/40"
+                      >
+                        <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground mb-1 px-1">
+                          <span>After action</span>
+                          <MaterialIcon name="visibility" size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </div>
+                        {afterItem.url ? (
+                          <div className="aspect-video w-full rounded overflow-hidden bg-black/5 flex items-center justify-center">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={afterItem.url} alt="After step" className="h-full w-full object-cover" />
+                          </div>
+                        ) : (
+                          <div className="aspect-video w-full rounded bg-muted/40 flex items-center justify-center text-[10px] text-muted-foreground">
+                            Screenshot pending
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="aspect-video rounded-lg border border-dashed border-border/60 flex items-center justify-center text-[11px] text-muted-foreground/60">
+                        No after snapshot
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {assertionItem && (
+                  <div
+                    onClick={() => onEvidenceClick?.(assertionItem)}
+                    className="cursor-pointer flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-1.5 text-[12px] text-emerald-700 hover:bg-emerald-500/10 transition-colors"
+                  >
+                    <MaterialIcon name="verified" size={14} className="text-emerald-600 shrink-0" />
+                    <span className="font-medium truncate">Supports assertion: {assertionItem.title}</span>
+                  </div>
+                )}
+
+                {failureItem && (
+                  <div
+                    onClick={() => onEvidenceClick?.(failureItem)}
+                    className="cursor-pointer flex items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-1.5 text-[12px] text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <MaterialIcon name="error" size={14} className="shrink-0" />
+                    <span className="font-medium truncate">Step failure: {failureItem.description || failureItem.title}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div className="space-y-1.5">
             {group.items.map((item) => (
