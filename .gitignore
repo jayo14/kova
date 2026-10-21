@@ -24,9 +24,10 @@ founder/
 skills-lock.json
 kova-launch-prompts/
 
-# Internal design mockups, audits, draft docs, and worklogs
-/docs/*
-!/docs/alerts/
+# Internal documentation, examples, and spec chunks
+docs/
+examples/
+chunks/
 /AUDIT.md
 /WORKLOG.md
 /PRD.md
