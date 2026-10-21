@@ -11,6 +11,7 @@ from app.engine.browser.auth import classify_auth_page, find_submit_button
 from app.engine.browser.session import BrowserSession
 from app.modules.credentials.crypto import decrypt_credential
 from app.modules.flows.auth.strategies.base import AuthAttempt, AuthResult
+from app.modules.flows.auth.verifier import AuthReasonCode, verify_authenticated
 from app.modules.product_graph.schemas import AuthCapability
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def _is_safe_url(url: str, allow_local: bool = True) -> bool:
 
 
 class PasswordFormStrategy:
-    """Authenticates against standard email and password forms."""
+    """Authenticates against standard email and password forms (§Prompt B)."""
 
     async def execute(
         self,
@@ -67,7 +68,6 @@ class PasswordFormStrategy:
         event_recorder: Any | None = None,
     ) -> AuthResult:
         login_url = capability.login_url or "/login"
-        success_pattern = capability.success_url_pattern or r"/(dashboard|app|courses|profile|home)"
         attempts: list[AuthAttempt] = []
         evidence_list: list[dict[str, Any]] = []
 
@@ -81,7 +81,7 @@ class PasswordFormStrategy:
             except Exception:
                 password = raw_pwd
 
-        email = getattr(credential, "email", "")
+        email = getattr(credential, "email", "") or getattr(credential, "username", "")
 
         for attempt_num in (1, 2):
             t0 = time.monotonic()
@@ -92,127 +92,184 @@ class PasswordFormStrategy:
                 return AuthResult(
                     success=False,
                     failure_reason=f"SSRF violation: Login URL '{login_url}' is not allowed",
+                    reason_code=AuthReasonCode.SITE_ERROR,
+                    failure_category="AUTH",
                     evidence=evidence_list,
-                    attempts=[AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error="SSRF blocked")],
+                    attempts=[AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error="SSRF blocked", reason_code=AuthReasonCode.SITE_ERROR)],
                 )
 
             try:
                 # 1. Navigate
-                await browser.navigate(login_url)
-                try:
-                    if browser.page:
-                        await browser.page.wait_for_load_state("domcontentloaded", timeout=5000)
-                except Exception:
-                    pass
-
-                # Check if already authenticated
                 current_url = browser.page.url if browser.page else ""
-                if re.search(success_pattern, current_url):
+                if not current_url or current_url.endswith("/"):
+                    await browser.navigate(login_url)
+
+                page = browser.page
+                if not page:
+                    return AuthResult(
+                        success=False,
+                        failure_reason="Browser page is not initialized",
+                        reason_code=AuthReasonCode.UNKNOWN,
+                        failure_category="AUTH",
+                    )
+
+                # Check if already authenticated before performing action
+                is_authed, pre_reason = await verify_authenticated(browser, capability)
+                if is_authed:
                     session_state = await browser.save_session_state()
-                    attempts.append(AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=True, duration_ms=int((time.monotonic() - t0) * 1000)))
                     return AuthResult(
                         success=True,
                         session_state=session_state,
+                        reason_code=AuthReasonCode.SUCCESS,
                         evidence=evidence_list,
-                        attempts=attempts,
+                        attempts=[AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=True, reason_code=AuthReasonCode.SUCCESS, duration_ms=int((time.monotonic() - t0) * 1000))],
                     )
 
-                # 2. Locate inputs
-                email_selector = await self._find_input(browser, ["input[type=email]", "input[name=email]", "input[id=email]", "input[autocomplete=email]", "input[type=text]"])
-                pwd_selector = await self._find_input(browser, ["input[type=password]", "input[name=password]", "input[id=password]"])
+                # 2. Check for modal trigger if form is not initially visible
+                pwd_sel = await self._find_input(browser, ["input[type=password]", "input[name*='pass']"])
+                if not pwd_sel:
+                    # Look for sign in modal buttons
+                    for modal_btn in ("button:has-text('Sign In')", "button:has-text('Log In')", "#openModalBtn", "[data-auth-modal]"):
+                        mb = page.locator(modal_btn)
+                        if await mb.count() > 0 and await mb.first.is_visible():
+                            await mb.first.click()
+                            await asyncio.sleep(0.3)
+                            break
 
-                if not pwd_selector:
-                    # Classify page
-                    if browser.page:
-                        classification = await classify_auth_page(browser.page, current_url)
-                        if classification.kind != "login":
-                            reason = f"Expected login page, got {classification.kind}"
-                            attempts.append(AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error=reason))
-                            return AuthResult(success=False, failure_reason=reason, evidence=evidence_list, attempts=attempts)
+                # 3. Locate inputs deterministically
+                user_sel = await self._find_input(
+                    browser,
+                    [
+                        "input[type=email]",
+                        "input[name=email]",
+                        "input[id=email]",
+                        "input[name=username]",
+                        "input[id=username]",
+                        "input[name=identifier]",
+                        "input[id=identifier]",
+                        "input[autocomplete=username]",
+                        "input[autocomplete=email]",
+                    ],
+                )
+                pwd_sel = await self._find_input(
+                    browser,
+                    [
+                        "input[type=password]",
+                        "input[name=password]",
+                        "input[id=password]",
+                        "input[autocomplete=current-password]",
+                    ],
+                )
 
-                    reason = "No password input visible on login page"
-                    attempts.append(AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error=reason))
-                    if attempt_num == 2:
-                        return AuthResult(success=False, failure_reason=reason, evidence=evidence_list, attempts=attempts)
-                    continue
+                # If multi-step login, user input might appear first before password
+                if user_sel and not pwd_sel:
+                    await browser.fill(user_sel, email)
+                    next_btn = page.locator("button:has-text('Next'), button:has-text('Continue'), #nextBtn")
+                    if await next_btn.count() > 0 and await next_btn.first.is_visible():
+                        await next_btn.first.click()
+                        await asyncio.sleep(0.3)
+                        pwd_sel = await self._find_input(browser, ["input[type=password]", "input[name=password]", "input[id=password]"])
 
-                submit_btn = await find_submit_button(browser.page) if browser.page else "button[type=submit]"
-                if not submit_btn:
-                    submit_btn = "button[type=submit], input[type=submit], button:has-text('Sign In'), button:has-text('Log In')"
+                # Escalate to agent loop with screenshot if fields cannot be located
+                if not user_sel or not pwd_sel:
+                    screenshot = await self._capture_screenshot_evidence(browser, step_id, "form_unlocatable")
+                    if screenshot:
+                        evidence_list.append(screenshot)
 
-                # 3. Capture pre-submit screenshot evidence
-                pre_ss = await self._capture_screenshot_evidence(browser, step_id, "pre_submit")
-                if pre_ss:
-                    evidence_list.append(pre_ss)
+                    if event_recorder:
+                        event_recorder("auth_escalation_to_agent", {
+                            "strategy": "password_form",
+                            "reason": "Deterministic selectors could not locate login fields",
+                            "user_found": bool(user_sel),
+                            "password_found": bool(pwd_sel),
+                            "url": page.url,
+                        })
 
-                # 4. Input credentials
-                async def _safe_fill(sel: str, val: str):
-                    if hasattr(browser, "fill"):
-                        await browser.fill(sel, val)
-                    elif hasattr(browser, "page") and hasattr(browser.page, "fill"):
-                        await browser.page.fill(sel, val)
-                    elif hasattr(browser, "type"):
-                        await browser.type(sel, val)
+                    return AuthResult(
+                        success=False,
+                        failure_reason="Could not locate email/username and password fields on login page",
+                        reason_code=AuthReasonCode.UNKNOWN,
+                        failure_category="AUTH",
+                        evidence=evidence_list,
+                        attempts=[AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error="Fields not found", reason_code=AuthReasonCode.UNKNOWN, duration_ms=int((time.monotonic() - t0) * 1000))],
+                    )
 
-                if email_selector:
-                    await _safe_fill(email_selector, email)
-                await _safe_fill(pwd_selector, password)
+                # 4. Fill credentials
+                await browser.fill(user_sel, email)
+                await browser.fill(pwd_sel, password)
 
-                # 5. Capture network log / submit record evidence (redacting passwords & cookies!)
-                evidence_list.append({
-                    "type": "network_log",
-                    "title": f"Auth submission network log ({attempt_num})",
-                    "purpose": "auth_attempt",
-                    "step_id": step_id,
-                    "metadata": {
-                        "url": current_url,
-                        "email": email,
-                        "action": "submit",
-                        "password_redacted": True,
-                    },
-                })
+                # 5. Submit
+                submit_btn = await find_submit_button(browser.page)
+                if submit_btn:
+                    try:
+                        await browser.click(submit_btn)
+                    except Exception:
+                        await page.keyboard.press("Enter")
+                else:
+                    await page.keyboard.press("Enter")
 
-                # 6. Click submit
+                # Wait for response / navigation
                 try:
-                    await browser.click(submit_btn)
-                except Exception:
-                    await browser.page.keyboard.press("Enter")
-
-                # Wait for navigation / response
-                try:
-                    if browser.page:
-                        await browser.page.wait_for_load_state("domcontentloaded", timeout=4000)
+                    await page.wait_for_load_state("domcontentloaded", timeout=4000)
                 except Exception:
                     pass
                 await asyncio.sleep(0.5)
 
-                # 7. Capture post-submit screenshot evidence
+                # 6. Capture post-submit screenshot evidence
                 post_ss = await self._capture_screenshot_evidence(browser, step_id, "post_submit")
                 if post_ss:
                     evidence_list.append(post_ss)
 
-                # 8. Check outcome
-                new_url = browser.page.url if browser.page else ""
-                auth_succeeded = bool(re.search(success_pattern, new_url) or new_url != current_url and not re.search(r"/(login|signin)", new_url))
+                # 7. Check outcome via unified verify_authenticated
+                is_authed, reason_code = await verify_authenticated(browser, capability)
 
-                if auth_succeeded:
+                if is_authed:
                     session_state = await browser.save_session_state()
-                    attempts.append(AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=True, duration_ms=int((time.monotonic() - t0) * 1000)))
+                    attempts.append(AuthAttempt(
+                        attempt_number=attempt_num,
+                        strategy="password_form",
+                        success=True,
+                        reason_code=AuthReasonCode.SUCCESS,
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                    ))
                     return AuthResult(
                         success=True,
                         session_state=session_state,
+                        reason_code=AuthReasonCode.SUCCESS,
                         evidence=evidence_list,
                         attempts=attempts,
                     )
                 else:
-                    error_msg = f"Post-login URL '{new_url}' did not match success pattern '{success_pattern}'"
-                    attempts.append(AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error=error_msg, duration_ms=int((time.monotonic() - t0) * 1000)))
+                    # Record attempt failure with specific reason code
+                    attempts.append(AuthAttempt(
+                        attempt_number=attempt_num,
+                        strategy="password_form",
+                        success=False,
+                        error=reason_code,
+                        reason_code=reason_code,
+                        duration_ms=int((time.monotonic() - t0) * 1000),
+                    ))
+
+                    # If OTP or CAPTCHA is required, do not retry password
+                    if reason_code in (AuthReasonCode.NEEDS_OTP, AuthReasonCode.NEEDS_CAPTCHA, AuthReasonCode.SSO_ONLY):
+                        return AuthResult(
+                            success=False,
+                            failure_reason=f"Authentication blocked: {reason_code}",
+                            reason_code=reason_code,
+                            failure_category="AUTH",
+                            evidence=evidence_list,
+                            attempts=attempts,
+                        )
+
                     if attempt_num == 1:
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
                         continue
+
                     return AuthResult(
                         success=False,
-                        failure_reason=error_msg,
+                        failure_reason=f"Password authentication failed: {reason_code}",
+                        reason_code=reason_code,
+                        failure_category="AUTH",
                         evidence=evidence_list,
                         attempts=attempts,
                     )
@@ -224,13 +281,17 @@ class PasswordFormStrategy:
                     return AuthResult(
                         success=False,
                         failure_reason=f"Authentication exception: {e}",
+                        reason_code=AuthReasonCode.UNKNOWN,
+                        failure_category="AUTH",
                         evidence=evidence_list,
                         attempts=attempts,
                     )
 
         return AuthResult(
             success=False,
-            failure_reason="Authentication failed after 2 attempts",
+            failure_reason="Authentication failed after attempts",
+            reason_code=AuthReasonCode.BAD_CREDENTIALS,
+            failure_category="AUTH",
             evidence=evidence_list,
             attempts=attempts,
         )

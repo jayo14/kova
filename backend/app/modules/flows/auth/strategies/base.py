@@ -12,6 +12,7 @@ class AuthAttempt:
     success: bool
     error: str | None = None
     duration_ms: int = 0
+    reason_code: str | None = None
 
 
 @dataclass
@@ -19,8 +20,14 @@ class AuthResult:
     success: bool
     session_state: SessionState | None = None
     failure_reason: str | None = None
+    reason_code: str | None = None
+    failure_category: str | None = None  # Always "AUTH" on failure (§Prompt B)
     evidence: list[dict[str, Any]] = field(default_factory=list)
     attempts: list[AuthAttempt] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.success and not self.failure_category:
+            self.failure_category = "AUTH"
 
 
 class AuthStrategy(Protocol):
