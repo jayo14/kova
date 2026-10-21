@@ -1,0 +1,6 @@
+fixture_id: totp_login
+description: Two-factor authentication flow requiring TOTP 6-digit verification code
+known_defects: []
+expected_scenarios:
+  - "Submit credentials, provide valid TOTP code, and verify landing on Secure Portal Dashboard"
+forbidden_scenarios: []

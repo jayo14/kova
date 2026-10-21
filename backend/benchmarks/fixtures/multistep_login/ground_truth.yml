@@ -1,0 +1,6 @@
+fixture_id: multistep_login
+description: Multi-step authentication flow with identifier entry preceding password prompt
+known_defects: []
+expected_scenarios:
+  - "Complete step 1 identifier, proceed to step 2 password, and verify dashboard"
+forbidden_scenarios: []

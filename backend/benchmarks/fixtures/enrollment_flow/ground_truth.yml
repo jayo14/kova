@@ -1,0 +1,6 @@
+fixture_id: enrollment_flow
+description: Workflow requiring enrollment action before accessing restricted lesson content
+known_defects: []
+expected_scenarios:
+  - "Navigate to course page, click enroll button, and verify Course Access Granted"
+forbidden_scenarios: []

@@ -1,0 +1,6 @@
+fixture_id: iframe_login
+description: Embedded authentication frame with postMessage cross-frame notification to parent window
+known_defects: []
+expected_scenarios:
+  - "Submit login form within iframe and verify parent window displays Authenticated in Iframe Workspace"
+forbidden_scenarios: []

@@ -24,6 +24,12 @@ class BenchmarkMetrics(BaseModel):
     # §14 metric 9: model calls per validation
     model_calls_per_validation: float = Field(default=0.0, ge=0.0)
 
+    # Real execution metrics (§Gap-Closing Prompt A)
+    auth_success_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    flow_completion_rate: float = Field(default=1.0, ge=0.0, le=1.0)
+    evidence_completeness: float = Field(default=1.0, ge=0.0, le=1.0)
+    total_tokens: int = Field(default=0, ge=0)
+
 
 def publish_benchmark_metrics(metrics: BenchmarkMetrics) -> None:
     """Emit the benchmark metrics to the Prometheus gauges defined in observability."""
