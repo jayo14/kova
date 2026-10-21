@@ -35,7 +35,7 @@ from app.modules.projects.schemas import ProjectCreate
 logger = logging.getLogger(__name__)
 
 # Maximum time an exploration can run before being forcibly timed out
-EXPLORATION_TIMEOUT_SECONDS = 75
+EXPLORATION_TIMEOUT_SECONDS = 180
 
 # Active browser sessions keyed by exploration session ID
 _active_browser_sessions: dict[uuid.UUID, BrowserSession] = {}
@@ -525,10 +525,12 @@ class ExplorationService:
                 nonlocal event_count
                 async with emit_lock:
                     try:
+                        from app.modules.executions.reporting import sanitize_payload
+                        sanitized_payload = sanitize_payload(payload) or {}
                         await event_repo.create(
                             exploration_id=session_id,
                             event_type=event_type,
-                            payload=payload,
+                            payload=sanitized_payload,
                         )
                         event_count += 1
                         # Commit immediately so SSE polling (separate DB session) can see events
@@ -595,6 +597,10 @@ class ExplorationService:
                                 logger.warning("Failed to persist credential request for session %s: %s", session_id, e)
                     except Exception as ex:
                         logger.warning("Failed to record event %s: %s", event_type, ex)
+                        try:
+                            await db.rollback()
+                        except Exception:
+                            pass
 
             existing_browser = _active_browser_sessions.get(session_id)
 

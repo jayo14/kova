@@ -437,6 +437,33 @@
   }
 }
 
+@keyframes agentScan {
+  0% {
+    top: 2%;
+    opacity: 0.9;
+  }
+  50% {
+    top: 96%;
+    opacity: 1;
+  }
+  100% {
+    top: 2%;
+    opacity: 0.9;
+  }
+}
+
+.agent-scanline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(213, 138, 86, 0.4) 15%, #D58A56 50%, rgba(213, 138, 86, 0.4) 85%, transparent 100%);
+  box-shadow: 0 0 16px 3px rgba(213, 138, 86, 0.6), 0 0 4px 1px rgba(138, 53, 19, 0.8);
+  animation: agentScan 3s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 10;
+}
+
 @keyframes fl2 {
   to {
     transform: translateY(-12px) rotate(4deg);

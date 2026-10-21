@@ -25,6 +25,9 @@ import {
   cancelExploration,
   createAccount,
   syncSessionState,
+  streamExplorationEvents,
+  getExplorationSession,
+  normalizeExploreStatus,
 } from "@/lib/api/exploration";
 import { createMission } from "@/lib/api/missions";
 import { createExecution, runBatchExecutions } from "@/lib/api/executions";
@@ -149,10 +152,40 @@ export function ExplorePage() {
     if (initialSessionId) {
       if (startedUrlRef.current === initialSessionId) return;
       startedUrlRef.current = initialSessionId;
+
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      // 1. Initial immediate state sync
       syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev)).catch((err) => {
         console.error("Failed to sync session:", err);
       });
-      return;
+
+      // 2. Stream real-time events via SSE so page updates live without refreshing
+      streamExplorationEvents(initialSessionId, (ev) => handleEventRef.current(ev), controller.signal).catch(() => {});
+
+      // 3. Fallback active polling interval in case SSE is buffered or proxy disconnects
+      const pollTimer = setInterval(async () => {
+        if (controller.signal.aborted) {
+          clearInterval(pollTimer);
+          return;
+        }
+        try {
+          const sess = await getExplorationSession(initialSessionId);
+          await syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev));
+          const normalizedState = normalizeExploreStatus(sess.status);
+          if (["ready", "failed", "cancelled", "auth_required", "asking"].includes(normalizedState)) {
+            clearInterval(pollTimer);
+          }
+        } catch {
+          // ignore transient network errors during active exploration
+        }
+      }, 2000);
+
+      return () => {
+        controller.abort();
+        clearInterval(pollTimer);
+      };
     }
 
     if (!initialUrl) return;

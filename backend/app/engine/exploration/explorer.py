@@ -408,6 +408,15 @@ class ExplorationEngine:
                     "forms_count": len(observation.get("forms", [])),
                 })
 
+                # Trigger smooth scan scroll and capture live observing snapshot for viewport
+                try:
+                    await page.evaluate("window.scrollBy({ top: 320, behavior: 'smooth' })")
+                    await asyncio.sleep(0.35)
+                    await self._capture_and_emit_screenshot(page)
+                    await page.evaluate("window.scrollTo({ top: 0, behavior: 'instant' })")
+                except Exception:
+                    pass
+
                 # 3. Check for authentication requirement
                 from app.engine.browser.auth import classify_auth_page, observe_auth_signals
                 auth_bundle = await observe_auth_signals(page, page.url)
