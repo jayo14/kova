@@ -26,7 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY backend/ .
 
-RUN pip install --no-cache-dir -e ".[dev]"
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --default-timeout=100 --retries=5 --prefer-binary .
 
 # Install Playwright browsers
 RUN playwright install chromium
