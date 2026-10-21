@@ -1,8 +1,12 @@
 """Deterministic, evidence-based report helpers for persisted executions."""
 from __future__ import annotations
 
+import datetime
+from dataclasses import asdict, is_dataclass
+from enum import Enum
 import re
 from urllib.parse import urlsplit, urlunsplit
+import uuid
 
 
 def sanitize_text(value: object, *, limit: int = 1000) -> str:
@@ -18,18 +22,50 @@ _SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "authorization", "co
 
 
 def sanitize_payload(payload: object) -> object:
-    """Redact secret fields recursively before execution events are persisted."""
+    """Redact secret fields recursively before execution events are persisted,
+
+    and guarantee that the resulting structure is strictly JSON-serializable.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, (int, float, bool)):
+        return payload
+    if isinstance(payload, (uuid.UUID, datetime.date, datetime.datetime, datetime.time)):
+        return str(payload) if isinstance(payload, uuid.UUID) else payload.isoformat()
+    if isinstance(payload, Enum):
+        return payload.value
+    if is_dataclass(payload) and not isinstance(payload, type):
+        try:
+            return sanitize_payload(asdict(payload))
+        except Exception:
+            return sanitize_payload(vars(payload))
+    if hasattr(payload, "model_dump") and callable(payload.model_dump):
+        try:
+            return sanitize_payload(payload.model_dump(mode="json"))
+        except Exception:
+            return sanitize_payload(payload.model_dump())
+    if hasattr(payload, "dict") and callable(payload.dict):
+        try:
+            return sanitize_payload(payload.dict())
+        except Exception:
+            pass
     if isinstance(payload, dict):
         return {
             str(key): "[REDACTED]" if str(key).lower().replace("-", "_") in _SENSITIVE_KEYS
             else sanitize_payload(value)
             for key, value in payload.items()
         }
-    if isinstance(payload, list):
+    if isinstance(payload, (list, tuple, set)):
         return [sanitize_payload(value) for value in payload]
     if isinstance(payload, str):
         return sanitize_text(payload, limit=5000)
-    return payload
+    if hasattr(payload, "__dict__"):
+        try:
+            return sanitize_payload(vars(payload))
+        except Exception:
+            pass
+    return sanitize_text(str(payload), limit=5000)
+
 
 
 def _safe_url(value: str) -> str:

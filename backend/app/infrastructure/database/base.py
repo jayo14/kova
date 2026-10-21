@@ -24,3 +24,30 @@ convention = {
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=convention)
+
+
+def load_all_models() -> None:
+    """Ensure all SQLAlchemy models are registered in Base.registry."""
+    import app.modules.users.models  # noqa: F401
+    import app.modules.organizations.models  # noqa: F401
+    import app.modules.projects.models  # noqa: F401
+    import app.modules.flows.models  # noqa: F401
+    import app.modules.executions.models  # noqa: F401
+    import app.modules.executions.event_model  # noqa: F401
+    import app.modules.executions.evidence_model  # noqa: F401
+    import app.modules.credentials.models  # noqa: F401
+    import app.modules.product_graph.models  # noqa: F401
+    import app.modules.exploration.models  # noqa: F401
+    import app.modules.billing.models  # noqa: F401
+    import app.modules.auth.models  # noqa: F401
+    import app.modules.integrations.models  # noqa: F401
+    import app.modules.validation.models  # noqa: F401
+
+
+# Automatically populate registry on module load
+try:
+    load_all_models()
+except Exception:
+    # Allow partial imports during initial bootstrapping if necessary
+    pass
+

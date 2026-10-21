@@ -7,7 +7,7 @@ deterministic runtime validates them further before execution.
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class GoalInterpretation(BaseModel):
@@ -82,12 +82,22 @@ class ActionProposal(BaseModel):
     target: dict[str, Any] = Field(default_factory=dict)
     value: str = ""
     credential_intent: Literal["none", "email", "password", "new_password"] = "none"
-    reason: str = Field(description="Concise operational reason shown in the UI")
+    reason: str = Field(default="", description="Concise operational reason shown in the UI")
     expected_effect: str = ""
     verification: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     injection_detected: bool = False
     injection_evidence: str = ""
+
+    @field_validator("target", "verification", mode="before")
+    @classmethod
+    def _coerce_dict(cls, v: Any) -> Any:
+        return {} if v is None else v
+
+    @field_validator("value", "expected_effect", "reason", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> Any:
+        return "" if v is None else str(v)
 
 
 class RecoveryProposal(BaseModel):
@@ -98,15 +108,25 @@ class RecoveryProposal(BaseModel):
         "observe_more", "request_human", "abort",
     ]
     alternative_target: dict[str, Any] = Field(default_factory=dict)
-    reason: str
+    reason: str = ""
     action: ActionProposal | None = None
+
+    @field_validator("alternative_target", mode="before")
+    @classmethod
+    def _coerce_dict(cls, v: Any) -> Any:
+        return {} if v is None else v
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> Any:
+        return "" if v is None else str(v)
 
 
 class VerificationProposal(BaseModel):
     """AI's semantic read of whether the objective was satisfied."""
 
     intent_satisfied: bool
-    reason: str
+    reason: str = ""
     required_facts: list[str] = Field(
         default_factory=list,
         description="Deterministic facts that must be present to accept success",
@@ -115,6 +135,21 @@ class VerificationProposal(BaseModel):
         default_factory=dict,
         description="Optional deterministic condition proposal (validated separately)",
     )
+
+    @field_validator("suggested_condition", mode="before")
+    @classmethod
+    def _coerce_dict(cls, v: Any) -> Any:
+        return {} if v is None else v
+
+    @field_validator("required_facts", mode="before")
+    @classmethod
+    def _coerce_list(cls, v: Any) -> Any:
+        return [] if v is None else v
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _coerce_str(cls, v: Any) -> Any:
+        return "" if v is None else str(v)
 
 
 class EmailSelection(BaseModel):

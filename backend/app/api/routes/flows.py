@@ -90,7 +90,29 @@ async def _dispatch_execution(execution_id: str) -> None:
     )
     from app.workers.tasks.executions import _run_execution_async
 
-    await _run_execution_async(None, execution_id)
+    try:
+        await _run_execution_async(None, execution_id)
+    except Exception as exc:
+        logger.exception("Failed to execute %s in background asyncio task: %s", execution_id, exc)
+        try:
+            import uuid
+            from app.infrastructure.database.session import async_session_factory
+            from app.modules.executions.repository import ExecutionRepository
+            from app.modules.executions.models import ExecutionStatus
+
+            async with async_session_factory() as error_db:
+                rec_repo = ExecutionRepository(error_db)
+                rec = await rec_repo.get_by_id(uuid.UUID(str(execution_id)))
+                if rec and rec.status in {"CREATED", "INITIALIZING"}:
+                    await rec_repo.update_status(
+                        uuid.UUID(str(execution_id)),
+                        ExecutionStatus.FAILED,
+                        error_code="DISPATCH_ERROR",
+                        error_message=f"Execution failed to run: {str(exc)[:500]}",
+                    )
+                    await error_db.commit()
+        except Exception as update_err:
+            logger.error("Failed to update execution %s status on dispatch error: %s", execution_id, update_err)
 
 
 async def _schedule_dispatch(execution_id: str) -> None:

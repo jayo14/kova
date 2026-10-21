@@ -1,8 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/auth/client";
+import type { User } from "@/lib/auth/custom";
 
 export function LandingRedesign() {
   const router = useRouter();
@@ -10,6 +12,32 @@ export function LandingRedesign() {
   const [ctaUrl, setCtaUrl] = useState("");
   const [currency, setCurrency] = useState<"usd" | "ngn">("usd");
   const [isPlayingDemo, setIsPlayingDemo] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    let mounted = true;
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (mounted) {
+        setUser(user);
+        setAuthLoading(false);
+      }
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+      if (mounted) {
+        setUser(session?.user ?? null);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription?.unsubscribe();
+    };
+  }, []);
 
   const handleExplore = (targetUrl: string) => {
     const clean = targetUrl.trim();
@@ -43,18 +71,34 @@ export function LandingRedesign() {
         </nav>
 
         <div className="flex items-center gap-3">
-          <Link
-            href="/auth/login"
-            className="text-sm font-medium text-[#6B5646] transition-colors hover:text-[#8A3513] px-2 py-1"
-          >
-            Sign in
-          </Link>
-          <Link
-            href="/auth/signup"
-            className="btn-pill !py-2.5 !px-5 !text-sm"
-          >
-            Get started
-          </Link>
+          {authLoading ? (
+            <div className="h-9 w-24 animate-pulse rounded-full bg-[#EFE4D6]/60" />
+          ) : user ? (
+            <Link
+              href="/dashboard"
+              className="btn-pill !py-2.5 !px-5 !text-sm flex items-center gap-1.5"
+            >
+              Dashboard
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+            </Link>
+          ) : (
+            <>
+              <Link
+                href="/auth/login"
+                className="text-sm font-medium text-[#6B5646] transition-colors hover:text-[#8A3513] px-2 py-1"
+              >
+                Sign in
+              </Link>
+              <Link
+                href="/auth/signup"
+                className="btn-pill !py-2.5 !px-5 !text-sm"
+              >
+                Get started
+              </Link>
+            </>
+          )}
         </div>
       </header>
 
@@ -741,8 +785,14 @@ export function LandingRedesign() {
                 </div>
                 <div className="flex flex-col gap-3 font-medium">
                   <span className="text-xs font-semibold uppercase tracking-wider text-[#8A3513]">Developers</span>
-                  <Link href="/auth/login">Sign in</Link>
-                  <Link href="/auth/signup">Get started</Link>
+                  {user ? (
+                    <Link href="/dashboard">Dashboard</Link>
+                  ) : (
+                    <>
+                      <Link href="/auth/login">Sign in</Link>
+                      <Link href="/auth/signup">Get started</Link>
+                    </>
+                  )}
                   <Link href="/status">System status</Link>
                 </div>
               </div>

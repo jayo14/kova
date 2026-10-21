@@ -27,6 +27,24 @@ async def _dispatch_execution(execution_id: str) -> None:
         await _run_execution_async(None, execution_id)
     except Exception as e:
         logger.error("Failed to dispatch CI execution %s: %s", execution_id, e)
+        try:
+            from app.infrastructure.database.session import async_session_factory
+            from app.modules.executions.repository import ExecutionRepository
+            from app.modules.executions.models import ExecutionStatus
+
+            async with async_session_factory() as error_db:
+                rec_repo = ExecutionRepository(error_db)
+                rec = await rec_repo.get_by_id(uuid.UUID(str(execution_id)))
+                if rec and rec.status in {"CREATED", "INITIALIZING"}:
+                    await rec_repo.update_status(
+                        uuid.UUID(str(execution_id)),
+                        ExecutionStatus.FAILED,
+                        error_code="DISPATCH_ERROR",
+                        error_message=f"CI execution failed to run: {str(e)[:500]}",
+                    )
+                    await error_db.commit()
+        except Exception as update_err:
+            logger.error("Failed to update CI execution %s status on dispatch error: %s", execution_id, update_err)
 
 
 def _schedule_dispatch(execution_id: str) -> None:
