@@ -36,6 +36,22 @@ configure_logging()
 configure_tracing()
 
 
+def _sentry_before_send(event: dict, hint: dict) -> dict | None:
+    # Ignore exceptions originating solely from one-off CLI evaluations (<string>) in development
+    try:
+        frames = (
+            event.get("exception", {})
+            .get("values", [{}])[0]
+            .get("stacktrace", {})
+            .get("frames", [])
+        )
+        if frames and len(frames) == 1 and frames[0].get("filename") == "<string>":
+            return None
+    except Exception:
+        pass
+    return event
+
+
 # Initialize Sentry SDK before FastAPI app initialization
 if settings.SENTRY_DSN:
     sentry_sdk.init(
@@ -46,6 +62,7 @@ if settings.SENTRY_DSN:
         profile_session_sample_rate=settings.SENTRY_PROFILES_SAMPLE_RATE,
         profile_lifecycle="trace",
         environment=settings.ENVIRONMENT,
+        before_send=_sentry_before_send,
     )
 
 
