@@ -133,16 +133,37 @@ export function AgentBrowserViewport({
             onClick={() => setIsSnapshotExpanded(true)}
             title="Click to expand the browser snapshot"
           >
+            {/* Active agent scanning HUD when exploring or discovering */}
+            {(state === "exploring" || state === "discovering" || state === "validating_page") && (
+              <>
+                <div className="agent-scanline" />
+                <div className="absolute top-5 left-5 z-10 flex items-center gap-2 rounded-full border border-primary/40 bg-background/95 px-3 py-1.5 shadow-lg backdrop-blur-md animate-in fade-in slide-in-from-top-2">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                  <span className="text-[11px] font-mono font-medium text-foreground">
+                    {state === "discovering" ? "Mapping product workflows..." : "Observing interface elements & routes..."}
+                  </span>
+                </div>
+              </>
+            )}
+
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              key={latestScreenshot}
-              src={latestScreenshot}
-              alt={`Kova browser view of ${hostname}`}
-              className="max-h-full max-w-full w-auto h-auto rounded-lg border border-border/80 object-contain shadow-md bg-background animate-in fade-in duration-300"
-            />
+            <div className="relative max-h-full max-w-full flex items-center justify-center">
+              <img
+                key={latestScreenshot}
+                src={latestScreenshot}
+                alt={`Kova browser view of ${hostname}`}
+                className={cn(
+                  "max-h-full max-w-full w-auto h-auto rounded-lg border border-border/80 object-contain shadow-md bg-background animate-in fade-in duration-300",
+                  (state === "exploring" || state === "discovering") && "ring-1 ring-primary/30"
+                )}
+              />
+            </div>
             <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary/70 px-3 py-1 text-[11px] font-mono text-muted-foreground">
               <MaterialIcon name="verified" size={12} className="text-emerald-600" />
-              Kova browser (real Playwright view)
+              <span>Kova browser ({state === "exploring" || state === "discovering" ? "Active observation" : "real Playwright view"})</span>
             </div>
           </div>
         ) : (
