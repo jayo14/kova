@@ -27,6 +27,13 @@ class CredentialService:
     async def update_credential(
         self, credential_id: uuid.UUID, data: "CredentialUpdate"
     ):
+        cred = await self.repo.get_by_id(credential_id)
+        if cred:
+            try:
+                from app.modules.flows.auth.session_manager import SessionManager
+                await SessionManager().wipe(str(cred.project_id), persona=cred.persona)
+            except Exception:
+                pass
         return await self.repo.update(
             credential_id=credential_id,
             name=data.name,
@@ -43,4 +50,11 @@ class CredentialService:
         return await self.repo.list_by_project(project_id, skip=skip, limit=limit)
 
     async def delete_credential(self, credential_id: uuid.UUID):
+        cred = await self.repo.get_by_id(credential_id)
+        if cred:
+            try:
+                from app.modules.flows.auth.session_manager import SessionManager
+                await SessionManager().wipe(str(cred.project_id), persona=cred.persona)
+            except Exception:
+                pass
         return await self.repo.delete(credential_id)

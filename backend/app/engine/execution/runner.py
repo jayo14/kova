@@ -769,7 +769,7 @@ class FlowRunner:
                                 auth_cap.login_url = urljoin(target_url, auth_cap.login_url)
 
                             try:
-                                session_state, was_reused = await ctx.session_manager.get_or_establish(
+                                session_res = await ctx.session_manager.get_or_establish(
                                     execution_id=exec_id,
                                     persona=persona,
                                     capability=auth_cap,
@@ -777,9 +777,16 @@ class FlowRunner:
                                     credential=cred,
                                     authenticator=Authenticator(),
                                     event_recorder=event_recorder,
+                                    target_url=target_url,
                                 )
+                                session_state = session_res[0]
+                                was_reused = session_res[1]
+                                reuse_reason = session_res[2] if len(session_res) > 2 else ("session reused" if was_reused else "logged in fresh")
+
                                 ctx.current_state[f"authenticated:{persona}"] = True
                                 ctx.current_state["authenticated"] = True
+                                ctx.current_state["session_status"] = "session reused" if was_reused else "logged in fresh"
+                                ctx.current_state["session_reuse_reason"] = reuse_reason
                                 ctx.current_state.pop("authenticated:False", None)
                                 for a in p_step.establishes:
                                     ctx.current_state[a.key] = a.value
@@ -788,6 +795,8 @@ class FlowRunner:
                                     "flow_name": p_step.flow_name,
                                     "established_state": dict(ctx.current_state),
                                     "was_reused": was_reused,
+                                    "session_status": "session reused" if was_reused else "logged in fresh",
+                                    "session_reuse_reason": reuse_reason,
                                 })
                                 await self._emit_events(ctx, event_recorder)
                             except Exception as auth_err:
