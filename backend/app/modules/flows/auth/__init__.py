@@ -9,6 +9,7 @@ from app.modules.flows.auth.strategies import (
     OTPStrategy,
     PasswordFormStrategy,
 )
+from app.modules.flows.auth.verifier import AuthReasonCode, verify_authenticated
 
 __all__ = [
     "Authenticator",
@@ -20,4 +21,6 @@ __all__ = [
     "MagicLinkStrategy",
     "OAuthStrategy",
     "OTPStrategy",
+    "AuthReasonCode",
+    "verify_authenticated",
 ]

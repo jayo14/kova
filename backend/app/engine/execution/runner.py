@@ -792,18 +792,24 @@ class FlowRunner:
                                 await self._emit_events(ctx, event_recorder)
                             except Exception as auth_err:
                                 logger.warning("Auth prerequisite resolution failed: %s", auth_err)
-                                ctx.transition(ExecutionState.PREREQUISITE_FAILED)
-                                ctx.record_event(EventTypes.PREREQUISITE_FAILED, {
+                                try:
+                                    ctx.transition(ExecutionState.BLOCKED)
+                                except Exception:
+                                    ctx.state = ExecutionState.BLOCKED
+                                ctx.record_event(EventTypes.EXECUTION_FAILED, {
                                     "flow_id": p_step.flow_id,
                                     "error": str(auth_err),
+                                    "error_code": "BLOCKED",
+                                    "failure_category": "AUTH",
                                 })
                                 await self._emit_events(ctx, event_recorder)
                                 return {
                                     "success": False,
                                     "execution_id": str(execution_id),
                                     "error": f"Prerequisite auth failed: {auth_err}",
-                                    "error_code": "PREREQUISITE_FAILED",
-                                    "state": "UNVERIFIED",
+                                    "error_code": "BLOCKED",
+                                    "failure_category": "AUTH",
+                                    "state": ExecutionState.BLOCKED.value,
                                     "current_state": ctx.current_state,
                                     "events": ctx.events,
                                     "observations": ctx.observations,
@@ -1334,8 +1340,10 @@ class FlowRunner:
                         "state": ExecutionState.COMPLETED.value,
                     }
                 elif is_auth_blocked:
-                    error_code = "AUTH_BLOCKED"
-                    final_status = ExecutionState.FAILED
+                    try:
+                        ctx.transition(ExecutionState.BLOCKED)
+                    except Exception:
+                        ctx.state = ExecutionState.BLOCKED
                     dest_info = detected_expected_dest or target_url or "target page"
                     auth_err_msg = (
                         f"Authentication required: Target page '{dest_info}' is protected behind an auth barrier "
@@ -1347,7 +1355,26 @@ class FlowRunner:
                         auth_err_msg += "No test credentials configured in project. Please add a test account in Project Credentials so Kova can authenticate."
                     else:
                         auth_err_msg += f"Verification failed: {error_str}"
-                    raise ExecutionError(auth_err_msg, error_code=error_code)
+
+                    ctx.completed_at = datetime.now(timezone.utc)
+                    ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                        "error": auth_err_msg,
+                        "error_code": "BLOCKED",
+                        "failure_category": "AUTH",
+                        "completed_at": ctx.completed_at.isoformat(),
+                    })
+                    await self._emit_events(ctx, event_recorder)
+                    return {
+                        "success": False,
+                        "execution_id": str(execution_id),
+                        "error": auth_err_msg,
+                        "error_code": "BLOCKED",
+                        "failure_category": "AUTH",
+                        "state": ExecutionState.BLOCKED.value,
+                        "current_state": ctx.current_state,
+                        "events": ctx.events,
+                        "observations": ctx.observations,
+                    }
                 elif is_page_error:
                     error_code = ErrorCode.PAGE_LOAD_FAILED
                     final_status = ExecutionState.FAILED
