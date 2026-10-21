@@ -1,8 +1,10 @@
 """Screenshot storage with S3 backend (RumptyCloud).
 
-Uploads screenshots to a public S3 bucket.
+Stores screenshots in a private S3 bucket with short-lived signed URLs (§Prompt D).
+Never exposes unauthenticated public URLs for execution or exploration screenshots.
 """
 
+import asyncio
 import logging
 import uuid
 import boto3
@@ -15,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenshotStorage:
-    """Stores screenshots in a public S3 bucket."""
+    """Stores screenshots in a private S3 bucket with short-lived signed URLs."""
 
     def __init__(self):
         self._bucket_ready = False
@@ -26,7 +28,7 @@ class ScreenshotStorage:
             s3_config = Config(
                 connect_timeout=3,
                 read_timeout=4,
-                retries={"max_attempts": 1},
+                retries={"max_attempts": 2},
             )
             self._s3_client = boto3.client(
                 "s3",
@@ -38,6 +40,10 @@ class ScreenshotStorage:
             )
         return self._s3_client
 
+    def _get_bucket_name(self) -> str:
+        # Default to evidence private bucket or unified bucket
+        return settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
+
     def _ensure_bucket(self):
         """Create the storage bucket if it doesn't exist (once per process)."""
         if self._bucket_ready:
@@ -46,7 +52,7 @@ class ScreenshotStorage:
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             return
 
-        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
+        bucket = self._get_bucket_name()
         s3 = self._get_s3_client()
 
         try:
@@ -66,6 +72,22 @@ class ScreenshotStorage:
         except Exception as e:
             logger.warning("Could not ensure storage bucket: %s", e)
 
+    def create_signed_url(self, storage_key: str, expires_in: int = 3600) -> str | None:
+        """Create a short-lived presigned URL for secure screenshot access."""
+        if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
+            return None
+        bucket = self._get_bucket_name()
+        s3 = self._get_s3_client()
+        try:
+            return s3.generate_presigned_url(
+                "get_object",
+                Params={"Bucket": bucket, "Key": storage_key},
+                ExpiresIn=expires_in,
+            )
+        except Exception as e:
+            logger.debug("Failed to create signed URL for %s: %s", storage_key, e)
+            return None
+
     def save(
         self,
         exploration_id: str,
@@ -76,11 +98,7 @@ class ScreenshotStorage:
         purpose: str = "discovery",
         step_id: str | None = None,
     ) -> dict:
-        """Upload screenshot to S3 and return public URL.
-
-        Returns metadata dict with screenshot_url, screenshot_key, purpose, and step_id.
-        Raises RuntimeError if S3 is not configured.
-        """
+        """Upload screenshot to private S3 bucket and return signed URL."""
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
             raise RuntimeError(
                 "S3 storage not configured. "
@@ -92,13 +110,11 @@ class ScreenshotStorage:
         object_path = f"{folder}/{exploration_id}/{filename}"
         self._ensure_bucket()
 
-        # Fallback to older style if RUMPTYCLOUD_BUCKET_NAME is not provided
-        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
-        # Prefix the object path with the logical bucket prefix if a unified bucket is used
+        bucket = self._get_bucket_name()
         if settings.RUMPTYCLOUD_BUCKET_NAME:
-            prefix = settings.storage_bucket("screenshots")
+            prefix = settings.storage_bucket("evidence")
             object_path = f"{prefix}/{object_path}"
-            
+
         s3 = self._get_s3_client()
 
         try:
@@ -108,21 +124,75 @@ class ScreenshotStorage:
                 Body=screenshot_bytes,
                 ContentType=content_type,
             )
-            # Use custom public URL prefix if available (e.g. assets.rumptycloud.app/...)
-            if settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX:
-                public_url = f"{settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX}/{object_path}"
-            else:
-                public_url = f"{settings.RUMPTYCLOUD_S3_ENDPOINT}/{bucket}/{object_path}"
-            logger.debug("Uploaded screenshot to S3: %s", object_path)
+            signed_url = self.create_signed_url(object_path, expires_in=3600)
+            logger.debug("Uploaded private screenshot to S3: %s", object_path)
             return {
-                "screenshot_url": public_url,
-                "screenshot_key": filename,
+                "screenshot_url": signed_url,
+                "screenshot_key": object_path,
                 "screenshot_size_bytes": len(screenshot_bytes),
                 "purpose": purpose,
                 "step_id": step_id,
             }
         except Exception as e:
             raise RuntimeError(f"S3 upload failed: {e}")
+
+    async def save_async(
+        self,
+        exploration_id: str,
+        screenshot_bytes: bytes,
+        url: str = "",
+        folder: str = "explorations",
+        content_type: str = "image/png",
+        purpose: str = "discovery",
+        step_id: str | None = None,
+        max_retries: int = 3,
+    ) -> dict:
+        """Asynchronously upload screenshot with retries and exponential backoff."""
+        if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
+            return {
+                "screenshot_url": None,
+                "screenshot_key": None,
+                "screenshot_size_bytes": len(screenshot_bytes),
+                "purpose": purpose,
+                "step_id": step_id,
+                "status": "FAILED",
+                "error": "S3 not configured",
+            }
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                res = await asyncio.to_thread(
+                    self.save,
+                    exploration_id=exploration_id,
+                    screenshot_bytes=screenshot_bytes,
+                    url=url,
+                    folder=folder,
+                    content_type=content_type,
+                    purpose=purpose,
+                    step_id=step_id,
+                )
+                res["status"] = "UPLOADED"
+                return res
+            except Exception as e:
+                last_error = e
+                backoff = 0.25 * (2 ** attempt)
+                logger.warning(
+                    "Screenshot upload attempt %d/%d failed for %s: %s; retrying in %.2fs",
+                    attempt + 1, max_retries, exploration_id, e, backoff,
+                )
+                await asyncio.sleep(backoff)
+
+        logger.warning("All %d screenshot upload attempts failed for %s: %s", max_retries, exploration_id, last_error)
+        return {
+            "screenshot_url": None,
+            "screenshot_key": None,
+            "screenshot_size_bytes": len(screenshot_bytes),
+            "purpose": purpose,
+            "step_id": step_id,
+            "status": "FAILED",
+            "error": str(last_error),
+        }
 
     def upload_execution_screenshot(
         self,
@@ -133,11 +203,7 @@ class ScreenshotStorage:
         purpose: str = "step_evidence",
         step_id: str | None = None,
     ) -> dict:
-        """Upload an execution screenshot safely to S3.
-
-        Returns metadata dict with purpose and step_id. If upload fails or is not configured, logs warning
-        and returns fallback dict without raising.
-        """
+        """Upload an execution screenshot safely to private S3 and return signed URL."""
         try:
             return self.save(
                 exploration_id=execution_id,
@@ -156,23 +222,19 @@ class ScreenshotStorage:
                 "screenshot_size_bytes": len(screenshot_bytes),
                 "purpose": purpose,
                 "step_id": step_id,
+                "status": "FAILED",
+                "error": str(e),
             }
 
     def get_public_url(self, key: str, exploration_id: str = "", folder: str = "explorations") -> str | None:
-        """Get public URL for a screenshot key."""
-        if not settings.RUMPTYCLOUD_S3_ENDPOINT or not exploration_id:
-            return None
-        object_path = f"{folder}/{exploration_id}/{key}"
-        
-        if settings.RUMPTYCLOUD_BUCKET_NAME:
-            prefix = settings.storage_bucket("screenshots")
-            object_path = f"{prefix}/{object_path}"
-            
-        if settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX:
-            return f"{settings.RUMPTYCLOUD_PUBLIC_URL_PREFIX}/{object_path}"
-            
-        bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("screenshots")
-        return f"{settings.RUMPTYCLOUD_S3_ENDPOINT}/{bucket}/{object_path}"
+        """Alias for secure signed URL retrieval (guarantees signed access)."""
+        object_path = key
+        if exploration_id and not key.startswith(f"{folder}/{exploration_id}/"):
+            object_path = f"{folder}/{exploration_id}/{key}"
+            if settings.RUMPTYCLOUD_BUCKET_NAME:
+                prefix = settings.storage_bucket("evidence")
+                object_path = f"{prefix}/{object_path}"
+        return self.create_signed_url(object_path)
 
 
 # Singleton instance

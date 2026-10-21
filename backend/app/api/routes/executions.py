@@ -854,6 +854,14 @@ async def get_execution_report(
     healed_steps_count = len(ai_assisted_events)
     healing_summary = f"Passed with AI healing: {healed_steps_count} steps" if healed_steps_count > 0 else None
 
+    from app.modules.executions.evidence_service import EvidenceService
+    ev_svc = EvidenceService(db)
+    ev_items = await ev_svc.get_evidence_list(exec_uuid)
+    evidence_incomplete = any(item.get("status") in ("PENDING", "FAILED") for item in ev_items)
+    has_ev_incomplete_event = any(ev.event_type in (EventTypes.EVIDENCE_FAILED, "evidence_failed") for ev in events)
+    is_ev_incomplete = evidence_incomplete or has_ev_incomplete_event
+    evidence_status_label = "verified, evidence incomplete" if (report_status == ExecutionStatus.COMPLETED.value and is_ev_incomplete) else ("incomplete" if is_ev_incomplete else "complete")
+
     sig = _generate_report_signature(exec_uuid)
     base_url = str(request.base_url).rstrip("/")
     shareable_url = f"{base_url}/api/v1/executions/{exec_uuid}/report?signature={sig}"
@@ -964,6 +972,8 @@ async def get_execution_report(
         "step_counts": {name: sum(1 for step in timeline if step.get("status") == name) for name in ("passed", "failed", "blocked", "unverified", "error")},
         "ai_healed_steps": healed_steps_count,
         "healing_summary": healing_summary,
+        "evidence_status": evidence_status_label,
+        "evidence_incomplete": is_ev_incomplete,
         "signature": None if signature else sig,
         "shareable_url": None if signature else shareable_url,
     }

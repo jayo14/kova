@@ -15,6 +15,8 @@ class EvidenceType(str, enum.Enum):
 
 
 class EvidenceStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    UPLOADED = "UPLOADED"
     CAPTURED = "CAPTURED"
     VERIFIED = "VERIFIED"
     FAILED = "FAILED"

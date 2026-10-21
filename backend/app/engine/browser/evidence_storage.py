@@ -3,6 +3,7 @@
 Stores evidence artifacts in a private S3 bucket. Returns short-lived signed URLs.
 """
 
+import asyncio
 import logging
 import boto3
 from botocore.exceptions import ClientError
@@ -104,6 +105,61 @@ class EvidenceStorage:
             }
         except Exception as e:
             raise RuntimeError(f"S3 evidence upload failed: {e}")
+
+    async def upload_async(
+        self,
+        execution_id: str,
+        evidence_id: str,
+        data: bytes,
+        content_type: str = "image/png",
+        purpose: str = "step_evidence",
+        step_id: str | None = None,
+        max_retries: int = 3,
+    ) -> dict:
+        """Upload evidence asynchronously via thread offloading with retries and exponential backoff."""
+        if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
+            logger.debug("S3 not configured for upload_async (execution_id=%s)", execution_id)
+            return {
+                "storage_key": None,
+                "url": None,
+                "purpose": purpose,
+                "step_id": step_id,
+                "status": "FAILED",
+                "error": "S3 storage not configured",
+            }
+
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                res = await asyncio.to_thread(
+                    self.upload,
+                    execution_id=execution_id,
+                    evidence_id=evidence_id,
+                    data=data,
+                    content_type=content_type,
+                    purpose=purpose,
+                    step_id=step_id,
+                )
+                res["status"] = "UPLOADED"
+                return res
+            except Exception as e:
+                last_error = e
+                backoff = 0.25 * (2 ** attempt)
+                logger.warning(
+                    "S3 upload attempt %d/%d failed for evidence %s: %s; retrying in %.2fs",
+                    attempt + 1, max_retries, evidence_id, e, backoff,
+                )
+                await asyncio.sleep(backoff)
+
+        logger.error("All %d S3 upload attempts failed for evidence %s: %s", max_retries, evidence_id, last_error)
+        return {
+            "storage_key": None,
+            "url": None,
+            "purpose": purpose,
+            "step_id": step_id,
+            "status": "FAILED",
+            "error": str(last_error),
+        }
 
     def create_signed_url(self, storage_key: str, execution_id: str, expires_in: int = 3600) -> str | None:
         """Create a short-lived signed URL for secure evidence access."""

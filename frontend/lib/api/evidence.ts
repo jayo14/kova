@@ -3,7 +3,7 @@ import { mapKeysToCamel } from "./mappers";
 
 export type EvidenceType = "SCREENSHOT" | "VERIFICATION" | "ARTIFACT" | "VISUAL";
 
-export type EvidenceStatus = "CAPTURED" | "VERIFIED" | "FAILED";
+export type EvidenceStatus = "PENDING" | "UPLOADED" | "CAPTURED" | "VERIFIED" | "FAILED";
 
 export interface Evidence {
   id: string;
@@ -12,11 +12,13 @@ export interface Evidence {
   title: string;
   purpose?: string | null;
   stepId?: string | null;
+  kind?: "before" | "after" | "assertion" | "failure" | string | null;
   description?: string | null;
   status: EvidenceStatus;
   mimeType?: string | null;
   metadata?: Record<string, unknown>;
   createdAt: string;
+  timestamp?: number | null;
   /** Short-lived signed URL or direct API URL for artifact access (screenshots only). */
   url?: string | null;
   domSnapshot?: string | null;
@@ -48,11 +50,13 @@ function parseEvidenceItem(item: Record<string, unknown>): Evidence {
     title: mapped.title as string,
     purpose: (mapped.purpose as string) || (meta.purpose as string) || (meta.checkpoint as string) || null,
     stepId: (mapped.stepId as string) || (meta.step_id as string) || (meta.stepId as string) || null,
+    kind: (mapped.kind as string) || (meta.kind as string) || null,
     description: mapped.description as string | null | undefined,
     status: mapped.status as EvidenceStatus,
     mimeType: mapped.mimeType as string | null | undefined,
     metadata: meta,
     createdAt: mapped.createdAt as string,
+    timestamp: (mapped.timestamp as number) || (meta.timestamp as number) || null,
     url: formatEvidenceUrl(mapped.url),
     domSnapshot: (mapped.domSnapshot as string) || null,
     a11yTree: (mapped.a11yTree as string) || null,
