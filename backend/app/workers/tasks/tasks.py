@@ -155,15 +155,18 @@ async def _run_multiple_executions_async(task, execution_ids: list[str], paralle
                     timeout_seconds=EXECUTION_TIMEOUT_SECONDS,
                 )
 
+                from app.modules.executions.reporting import sanitize_payload
+
                 for evt in result.get("events", []):
                     try:
                         await event_repo.create(
                             execution_id=exec_uuid,
                             event_type=evt["type"],
-                            payload=evt.get("data", {}),
+                            payload=sanitize_payload(evt.get("data", {})),
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("Failed to persist remaining event %s: %s", evt.get("type"), e)
+                        await db.rollback()
 
                 current = await exec_repo.get_by_id(exec_uuid)
                 current_status = current.status if current else None

@@ -11,6 +11,13 @@ import uuid
 
 from celery.exceptions import SoftTimeLimitExceeded
 from app.workers.celery_app import celery_app
+import app.modules.users.models  # noqa: F401
+import app.modules.projects.models  # noqa: F401
+import app.modules.flows.models  # noqa: F401
+import app.modules.executions.models  # noqa: F401
+import app.modules.executions.event_model  # noqa: F401
+import app.modules.credentials.models  # noqa: F401
+import app.modules.organizations.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -246,10 +253,11 @@ async def _run_execution_async(task, execution_id: str):
                     await event_repo.create(
                         execution_id=exec_uuid,
                         event_type=evt["type"],
-                        payload=evt.get("data", {}),
+                        payload=sanitize_payload(evt.get("data", {})),
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to persist remaining event %s: %s", evt.get("type"), e)
+                    await db.rollback()
 
             # Re-read current status — event_recorder may have advanced it
             current = await exec_repo.get_by_id(exec_uuid)

@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship, backref
 
 from app.infrastructure.database.base import Base, JSONCompat
+import app.modules.projects.models  # noqa: F401
 
 
 class Flow(Base):
