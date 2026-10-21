@@ -15,23 +15,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -e backend/
-      - run: python -m benchmarks.cli --output /tmp/benchmark
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e backend/
+          playwright install --with-deps chromium
+      - name: Run benchmark in dual mode (AI off and AI on)
+        run: python -m benchmarks.cli --both --output /tmp/benchmark
         working-directory: backend
       - name: Check metric gates
         run: |
           python -c "
           import json
-          r = json.load(open('/tmp/benchmark.json'))
+          r = json.load(open('/tmp/benchmark_ai_off.json'))
           m = r.get('metrics', {})
-          assert m.get('scenario_relevance', 0) >= 0.80, f'Scenario relevance {m.get(\"scenario_relevance\")} below 0.80'
-          assert m.get('true_positive_rate', 0) >= 0.70, f'TP rate {m.get(\"true_positive_rate\")} below 0.70'
-          assert m.get('false_positive_rate', 0) <= 0.15, f'FP rate {m.get(\"false_positive_rate\")} above 0.15'
-          assert m.get('evidence_quality_score', 0) >= 0.85, f'Evidence quality {m.get(\"evidence_quality_score\")} below 0.85'
-          print('All benchmark gates passed')
+          assert m.get('auth_success_rate', 0) >= 0.95, f'Auth success rate {m.get(\"auth_success_rate\")} below 0.95'
+          assert m.get('flow_completion_rate', 0) >= 0.85, f'Flow completion rate {m.get(\"flow_completion_rate\")} below 0.85'
+          assert m.get('true_positive_rate', 0) >= 0.90, f'TP rate {m.get(\"true_positive_rate\")} below 0.90'
+          assert m.get('false_positive_rate', 1.0) <= 0.05, f'FP rate {m.get(\"false_positive_rate\")} above 0.05'
+          assert m.get('evidence_completeness', 0) >= 0.98, f'Evidence completeness {m.get(\"evidence_completeness\")} below 0.98'
+          print('All real benchmark gates passed successfully')
           "
       - name: Upload report
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-report
-          path: /tmp/benchmark.*
+          path: /tmp/benchmark_*.*

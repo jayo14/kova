@@ -1,0 +1,6 @@
+fixture_id: spa_custom_buttons
+description: SPA featuring non-standard interactive div elements and role=button custom controls
+known_defects: []
+expected_scenarios:
+  - "Interact with custom div button and verify Article Published Successfully feedback"
+forbidden_scenarios: []

@@ -1,0 +1,6 @@
+fixture_id: modal_login
+description: Modal login flow where sign-in form is inside a hidden popup dialog
+known_defects: []
+expected_scenarios:
+  - "Open the sign-in modal, submit valid credentials, and verify user greeting"
+forbidden_scenarios: []

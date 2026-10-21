@@ -1,0 +1,6 @@
+fixture_id: redirect_after_login
+description: Deep link navigation redirects to login and returns to original destination post-auth
+known_defects: []
+expected_scenarios:
+  - "Access protected resource, authenticate on redirect, and verify landing on original destination"
+forbidden_scenarios: []

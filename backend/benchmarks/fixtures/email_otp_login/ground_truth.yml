@@ -1,0 +1,6 @@
+fixture_id: email_otp_login
+description: Passwordless email login reading 6-digit OTP from internal temp mail inbox
+known_defects: []
+expected_scenarios:
+  - "Request login code, read OTP from inbox, submit code, and verify landing on Email Verified Dashboard"
+forbidden_scenarios: []

@@ -29,3 +29,48 @@ fixtures:
     path: "visual_regression"
     defects_count: 1
     defect_types: ["visual"]
+  - id: modal_login
+    name: "Modal Login"
+    path: "modal_login"
+    defects_count: 0
+    defect_types: []
+  - id: multistep_login
+    name: "Multi-step Login"
+    path: "multistep_login"
+    defects_count: 0
+    defect_types: []
+  - id: redirect_after_login
+    name: "Redirect After Login"
+    path: "redirect_after_login"
+    defects_count: 0
+    defect_types: []
+  - id: session_expiry
+    name: "Session Expiry"
+    path: "session_expiry"
+    defects_count: 1
+    defect_types: ["functional"]
+  - id: totp_login
+    name: "TOTP 2FA Login"
+    path: "totp_login"
+    defects_count: 0
+    defect_types: []
+  - id: email_otp_login
+    name: "Email OTP Login"
+    path: "email_otp_login"
+    defects_count: 0
+    defect_types: []
+  - id: enrollment_flow
+    name: "Enrollment Before Access"
+    path: "enrollment_flow"
+    defects_count: 0
+    defect_types: []
+  - id: spa_custom_buttons
+    name: "SPA with Custom Div Buttons"
+    path: "spa_custom_buttons"
+    defects_count: 0
+    defect_types: []
+  - id: iframe_login
+    name: "Login Inside Iframe"
+    path: "iframe_login"
+    defects_count: 0
+    defect_types: []

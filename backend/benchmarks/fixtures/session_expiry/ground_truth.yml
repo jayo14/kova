@@ -1,0 +1,12 @@
+fixture_id: session_expiry
+description: Action causes session expiration and unhandled 401 mid-workflow
+known_defects:
+  - id: defect_session_expired
+    type: functional
+    description: "POST /api/profile/update returns 401 Session expired mid-workflow"
+    location: "/profile"
+    detection_method: network_response_inspection
+    expected_severity: high
+expected_scenarios:
+  - "Update profile and verify network response and session persistence"
+forbidden_scenarios: []
