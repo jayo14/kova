@@ -344,11 +344,7 @@ export function ExecutionDetailPage({
             );
           })()}
 
-          <ExecutionResult
-            execution={reportExecution}
-            onRetry={handleRetry}
-            isRetrying={isRetrying}
-          />
+          <ExecutionResult execution={reportExecution} />
 
           {/* Evidence Section */}
           {terminalStatuses.includes(execution.status) ? (
