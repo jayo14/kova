@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from typing import Optional
@@ -14,6 +15,16 @@ logger = logging.getLogger(__name__)
 # In-memory fallback when Redis is absent or during tests
 _memory_rate_limits: dict[str, list[float]] = {}
 _redis_unavailable_until: float = 0.0
+
+
+def token_bucket_key(token: str) -> str:
+    """Stable, collision-free bucket id for an auth token.
+
+    Hash the full token: a short prefix such as ``eyJhbGciOiJIUzI1`` is the
+    shared JWT header of every HS256 token, so prefix keys would put all
+    tokens in one bucket.
+    """
+    return f"tok_{hashlib.sha256(token.encode()).hexdigest()}"
 
 
 class RateLimiter:
@@ -59,10 +70,11 @@ class RateLimiter:
         if client:
             try:
                 count = await client.incr(key)
-                if count == 1:
+                ttl = await client.ttl(key)
+                if ttl is None or ttl < 0:
                     await client.expire(key, window_seconds)
+                    ttl = window_seconds
                 if count > limit:
-                    ttl = await client.ttl(key)
                     return False, max(1, ttl)
                 return True, 0
             except Exception as e:
@@ -105,10 +117,11 @@ class RateLimiter:
         if client:
             try:
                 count = await client.incr(key)
-                if count == 1:
+                ttl = await client.ttl(key)
+                if ttl is None or ttl < 0:
                     await client.expire(key, window_seconds)
+                    ttl = window_seconds
                 if count > daily_limit:
-                    ttl = await client.ttl(key)
                     return False, max(1, ttl)
                 return True, 0
             except Exception as e:
@@ -153,7 +166,7 @@ async def check_rate_limit(
     # Determine identifier (user ID or client IP)
     auth_header = request.headers.get("authorization", "")
     token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
-    client_id = f"token_{token[:16]}" if token else (request.client.host if request.client else "unknown")
+    client_id = token_bucket_key(token) if token else (request.client.host if request.client else "unknown")
 
     allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=60, window_seconds=60)
     if not allowed:

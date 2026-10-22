@@ -26,7 +26,7 @@ from app.api.routes import (
 )
 from app.config.settings import settings
 from app.infrastructure.database.session import engine
-from app.modules.auth.rate_limiter import rate_limiter
+from app.modules.auth.rate_limiter import rate_limiter, token_bucket_key
 from app.observability.logging import RequestIdMiddleware, configure_logging
 from app.observability.metrics import PrometheusMiddleware
 from app.observability.tracing import FastAPITracingMiddleware, configure_tracing
@@ -224,7 +224,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
     auth_header = request.headers.get("authorization", "")
     token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
-    client_id = f"tok_{token[:16]}" if token else f"ip_{client_ip}"
+    client_id = token_bucket_key(token) if token else f"ip_{client_ip}"
 
     # Generous limits for active exploration sessions, SSE streams, and auth verification
     is_exploration_or_auth = path.startswith("/api/v1/exploration") or path in ("/api/v1/auth/me", "/auth/me")
