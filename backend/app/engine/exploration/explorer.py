@@ -260,13 +260,11 @@ class ExplorationEngine:
             doc_height = scroll_data.get("docHeight", 800)
             view_height = scroll_data.get("viewHeight", 800)
 
-            # 1. Smoothly scroll through sections if the page has scrollable content
-            if doc_height > view_height * 1.15:
-                steps = [int(view_height * 0.75)]
-                if doc_height > view_height * 1.8:
-                    steps.append(int(view_height * 1.5))
-                if doc_height > view_height * 2.8:
-                    steps.append(int(view_height * 2.3))
+            # 1. Smoothly scroll through sections covering the entire document height
+            max_scroll = max(0, doc_height - view_height)
+            if max_scroll > 150:
+                num_steps = 4 if max_scroll > 2500 else 3
+                steps = [int(max_scroll * (i / num_steps)) for i in range(1, num_steps + 1)]
 
                 for idx, scroll_pos in enumerate(steps, start=1):
                     await self._emit("progress", {
@@ -275,13 +273,13 @@ class ExplorationEngine:
                         "status": "active",
                     })
                     await page.evaluate(f"window.scrollTo({{ top: {scroll_pos}, behavior: 'smooth' }})")
-                    await asyncio.sleep(0.6)
-                    await self._capture_and_emit_screenshot(page)
+                    await asyncio.sleep(0.7)
+                    await self._capture_and_emit_screenshot(page, full_page=False)
 
                 # Return smoothly to the top of the page
                 await page.evaluate("window.scrollTo({ top: 0, behavior: 'smooth' })")
-                await asyncio.sleep(0.4)
-                await self._capture_and_emit_screenshot(page)
+                await asyncio.sleep(0.5)
+                await self._capture_and_emit_screenshot(page, full_page=False)
 
             # 2. Inspect and highlight a primary navigation or interactive control
             target_info = await page.evaluate(
