@@ -405,7 +405,21 @@ export function LiveViewport({
       )}
 
       {/* Viewport canvas */}
-      <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
+      <div className="relative aspect-video bg-neutral-950 flex items-center justify-center overflow-hidden">
+        {!hasReceivedFrame && !fallbackScreenshot && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-0 bg-neutral-950">
+            <div className="relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 shadow-lg">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl bg-primary opacity-20" />
+              <MaterialIcon name="smart_toy" size={28} className="text-primary animate-pulse" />
+            </div>
+            <p className="text-body-sm font-medium text-neutral-200">
+              Initializing Kova Playwright browser...
+            </p>
+            <p className="text-caption text-neutral-400 mt-0.5 max-w-xs">
+              Live viewport frames and interactions will stream here in real time.
+            </p>
+          </div>
+        )}
         {fallbackScreenshot && !hasReceivedFrame && (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
