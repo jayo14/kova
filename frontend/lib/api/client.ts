@@ -1,3 +1,4 @@
+import Cookies from "js-cookie";
 import { ApiError, formatFastApiDetail, isApiError } from "./errors";
 
 export { ApiError, isApiError };
@@ -19,6 +20,9 @@ export function getApiBaseUrl(): string {
 export async function getBrowserSessionToken(): Promise<string | null> {
   if (typeof window === "undefined") return null;
   try {
+    const cookieToken = Cookies.get("access_token");
+    if (cookieToken) return cookieToken;
+
     const { createClient } = await import("@/lib/auth/client");
     const supabase = createClient();
     const {
