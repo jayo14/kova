@@ -103,6 +103,12 @@ def classify_failure(error_code: str | None, status: str | None = None) -> str |
         return "evidence_storage"
     if code in {"BROWSER_START_FAILED", "BROWSER_CRASH", "ACTION_FAILED", "RESOURCE_LIMIT"}:
         return "browser_infrastructure"
+    if code in {"FLOW_NOT_RUNNABLE", "FLOW_EMPTY_NO_AGENT"}:
+        return "flow_configuration"
+    if code in {"DISPATCH_ERROR"}:
+        return "dispatch_infrastructure"
+    if code in {"ORG_AT_CAPACITY"}:
+        return "quota_exceeded"
     return "internal_kova"
 
 
@@ -122,6 +128,9 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
         "network_or_application_server": "Inspect the recorded request or navigation outcome; this alone does not establish an application defect.",
         "evidence_storage": "Check private evidence storage availability; missing evidence is not itself proof that the application behavior failed.",
         "browser_infrastructure": "Check worker health and browser startup, action, or shutdown logs.",
+        "flow_configuration": "This flow has no executable steps and no autonomous agent path. Add steps in the flow editor, or set AGENT_EXECUTION_ENABLED=true (agent loop) or configure AI planning (AI_API_KEY + AI_MODEL) so Kova can derive actions from the objective.",
+        "dispatch_infrastructure": "Kova failed to start the execution worker path. Check worker logs and Celery broker connectivity.",
+        "quota_exceeded": "The organization is at its concurrent execution limit. Wait for running executions to finish or raise the org plan limit.",
         "internal_kova": "Inspect authorized worker diagnostics around this execution.",
     }[category]
     return {
