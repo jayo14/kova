@@ -130,7 +130,10 @@ export function ExecutionActivity({
                 </span>
 
                 {formattedTime && (
-                  <span className="text-caption font-mono text-muted-foreground/80 shrink-0 text-right">
+                  <span
+                    suppressHydrationWarning
+                    className="text-caption font-mono text-muted-foreground/80 shrink-0 text-right"
+                  >
                     {formattedTime}
                   </span>
                 )}
