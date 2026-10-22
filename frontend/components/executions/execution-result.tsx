@@ -2,13 +2,10 @@
 
 import type { ExecutionDetail } from "@/lib/types";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 interface ExecutionResultProps {
   execution: ExecutionDetail;
-  onRetry?: () => void;
-  isRetrying?: boolean;
   className?: string;
 }
 
@@ -27,8 +24,6 @@ function calculateDuration(startedAt?: string | null, completedAt?: string | nul
 
 export function ExecutionResult({
   execution,
-  onRetry,
-  isRetrying = false,
   className,
 }: ExecutionResultProps) {
   const duration = calculateDuration(execution.startedAt, execution.completedAt);
@@ -64,24 +59,6 @@ export function ExecutionResult({
           )}
         </div>
 
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -117,24 +94,6 @@ export function ExecutionResult({
           )}
         </div>
 
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -170,24 +129,6 @@ export function ExecutionResult({
           )}
         </div>
 
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -221,24 +162,6 @@ export function ExecutionResult({
             </span>
           )}
         </div>
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -272,24 +195,6 @@ export function ExecutionResult({
             </span>
           )}
         </div>
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -325,24 +230,6 @@ export function ExecutionResult({
           )}
         </div>
 
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
@@ -378,24 +265,6 @@ export function ExecutionResult({
           )}
         </div>
 
-        {onRetry && (
-          <div className="pt-1 flex justify-end">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
-          </div>
-        )}
       </section>
     );
   }
