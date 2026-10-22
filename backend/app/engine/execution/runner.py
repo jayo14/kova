@@ -82,6 +82,7 @@ class ErrorCode:
     RESOURCE_LIMIT = "RESOURCE_LIMIT"
     NETWORK_ERROR = "NETWORK_ERROR"
     APPLICATION_ERROR = "APPLICATION_ERROR"
+    FLOW_NOT_RUNNABLE = "FLOW_NOT_RUNNABLE"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
 
@@ -686,6 +687,40 @@ class FlowRunner:
         })
         await self._emit_events(ctx, event_recorder)
 
+        # Fail-fast: empty step list with no autonomous execution path.
+        # Before launching the browser so we don't waste 5-6s on navigation
+        # only to hit the post-navigation fallback with misleading events.
+        early_obj = objective or (getattr(target_flow_obj, "objective", None) if target_flow_obj else None)
+        if not flow_steps:
+            from app.config.settings import settings as _settings
+            from app.engine.ai.settings import ai_settings as _ai_settings
+            has_autonomous_path = bool(
+                early_obj and (_settings.AGENT_EXECUTION_ENABLED or _ai_settings.ai_enabled)
+            )
+            if not has_autonomous_path:
+                ctx.transition(ExecutionState.FAILED)
+                ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                    "error": "Flow has no steps and no autonomous execution path is available. "
+                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
+                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
+                    "failure_category": "flow_configuration",
+                })
+                await self._emit_events(ctx, event_recorder)
+                return {
+                    "success": False,
+                    "execution_id": str(execution_id),
+                    "error": "Flow has no steps and no autonomous execution path is available. "
+                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
+                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
+                    "failure_category": "flow_configuration",
+                    "state": ExecutionState.FAILED.value,
+                    "current_state": ctx.current_state,
+                    "events": ctx.events,
+                    "observations": ctx.observations,
+                }
+
         browser = BrowserSession(browser_settings=ctx.browser_settings)
         exec_id = str(execution_id)
         frame_task: asyncio.Task | None = None
@@ -1044,22 +1079,25 @@ class FlowRunner:
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
 
             if not flow_steps:
-                ctx.transition(ExecutionState.UNVERIFIED)
-                ctx.completed_at = datetime.now(timezone.utc)
-                ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
-                    "completed_at": ctx.completed_at.isoformat(),
-                    "verification_status": "unverified",
-                    "failure_category": "no_steps_no_agent",
-                    "reason": "Flow has no steps and agent execution is disabled.",
+                # Defensive fallback (normally caught by the pre-launch check above).
+                ctx.transition(ExecutionState.FAILED)
+                ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                    "error": "Flow has no steps and no autonomous execution path is available. "
+                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
+                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
+                    "failure_category": "flow_configuration",
                 })
                 await self._emit_events(ctx, event_recorder)
                 return {
                     "success": False,
                     "execution_id": str(execution_id),
-                    "error": "Flow has no steps and agent execution is disabled.",
-                    "error_code": "UNVERIFIED",
-                    "failure_category": "no_steps_no_agent",
-                    "state": ExecutionState.UNVERIFIED.value,
+                    "error": "Flow has no steps and no autonomous execution path is available. "
+                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
+                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
+                    "failure_category": "flow_configuration",
+                    "state": ExecutionState.FAILED.value,
                     "current_state": ctx.current_state,
                     "events": ctx.events,
                     "observations": ctx.observations,
