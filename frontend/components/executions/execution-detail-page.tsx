@@ -150,10 +150,23 @@ export function ExecutionDetailPage({
     }
   }, [execution.id]);
 
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
+    setActionError(null);
     const base = getApiBaseUrl();
-    window.open(`${base}/api/v1/executions/${encodeURIComponent(execution.id)}/report?format=html`, "_blank");
-  }, [execution.id]);
+    const reportPath = `${base}/api/v1/executions/${encodeURIComponent(execution.id)}/report`;
+    const signature = report?.signature ?? (await getExecutionReport(execution.id))?.signature;
+
+    if (!signature) {
+      setActionError("Report is not ready yet. Reload the page and try again.");
+      return;
+    }
+
+    window.open(
+      `${reportPath}?signature=${encodeURIComponent(signature)}&format=html`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }, [execution.id, report?.signature]);
 
   const displayError = actionError || streamError;
   const reportLoading = terminalStatuses.includes(execution.status) && !reportLoaded;
