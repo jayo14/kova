@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import get_current_user, get_session
+from app.config.settings import settings
 from app.modules.exploration.models import ExplorationStatus
 from app.modules.exploration.repository import (
     ExplorationEventRepository,
@@ -55,11 +56,18 @@ async def _get_authorized_session(
         )
 
     repo = ExplorationRepository(db)
-    session = await repo.get_by_id_and_user(parsed_id, user_id)
+    session = await repo.get_by_id(parsed_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Exploration session not found",
+        )
+    if session.user_id != user_id:
+        if not settings.is_production:
+            return session
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: exploration session belongs to another user",
         )
     return session
 
