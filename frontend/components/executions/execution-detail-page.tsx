@@ -19,7 +19,6 @@ import { ExecutionCancelDialog } from "./execution-cancel-dialog";
 import { EvidenceList } from "./evidence-list";
 import { EvidenceViewer } from "./evidence-viewer";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { Button } from "@/components/ui/button";
 import { terminalStatuses } from "@/lib/types";
 import { normalizeExecutionStatus } from "@/lib/executions/status";
 
@@ -429,25 +428,9 @@ export function ExecutionDetailPage({
 
       {terminalStatuses.includes(execution.status) && (
         <section aria-label="Execution report" className="rounded-xl border border-border bg-card/50 p-4 sm:p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="text-heading font-semibold">Execution report</h2>
-              <span className="text-caption text-muted-foreground">{reportLoading ? "Loading persisted report…" : report ? `Flow version ${execution.flowVersion ?? 1} · ${reportStatus.toUpperCase()}` : "Detailed report unavailable"}</span>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl border-border/80 text-foreground hover:bg-secondary/40 shrink-0"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
+          <div>
+            <h2 className="text-heading font-semibold">Execution report</h2>
+            <span className="text-caption text-muted-foreground">{reportLoading ? "Loading persisted report…" : report ? `Flow version ${execution.flowVersion ?? 1} · ${reportStatus.toUpperCase()}` : "Detailed report unavailable"}</span>
           </div>
           <div className="grid gap-2 text-caption text-muted-foreground sm:grid-cols-2">
             <p>Execution ID: <span className="font-mono text-foreground">{execution.id}</span></p>
