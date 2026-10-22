@@ -198,7 +198,8 @@ export function ExecutionBrowser({
             <LiveViewport
               executionId={executionId}
               fallbackScreenshot={latestScreenshot}
-              className="w-full h-full rounded-none border-0"
+              hideHeader={true}
+              className="w-full h-full rounded-none border-0 bg-transparent"
             />
           </div>
         ) : (
