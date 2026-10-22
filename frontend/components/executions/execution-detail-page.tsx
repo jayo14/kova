@@ -373,6 +373,8 @@ export function ExecutionDetailPage({
                 <EvidenceList
                   evidence={evidence}
                   onEvidenceClick={setSelectedEvidence}
+                  executionId={execution.id}
+                  traceSignature={report?.signature}
                 />
               )}
             </div>
