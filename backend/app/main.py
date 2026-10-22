@@ -213,17 +213,28 @@ async def rate_limit_middleware(request: Request, call_next):
     ):
         return await call_next(request)
 
+    real_ip = request.headers.get("cf-connecting-ip") or request.headers.get("x-real-ip")
     forwarded = request.headers.get("x-forwarded-for")
-    client_ip = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "anon")
+    if real_ip:
+        client_ip = real_ip.strip()
+    elif forwarded:
+        client_ip = forwarded.split(",")[0].strip()
+    else:
+        client_ip = request.client.host if request.client else "anon"
+
     auth_header = request.headers.get("authorization", "")
     token = request.headers.get("x-api-key") or (auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else "")
     client_id = f"tok_{token[:16]}" if token else f"ip_{client_ip}"
 
-    # In development or debug, use generous limit (600 req/min).
-    # In production, use RATE_LIMIT_PER_MINUTE (default 300 req/min, 5 req/sec sustained) so multi-flow execution, SSE, and real-time polling don't get throttled.
-    limit = getattr(app.state, "rate_limit_override", None) or (
-        600 if (not settings.is_production or settings.DEBUG) else settings.RATE_LIMIT_PER_MINUTE
+    # Generous limits for active exploration sessions, SSE streams, and auth verification
+    is_exploration_or_auth = path.startswith("/api/v1/exploration") or path in ("/api/v1/auth/me", "/auth/me")
+
+    # In development or debug, use generous limit (1200 req/min).
+    # In production, use higher limit (1200 req/min) for exploration/auth/authenticated tokens so live streams and polls never get throttled.
+    base_limit = getattr(app.state, "rate_limit_override", None) or (
+        1200 if (not settings.is_production or settings.DEBUG) else settings.RATE_LIMIT_PER_MINUTE
     )
+    limit = max(base_limit, 1200) if (token or is_exploration_or_auth) else base_limit
     allowed, retry_after = await rate_limiter.check_user_rate_limit(client_id, limit=limit, window_seconds=60)
     if not allowed:
         headers = _cors_headers_for_request(request)
