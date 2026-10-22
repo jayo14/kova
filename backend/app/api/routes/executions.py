@@ -1059,6 +1059,8 @@ async def get_execution_report(
         "signature": None if signature else sig,
         "shareable_url": None if signature else shareable_url,
     }
+    if format == "html":
+        return HTMLResponse(content=html_content)
     if format != "json":
         report_response["html"] = html_content
     return report_response
