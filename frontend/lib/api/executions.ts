@@ -27,6 +27,7 @@ export interface ExecutionReport {
   status: string;
   persistedStatus: string;
   failureCategory: string | null;
+  errorCode?: string | null;
   diagnosis: { summary: string; expected: string | null; observed: string; reason: string; nextStep: string; hypothesis: string | null } | null;
   steps: Array<Record<string, unknown>>;
   stepCounts: Record<string, number>;

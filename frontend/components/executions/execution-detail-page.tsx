@@ -366,6 +366,31 @@ export function ExecutionDetailPage({
             );
           })()}
 
+          {(() => {
+            const isFlowConfig = Boolean(
+              report?.failureCategory === "flow_configuration" ||
+              report?.errorCode === "FLOW_NOT_RUNNABLE" ||
+              report?.errorCode === "FLOW_EMPTY_NO_AGENT"
+            );
+            if (!isFlowConfig) return null;
+            return (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                <div className="flex items-start gap-3">
+                  <MaterialIcon name="route" size={20} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h3 className="text-body-sm font-semibold text-amber-700 dark:text-amber-400">
+                      This flow has nothing to run
+                    </h3>
+                    <p className="text-caption text-foreground/80">
+                      The flow has no executable steps and no autonomous agent path.
+                      Add steps to the flow, or enable the AI agent (set AGENT_EXECUTION_ENABLED=true or provide AI credentials) so Kova can generate them at run time.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+
           <ExecutionActivity activities={activities} />
         </div>
 

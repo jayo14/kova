@@ -236,6 +236,21 @@ export function MissionDetail({
 
           {/* Journey Stages */}
           <div className="border-t border-border/60 pt-6">
+            {(!mission.steps || mission.steps.length === 0) && (
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 mb-4">
+                <div className="flex items-start gap-3">
+                  <MaterialIcon name="route" size={20} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <h3 className="text-body-sm font-semibold text-amber-700 dark:text-amber-400">
+                      No steps yet
+                    </h3>
+                    <p className="text-caption text-foreground/80">
+                      This flow has no steps. Add steps before running it, or enable the AI agent (AGENT_EXECUTION_ENABLED=true) so Kova can generate them at run time.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
             <MissionJourney steps={mission.steps} />
           </div>
         </div>
