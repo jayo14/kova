@@ -240,6 +240,101 @@ class ExplorationEngine:
             logger.warning("Could not capture screenshot: %s", e)
             return None
 
+    async def _stream_page_exploration(self, page) -> None:
+        """Stream real one-direction browser actions (scrolling, inspecting, section mapping) to the user viewport."""
+        try:
+            # Measure document height vs viewport height
+            scroll_data = await page.evaluate(
+                """() => {
+                    const docHeight = Math.max(
+                        document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0,
+                        document.body.offsetHeight || 0, document.documentElement.offsetHeight || 0
+                    );
+                    const viewHeight = window.innerHeight || 800;
+                    return { docHeight, viewHeight };
+                }"""
+            )
+            doc_height = scroll_data.get("docHeight", 800)
+            view_height = scroll_data.get("viewHeight", 800)
+
+            # 1. Smoothly scroll through sections if the page has scrollable content
+            if doc_height > view_height * 1.15:
+                steps = [int(view_height * 0.75)]
+                if doc_height > view_height * 1.8:
+                    steps.append(int(view_height * 1.5))
+                if doc_height > view_height * 2.8:
+                    steps.append(int(view_height * 2.3))
+
+                for idx, scroll_pos in enumerate(steps, start=1):
+                    await self._emit("progress", {
+                        "id": f"exp-stream-scroll-{idx}",
+                        "message": f"Exploring application sections ({idx}/{len(steps)})",
+                        "status": "active",
+                    })
+                    await page.evaluate(f"window.scrollTo({{ top: {scroll_pos}, behavior: 'smooth' }})")
+                    await asyncio.sleep(0.6)
+                    await self._capture_and_emit_screenshot(page)
+
+                # Return smoothly to the top of the page
+                await page.evaluate("window.scrollTo({ top: 0, behavior: 'smooth' })")
+                await asyncio.sleep(0.4)
+                await self._capture_and_emit_screenshot(page)
+
+            # 2. Inspect and highlight a primary navigation or interactive control
+            target_info = await page.evaluate(
+                """() => {
+                    const candidates = Array.from(document.querySelectorAll('nav a, header a, a.btn, a[href*="/"], button, [role="button"]'));
+                    for (const el of candidates) {
+                        const rect = el.getBoundingClientRect();
+                        const text = (el.innerText || el.getAttribute('aria-label') || '').trim();
+                        if (rect.width > 24 && rect.height > 18 && rect.top >= 0 && rect.bottom <= window.innerHeight && text.length >= 2 && text.length <= 40) {
+                            return {
+                                text: text,
+                                id: el.id ? '#' + el.id : null,
+                                tagName: el.tagName.toLowerCase(),
+                            };
+                        }
+                    }
+                    return null;
+                }"""
+            )
+
+            if target_info and target_info.get("text"):
+                label = target_info["text"]
+                await self._emit("progress", {
+                    "id": "exp-stream-inspect",
+                    "message": f"Inspecting navigation: {label}",
+                    "status": "active",
+                })
+                # Visual focus outline
+                await page.evaluate(
+                    """(info) => {
+                        const selector = info.id || info.tagName;
+                        const el = document.querySelector(selector);
+                        if (el) {
+                            el.setAttribute('data-kova-target', 'true');
+                            el.style.outline = '2px solid rgba(14, 165, 233, 0.9)';
+                            el.style.outlineOffset = '3px';
+                        }
+                    }""",
+                    target_info,
+                )
+                await asyncio.sleep(0.4)
+                await self._capture_and_emit_screenshot(page)
+                # Clear focus outline
+                await page.evaluate(
+                    """() => {
+                        const el = document.querySelector('[data-kova-target="true"]');
+                        if (el) {
+                            el.removeAttribute('data-kova-target');
+                            el.style.outline = '';
+                            el.style.outlineOffset = '';
+                        }
+                    }"""
+                )
+        except Exception as e:
+            logger.debug("Page exploration streaming completed: %s", e)
+
     async def explore(
         self,
         credential: dict | None = None,
@@ -416,14 +511,8 @@ class ExplorationEngine:
                     "forms_count": len(observation.get("forms", [])),
                 })
 
-                # Trigger smooth scan scroll and capture live observing snapshot for viewport
-                try:
-                    await page.evaluate("window.scrollBy({ top: 320, behavior: 'smooth' })")
-                    await asyncio.sleep(0.35)
-                    await self._capture_and_emit_screenshot(page)
-                    await page.evaluate("window.scrollTo({ top: 0, behavior: 'instant' })")
-                except Exception:
-                    pass
+                # Stream real one-direction browser actions (sections scroll & navigation inspection)
+                await self._stream_page_exploration(page)
 
                 # 3. Check for authentication requirement
                 from app.engine.browser.auth import classify_auth_page, observe_auth_signals
