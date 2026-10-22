@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import { Logo } from "@/components/shared/logo";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ interface AgentShellProps {
   url: string;
   state: ExploreState;
   projectName?: string;
+  onProjectNameChange?: (newName: string) => void;
   onStop?: () => void;
   onBack?: () => void;
   children: ReactNode;
@@ -41,6 +42,7 @@ export function AgentShell({
   url,
   state,
   projectName,
+  onProjectNameChange,
   onStop,
   onBack,
   children,
@@ -68,6 +70,24 @@ export function AgentShell({
   })();
 
   const displayName = projectName || hostname;
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitleValue, setEditTitleValue] = useState(displayName || "");
+
+  useEffect(() => {
+    if (!isEditingTitle) {
+      setEditTitleValue(displayName || "");
+    }
+  }, [displayName, isEditingTitle]);
+
+  const handleTitleCommit = () => {
+    const trimmed = editTitleValue.trim();
+    if (trimmed && trimmed !== displayName) {
+      onProjectNameChange?.(trimmed);
+    } else {
+      setEditTitleValue(displayName || "");
+    }
+    setIsEditingTitle(false);
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -91,9 +111,36 @@ export function AgentShell({
             <>
               <span className="text-muted-foreground/40 select-none">/</span>
               <div className="flex items-center gap-2">
-                <span className="text-body-sm font-medium text-foreground truncate max-w-[180px] sm:max-w-[280px]">
-                  {displayName}
-                </span>
+                {isEditingTitle ? (
+                  <input
+                    type="text"
+                    value={editTitleValue}
+                    autoFocus
+                    onChange={(e) => setEditTitleValue(e.target.value)}
+                    onBlur={handleTitleCommit}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handleTitleCommit();
+                      } else if (e.key === "Escape") {
+                        setEditTitleValue(displayName || "");
+                        setIsEditingTitle(false);
+                      }
+                    }}
+                    className="h-7 rounded border border-primary bg-background px-2 font-body text-body-sm font-medium text-foreground outline-none ring-1 ring-primary/40 focus:border-primary max-w-[200px] sm:max-w-[280px]"
+                    aria-label="Edit product title"
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={() => {
+                      setEditTitleValue(displayName || "");
+                      setIsEditingTitle(true);
+                    }}
+                    title="Double click to edit product title"
+                    className="text-body-sm font-medium text-foreground truncate max-w-[180px] sm:max-w-[280px] cursor-pointer hover:bg-secondary/70 rounded px-1.5 py-0.5 -mx-1.5 transition-colors select-none"
+                  >
+                    {displayName}
+                  </span>
+                )}
               </div>
             </>
           )}
