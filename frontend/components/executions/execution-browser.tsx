@@ -204,15 +204,15 @@ export function ExecutionBrowser({
           </div>
         ) : (
           /* Static screenshot fallback / final snapshot */
-          <div className="absolute inset-0 w-full h-full z-20 flex items-center justify-center p-2 sm:p-4 bg-background/95">
+          <div className="absolute inset-0 w-full h-full z-20 flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden">
             {latestScreenshot ? (
-              <div className="relative w-full h-full flex flex-col items-center justify-center">
+              <div className="relative w-full h-full flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   key={latestScreenshot}
                   src={latestScreenshot}
                   alt="Browser snapshot"
-                  className="max-h-full max-w-full w-auto h-auto rounded-lg border border-border/80 object-contain shadow-md bg-background animate-in fade-in duration-200"
+                  className="w-full h-full object-contain animate-in fade-in duration-200 select-none"
                 />
               </div>
             ) : isActive ? (
