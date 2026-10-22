@@ -135,6 +135,16 @@ export function AgentBrowserViewport({
               alt={`Browser view of ${hostname}`}
               className="w-full h-full object-contain select-none transition-opacity duration-200"
             />
+            {/* Expand preview button */}
+            <button
+              type="button"
+              onClick={() => setIsSnapshotExpanded(true)}
+              className="absolute bottom-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-background/90 backdrop-blur-xs px-2.5 py-1 text-[11px] font-mono text-muted-foreground hover:text-foreground cursor-pointer shadow-sm z-10"
+              title="Expand snapshot"
+            >
+              <MaterialIcon name="zoom_in" size={13} />
+              <span>Expand</span>
+            </button>
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
@@ -154,25 +164,21 @@ export function AgentBrowserViewport({
 
         {/* Expanded snapshot overlay */}
         {latestScreenshot && isSnapshotExpanded && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center p-4 bg-background/95 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="absolute inset-0 z-30 flex flex-col items-center justify-center p-4 bg-background/95 backdrop-blur-xs animate-in fade-in duration-200">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={latestScreenshot}
-              alt="Kova browser snapshot"
+              alt="Browser snapshot"
               className="max-h-[85%] w-auto max-w-full rounded-xl border border-border/80 object-contain shadow-md bg-background"
             />
             <div className="mt-3 flex items-center gap-3">
-              <div className="inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary/70 px-3 py-1 text-caption font-mono text-foreground">
-                <MaterialIcon name="verified" size={13} className="text-emerald-600" />
-                Kova browser snapshot
-              </div>
               <button
                 onClick={() => setIsSnapshotExpanded(false)}
-                className="inline-flex items-center gap-1 text-caption text-primary hover:underline cursor-pointer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border/80 bg-background px-3 py-1 text-caption text-foreground hover:bg-secondary transition-colors cursor-pointer"
                 type="button"
               >
-                <span>Back to browser view</span>
-                <MaterialIcon name="close" size={13} />
+                <MaterialIcon name="close" size={14} />
+                <span>Close preview</span>
               </button>
             </div>
           </div>
