@@ -685,7 +685,7 @@ class ExplorationEngine:
             })
 
             discoveries, missions = await self._discover_workflows(page, observation, selected_role)
-            await self._capture_and_emit_screenshot(page, full_page=True)
+            await self._capture_and_emit_screenshot(page, full_page=False)
 
             await self._emit("progress", {
                 "id": "exp-discover",
