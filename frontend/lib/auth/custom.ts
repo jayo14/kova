@@ -3,6 +3,32 @@ import Cookies from "js-cookie";
 export type User = { id: string; email: string; name?: string; user_metadata?: any };
 export type Session = { access_token: string; user: User };
 
+let _cachedUser: User | null = null;
+let _cachedToken: string | null = null;
+let _cachedUserExpiresAt = 0;
+let _lastRateLimitedAt = 0;
+let _inFlightUserPromise: Promise<{ data: { user: User | null }; error: any }> | null = null;
+const USER_CACHE_TTL_MS = 60_000;
+const RATE_LIMIT_BACKOFF_MS = 30_000;
+
+function parseJwtPayload(token: string): any | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const base64Url = parts[1];
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+    const jsonPayload = decodeURIComponent(
+      atob(base64)
+        .split("")
+        .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+        .join("")
+    );
+    return JSON.parse(jsonPayload);
+  } catch {
+    return null;
+  }
+}
+
 export class CustomAuthClient {
   private listeners: any[] = [];
   
@@ -13,18 +39,91 @@ export class CustomAuthClient {
         token = Cookies.get("access_token");
       }
       
-      if (!token) return { data: { user: null }, error: null };
-      
-      try {
-        const res = await fetch("/api/v1/auth/me", {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!res.ok) return { data: { user: null }, error: new Error("Not logged in") };
-        const user = await res.json();
-        return { data: { user }, error: null };
-      } catch (err) {
-        return { data: { user: null }, error: err };
+      if (!token) {
+        _cachedUser = null;
+        _cachedToken = null;
+        return { data: { user: null }, error: null };
       }
+
+      // 1. Fast in-memory cache hit
+      if (_cachedUser && _cachedToken === token && Date.now() < _cachedUserExpiresAt) {
+        return { data: { user: _cachedUser }, error: null };
+      }
+
+      // 2. If recently rate-limited (HTTP 429), avoid spamming backend and decode locally
+      if (Date.now() - _lastRateLimitedAt < RATE_LIMIT_BACKOFF_MS) {
+        if (_cachedUser && _cachedToken === token) {
+          return { data: { user: _cachedUser }, error: null };
+        }
+        const payload = parseJwtPayload(token);
+        if (payload && (payload.sub || payload.id)) {
+          const fallbackUser: User = {
+            id: payload.sub || payload.id,
+            email: payload.email || "",
+            name: payload.user_metadata?.name || payload.name || undefined,
+          };
+          _cachedUser = fallbackUser;
+          _cachedToken = token;
+          _cachedUserExpiresAt = Date.now() + USER_CACHE_TTL_MS;
+          return { data: { user: fallbackUser }, error: null };
+        }
+      }
+
+      // 3. Deduplicate concurrent in-flight requests
+      if (_inFlightUserPromise) {
+        return _inFlightUserPromise;
+      }
+
+      _inFlightUserPromise = (async () => {
+        try {
+          const res = await fetch("/api/v1/auth/me", {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (!res.ok) {
+            if (res.status === 429) {
+              _lastRateLimitedAt = Date.now();
+            }
+            // If rate-limited or transient network error, fall back to cached user or decoded JWT payload
+            if (_cachedUser && _cachedToken === token) {
+              return { data: { user: _cachedUser }, error: null };
+            }
+            const payload = parseJwtPayload(token);
+            if (payload && (payload.sub || payload.id)) {
+              const fallbackUser: User = {
+                id: payload.sub || payload.id,
+                email: payload.email || "",
+                name: payload.user_metadata?.name || payload.name || undefined,
+              };
+              _cachedUser = fallbackUser;
+              _cachedToken = token;
+              _cachedUserExpiresAt = Date.now() + USER_CACHE_TTL_MS;
+              return { data: { user: fallbackUser }, error: null };
+            }
+            return { data: { user: null }, error: new Error("Not logged in") };
+          }
+          const user = await res.json();
+          _cachedUser = user;
+          _cachedToken = token;
+          _cachedUserExpiresAt = Date.now() + USER_CACHE_TTL_MS;
+          return { data: { user }, error: null };
+        } catch (err) {
+          // Fall back to decoded JWT token if offline or transient fetch failure
+          const payload = parseJwtPayload(token);
+          if (payload && (payload.sub || payload.id)) {
+            const fallbackUser: User = {
+              id: payload.sub || payload.id,
+              email: payload.email || "",
+              name: payload.user_metadata?.name || payload.name || undefined,
+            };
+            return { data: { user: fallbackUser }, error: null };
+          }
+          return { data: { user: null }, error: err };
+        }
+      })().finally(() => {
+        _inFlightUserPromise = null;
+      });
+
+      return _inFlightUserPromise;
     },
     
     getSession: async () => {
@@ -35,8 +134,24 @@ export class CustomAuthClient {
       if (!token) return { data: { session: null }, error: null };
       
       try {
+        // Fast path: if token matches cached user, return immediately without network
+        if (_cachedUser && _cachedToken === token && Date.now() < _cachedUserExpiresAt) {
+          return { data: { session: { access_token: token, user: _cachedUser } }, error: null };
+        }
         const { data: { user } } = await this.auth.getUser();
-        if (!user) return { data: { session: null }, error: null };
+        if (!user) {
+          // If token exists, don't drop session on transient user fetch error
+          const payload = parseJwtPayload(token);
+          if (payload && (payload.sub || payload.id)) {
+            const fallbackUser: User = {
+              id: payload.sub || payload.id,
+              email: payload.email || "",
+              name: payload.name || undefined,
+            };
+            return { data: { session: { access_token: token, user: fallbackUser } }, error: null };
+          }
+          return { data: { session: null }, error: null };
+        }
         return { data: { session: { access_token: token, user } }, error: null };
       } catch (err) {
         return { data: { session: null }, error: err };
@@ -80,6 +195,9 @@ export class CustomAuthClient {
     },
     
     signOut: async () => {
+      _cachedUser = null;
+      _cachedToken = null;
+      _cachedUserExpiresAt = 0;
       Cookies.remove("access_token", { path: '/' });
       this.notify(null);
       return { error: null };
