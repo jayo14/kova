@@ -3,7 +3,6 @@
 Handles flow CRUD and execution creation.
 """
 
-import asyncio
 import logging
 import uuid
 
@@ -24,9 +23,6 @@ from app.modules.users.models import User
 router = APIRouter(prefix="/flows", tags=["flows"])
 
 logger = logging.getLogger(__name__)
-
-# Strong refs so fire-and-forget dispatch tasks are not GC'd mid-run
-_dispatch_tasks: set[asyncio.Task] = set()
 
 # Per-user concurrency guard. Requests over capacity are rejected explicitly;
 # they must not create executions that can remain CREATED indefinitely.
@@ -62,64 +58,21 @@ async def _count_active_executions(db: AsyncSession, user_id: uuid.UUID) -> int:
 async def _dispatch_execution(execution_id: str) -> None:
     """Queue on Celery when a worker is online; else run via asyncio.
 
-    Runs only after the HTTP response is sent (BackgroundTask → create_task).
+    Delegates to the shared helper in app.api.dispatch.
     """
-    try:
-        from app.workers.celery_app import celery_app
-        from app.workers.tasks.executions import run_execution
+    from app.api.dispatch import dispatch_execution
 
-        def _ping():
-            inspector = celery_app.control.inspect(timeout=0.2)
-            return inspector.ping() if inspector else None
-
-        active_workers = await asyncio.wait_for(asyncio.to_thread(_ping), timeout=0.5)
-        if active_workers and isinstance(active_workers, dict) and any(active_workers.values()):
-            await asyncio.to_thread(run_execution.delay, execution_id)
-            logger.info(
-                "Dispatched execution %s to Celery worker: %s",
-                execution_id,
-                list(active_workers.keys()),
-            )
-            return
-    except Exception as celery_err:
-        logger.warning("Celery inspector error for execution %s: %s", execution_id, celery_err)
-
-    logger.info(
-        "No active Celery worker online; executing %s via background asyncio task",
-        execution_id,
-    )
-    from app.workers.tasks.executions import _run_execution_async
-
-    try:
-        await _run_execution_async(None, execution_id)
-    except Exception as exc:
-        logger.exception("Failed to execute %s in background asyncio task: %s", execution_id, exc)
-        try:
-            import uuid
-            from app.infrastructure.database.session import async_session_factory
-            from app.modules.executions.repository import ExecutionRepository
-            from app.modules.executions.models import ExecutionStatus
-
-            async with async_session_factory() as error_db:
-                rec_repo = ExecutionRepository(error_db)
-                rec = await rec_repo.get_by_id(uuid.UUID(str(execution_id)))
-                if rec and rec.status in {"CREATED", "INITIALIZING"}:
-                    await rec_repo.update_status(
-                        uuid.UUID(str(execution_id)),
-                        ExecutionStatus.FAILED,
-                        error_code="DISPATCH_ERROR",
-                        error_message=f"Execution failed to run: {str(exc)[:500]}",
-                    )
-                    await error_db.commit()
-        except Exception as update_err:
-            logger.error("Failed to update execution %s status on dispatch error: %s", execution_id, update_err)
+    await dispatch_execution(execution_id)
 
 
 async def _schedule_dispatch(execution_id: str) -> None:
-    """Create the dispatch task without awaiting it (keeps API response free)."""
-    task = asyncio.create_task(_dispatch_execution(execution_id))
-    _dispatch_tasks.add(task)
-    task.add_done_callback(_dispatch_tasks.discard)
+    """Create the dispatch task without awaiting it (keeps API response free).
+
+    Async so Starlette BackgroundTask callers (e.g. POST /executions) work.
+    """
+    from app.api.dispatch import schedule_dispatch
+
+    schedule_dispatch(execution_id)
 
 
 from app.modules.auth.rbac import verify_project_role
