@@ -62,6 +62,7 @@ export function AgentBrowserViewport({
   sessionId,
 }: AgentBrowserViewportProps) {
   const [isSnapshotExpanded, setIsSnapshotExpanded] = useState(false);
+  const [viewMode, setViewMode] = useState<"scroll" | "fit">("scroll");
 
   const hostname = (() => {
     try {
@@ -106,6 +107,16 @@ export function AgentBrowserViewport({
 
         {/* Status Pill + Screenshot Count */}
         <div className="flex items-center gap-2">
+          {latestScreenshot && (
+            <button
+              onClick={() => setViewMode((m) => (m === "scroll" ? "fit" : "scroll"))}
+              className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/80 px-2 py-0.5 text-[11px] font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+              title={viewMode === "scroll" ? "Switch to fit-to-frame view" : "Switch to full scrollable page"}
+            >
+              <MaterialIcon name={viewMode === "scroll" ? "unfold_less" : "unfold_more"} size={12} />
+              <span className="hidden sm:inline">{viewMode === "scroll" ? "Full page" : "Fit"}</span>
+            </button>
+          )}
           {screenshots.length > 0 && (
             <button
               onClick={() => onThumbnailClick?.(screenshots.length - 1)}
@@ -127,15 +138,17 @@ export function AgentBrowserViewport({
       <div className="relative flex-1 min-h-[380px] md:min-h-[460px] bg-background/50 overflow-hidden select-none">
 
         {latestScreenshot ? (
-          /* Latest real browser screenshot, click to expand */
+          /* Real browser view with scrollable full page and fit toggle */
           <div
-            className="absolute inset-0 flex flex-col items-center justify-center p-4 cursor-zoom-in"
-            onClick={() => setIsSnapshotExpanded(true)}
-            title="Click to expand the browser snapshot"
+            className={cn(
+              "absolute inset-0 flex flex-col items-center p-3 sm:p-5 select-text",
+              viewMode === "scroll" ? "overflow-y-auto cursor-default" : "overflow-hidden justify-center cursor-zoom-in"
+            )}
+            onClick={viewMode === "fit" ? () => setIsSnapshotExpanded(true) : undefined}
           >
             {/* Live stream status indicator (clean, no scanline overlay) */}
             {(state === "exploring" || state === "discovering" || state === "validating_page") && (
-              <div className="absolute top-4 left-4 z-10 flex items-center gap-2 rounded-full border border-border/80 bg-background/90 px-3 py-1 shadow-sm backdrop-blur-md">
+              <div className="sticky top-2 z-10 self-start mb-2.5 flex items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 py-1 shadow-sm backdrop-blur-md">
                 <span className="relative flex h-2 w-2">
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
                 </span>
@@ -146,17 +159,18 @@ export function AgentBrowserViewport({
             )}
 
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <div className="relative max-h-full max-w-full flex items-center justify-center">
+            <div className={cn("relative flex items-center justify-center", viewMode === "scroll" ? "w-full max-w-4xl" : "max-h-full max-w-full")}>
               <img
                 key={latestScreenshot}
                 src={latestScreenshot}
                 alt={`Kova browser view of ${hostname}`}
                 className={cn(
-                  "max-h-full max-w-full w-auto h-auto rounded-lg border border-border/80 object-contain shadow-md bg-background transition-opacity duration-200"
+                  "rounded-lg border border-border/80 shadow-md bg-background transition-opacity duration-200",
+                  viewMode === "scroll" ? "w-full h-auto object-top" : "max-h-full max-w-full w-auto h-auto object-contain"
                 )}
               />
             </div>
-            <div className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary/70 px-3 py-1 text-[11px] font-mono text-muted-foreground">
+            <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary/70 px-3 py-1 text-[11px] font-mono text-muted-foreground shrink-0">
               <MaterialIcon name="verified" size={12} className="text-emerald-600" />
               <span>Kova browser stream</span>
             </div>
