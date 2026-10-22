@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
-import type { Evidence } from "@/lib/api/evidence";
+import { getTraceDownloadUrl, type Evidence } from "@/lib/api/evidence";
 
 interface EvidenceViewerProps {
   evidence: Evidence | null;
@@ -11,6 +11,8 @@ interface EvidenceViewerProps {
   open: boolean;
   onClose: () => void;
   onRefreshUrl?: (evidenceId: string) => Promise<string | null>;
+  executionId?: string;
+  traceSignature?: string | null;
 }
 
 type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "trace" | "verification" | "visual_diff";
@@ -21,6 +23,8 @@ export function EvidenceViewer({
   open,
   onClose,
   onRefreshUrl,
+  executionId,
+  traceSignature,
 }: EvidenceViewerProps) {
   const [activeTab, setActiveTab] = useState<TabType>("screenshot");
   const [imgLoaded, setImgLoaded] = useState(false);
@@ -478,10 +482,8 @@ export function EvidenceViewer({
                       </p>
                     </div>
                     <a
-                      href={evidence.traceUrl}
+                      href={executionId ? getTraceDownloadUrl(executionId, traceSignature) : (evidence.traceUrl ?? undefined)}
                       download
-                      target="_blank"
-                      rel="noopener noreferrer"
                       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
                     >
                       <MaterialIcon name="download" size={16} />

@@ -496,6 +496,8 @@ export function ExecutionDetailPage({
           evidence={selectedEvidence}
           open={selectedEvidence !== null}
           onClose={() => setSelectedEvidence(null)}
+          executionId={execution.id}
+          traceSignature={report?.signature}
           onRefreshUrl={async (evidenceId) => {
             const freshUrl = await refreshEvidenceUrl(execution.id, evidenceId);
             if (freshUrl) {
