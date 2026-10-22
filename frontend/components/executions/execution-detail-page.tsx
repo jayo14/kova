@@ -246,8 +246,6 @@ export function ExecutionDetailPage({
         errorMessage={reportExecution.error}
         latestScreenshot={liveScreenshot}
         currentAction={currentAction}
-        onRetry={handleRetry}
-        isRetrying={isRetrying}
         events={events}
         executionId={execution.id}
       />

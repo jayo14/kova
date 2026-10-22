@@ -14,8 +14,6 @@ export interface ExecutionBrowserProps {
   errorMessage?: string | null;
   latestScreenshot?: string | null;
   currentAction?: string | null;
-  onRetry?: () => void;
-  isRetrying?: boolean;
   events?: Array<{ eventType: string; payload?: Record<string, unknown> }>;
   executionId?: string;
 }
@@ -48,8 +46,6 @@ export function ExecutionBrowser({
   errorMessage,
   latestScreenshot,
   currentAction,
-  onRetry,
-  isRetrying = false,
   events = [],
   executionId,
 }: ExecutionBrowserProps) {
@@ -282,21 +278,6 @@ export function ExecutionBrowser({
                 </p>
               </div>
             </div>
-            {onRetry && (
-              <button
-                onClick={onRetry}
-                disabled={isRetrying}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-caption font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                type="button"
-              >
-                <MaterialIcon
-                  name="replay"
-                  size={14}
-                  className={cn(isRetrying && "animate-spin")}
-                />
-                <span>Run again</span>
-              </button>
-            )}
           </div>
         )}
 
@@ -316,21 +297,6 @@ export function ExecutionBrowser({
                 </p>
               </div>
             </div>
-            {onRetry && (
-              <button
-                onClick={onRetry}
-                disabled={isRetrying}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-caption font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                type="button"
-              >
-                <MaterialIcon
-                  name="refresh"
-                  size={14}
-                  className={cn(isRetrying && "animate-spin")}
-                />
-                <span>Run again</span>
-              </button>
-            )}
           </div>
         )}
 
@@ -350,21 +316,6 @@ export function ExecutionBrowser({
                 </p>
               </div>
             </div>
-            {onRetry && (
-              <button
-                onClick={onRetry}
-                disabled={isRetrying}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-1.5 text-caption font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 cursor-pointer shrink-0"
-                type="button"
-              >
-                <MaterialIcon
-                  name="refresh"
-                  size={14}
-                  className={cn(isRetrying && "animate-spin")}
-                />
-                <span>Run again</span>
-              </button>
-            )}
           </div>
         )}
       </div>
