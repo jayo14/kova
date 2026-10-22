@@ -31,6 +31,8 @@ export interface ExecutionReport {
   steps: Array<Record<string, unknown>>;
   stepCounts: Record<string, number>;
   verification: { passed: boolean; checks: Array<Record<string, unknown>> };
+  signature?: string | null;
+  shareableUrl?: string | null;
 }
 
 export async function getExecutionReport(executionId: string, token?: string): Promise<ExecutionReport | null> {
