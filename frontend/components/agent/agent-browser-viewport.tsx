@@ -146,17 +146,6 @@ export function AgentBrowserViewport({
             )}
             onClick={viewMode === "fit" ? () => setIsSnapshotExpanded(true) : undefined}
           >
-            {/* Live stream status indicator (clean, no scanline overlay) */}
-            {(state === "exploring" || state === "discovering" || state === "validating_page") && (
-              <div className="sticky top-2 z-10 self-start mb-2.5 flex items-center gap-2 rounded-full border border-border/80 bg-background/95 px-3 py-1 shadow-sm backdrop-blur-md">
-                <span className="relative flex h-2 w-2">
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                </span>
-                <span className="text-[11px] font-mono text-muted-foreground">
-                  Live browser stream
-                </span>
-              </div>
-            )}
 
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <div className={cn("relative flex items-center justify-center", viewMode === "scroll" ? "w-full max-w-4xl" : "max-h-full max-w-full")}>
