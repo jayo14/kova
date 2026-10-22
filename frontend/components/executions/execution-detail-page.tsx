@@ -23,6 +23,27 @@ import { Button } from "@/components/ui/button";
 import { terminalStatuses } from "@/lib/types";
 import { normalizeExecutionStatus } from "@/lib/executions/status";
 
+const stepStatusLabels: Record<string, string> = {
+  passed: "Passed",
+  verified: "Verified",
+  failed: "Failed",
+  error: "Errored",
+  unverified: "Unverified",
+  pending: "Pending",
+  skipped: "Skipped",
+  incomplete: "Incomplete",
+};
+
+const stepStatusStyles: Record<string, string> = {
+  passed: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+  verified: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700",
+  failed: "border-destructive/30 bg-destructive/10 text-destructive",
+  error: "border-destructive/30 bg-destructive/10 text-destructive",
+  unverified: "border-amber-500/30 bg-amber-500/10 text-amber-700",
+};
+
+const stepCountOrder = ["passed", "verified", "failed", "error", "unverified", "pending", "skipped"];
+
 interface ExecutionDetailPageProps {
   initialExecution: ExecutionDetailType;
   initialActivities?: ActivityItem[];
@@ -446,9 +467,20 @@ export function ExecutionDetailPage({
           {report && (
             <>
               <div className="flex flex-wrap gap-2 text-caption">
-                {Object.entries(report.stepCounts).map(([status, count]) => (
-                  <span key={status} className="rounded-md border border-border px-2 py-1">{status}: {count}</span>
-                ))}
+                {Object.entries(report.stepCounts)
+                  .sort(([a], [b]) => {
+                    const ai = stepCountOrder.indexOf(a);
+                    const bi = stepCountOrder.indexOf(b);
+                    return (ai === -1 ? stepCountOrder.length : ai) - (bi === -1 ? stepCountOrder.length : bi);
+                  })
+                  .map(([status, count]) => (
+                    <span
+                      key={status}
+                      className={`rounded-md border px-2 py-1 font-medium ${stepStatusStyles[status] || "border-border text-muted-foreground"}`}
+                    >
+                      {count} {(stepStatusLabels[status] || status).toLowerCase()}
+                    </span>
+                  ))}
               </div>
               {report.steps.some((step) => step.status === "failed" || step.status === "unverified" || step.status === "error") && (
                 <button type="button" onClick={() => {
@@ -464,7 +496,9 @@ export function ExecutionDetailPage({
                     <li id={`report-step-${index}`} key={String(step.stepId || index)} className="rounded-lg border border-border p-3 scroll-mt-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-body-sm font-medium">Step {Number(step.sequence ?? index) + 1}: {String(step.action || "Recorded action")}</span>
-                        <span className="text-caption uppercase text-muted-foreground">{String(step.status || "incomplete")}</span>
+                        <span className={`rounded-md border px-2 py-0.5 text-caption font-medium ${stepStatusStyles[String(step.status)] || "border-border text-muted-foreground"}`}>
+                          {stepStatusLabels[String(step.status)] || String(step.status || "Incomplete")}
+                        </span>
                       </div>
                       {step.expected != null && <p className="mt-1 text-caption text-muted-foreground">Expected: {String(step.expected)}</p>}
                       {step.verification != null && (step.verification as Record<string, unknown>).observed != null && <p className="mt-1 text-caption text-muted-foreground">Observed: {String((step.verification as Record<string, unknown>).observed)}</p>}
