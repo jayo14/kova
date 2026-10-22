@@ -726,7 +726,7 @@ export function EvidenceViewer({
         {/* Footer */}
         <div className="flex items-center justify-between px-6 py-3 border-t border-border bg-card/40 text-caption text-muted-foreground">
           <span>Type: {evidence.type}</span>
-          <span>Captured: {new Date(evidence.createdAt).toLocaleTimeString()}</span>
+          <span suppressHydrationWarning>Captured: {new Date(evidence.createdAt).toLocaleTimeString()}</span>
         </div>
       </div>
     </div>
