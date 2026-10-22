@@ -3171,13 +3171,6 @@ class FlowRunner:
                             dom_snapshot=dom_snap or None,
                             note=f"Failure: {error_message}",
                         )
-                                "step_index": ctx.current_step_index,
-                                "step_id": step_id_val,
-                                "checkpoint": "failure",
-                            },
-                            dom_snapshot=dom_snap or None,
-                            note=f"Failure: {error_message}",
-                        )
                     else:
                         from app.modules.executions.evidence_model import EvidenceType, EvidenceStatus
                         await evidence_service.create(
