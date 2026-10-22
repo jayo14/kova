@@ -62,7 +62,6 @@ export function AgentBrowserViewport({
   sessionId,
 }: AgentBrowserViewportProps) {
   const [isSnapshotExpanded, setIsSnapshotExpanded] = useState(false);
-  const [viewMode, setViewMode] = useState<"scroll" | "fit">("scroll");
 
   const hostname = (() => {
     try {
@@ -107,16 +106,6 @@ export function AgentBrowserViewport({
 
         {/* Status Pill + Screenshot Count */}
         <div className="flex items-center gap-2">
-          {latestScreenshot && (
-            <button
-              onClick={() => setViewMode((m) => (m === "scroll" ? "fit" : "scroll"))}
-              className="inline-flex items-center gap-1 rounded-md border border-border/80 bg-background/80 px-2 py-0.5 text-[11px] font-mono text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-              title={viewMode === "scroll" ? "Switch to fit-to-frame view" : "Switch to full scrollable page"}
-            >
-              <MaterialIcon name={viewMode === "scroll" ? "unfold_less" : "unfold_more"} size={12} />
-              <span className="hidden sm:inline">{viewMode === "scroll" ? "Full page" : "Fit"}</span>
-            </button>
-          )}
           {screenshots.length > 0 && (
             <button
               onClick={() => onThumbnailClick?.(screenshots.length - 1)}
