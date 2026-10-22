@@ -159,10 +159,7 @@ export function AgentBrowserViewport({
                 )}
               />
             </div>
-            <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-border/70 bg-secondary/70 px-3 py-1 text-[11px] font-mono text-muted-foreground shrink-0">
-              <MaterialIcon name="verified" size={12} className="text-emerald-600" />
-              <span>Kova browser stream</span>
-            </div>
+
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
