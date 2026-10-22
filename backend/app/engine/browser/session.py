@@ -602,9 +602,9 @@ class BrowserSession:
         await self.page.mouse.wheel(0, delta)
         logger.debug("Scrolled %s by %dpx", direction, amount)
 
-    async def screenshot(self) -> bytes:
+    async def screenshot(self, full_page: bool = False) -> bytes:
         """Take a screenshot of the current page. Returns PNG bytes."""
-        return await self.page.screenshot()
+        return await self.page.screenshot(full_page=full_page)
 
     async def capture_step_screenshot(
         self,
