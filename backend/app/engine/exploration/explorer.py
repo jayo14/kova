@@ -296,14 +296,27 @@ class ExplorationEngine:
                 max_retries = 2
                 for attempt in range(max_retries + 1):
                     try:
-                        response = await page.goto(self.url, wait_until="domcontentloaded")
-                        # Short networkidle check — 1s max, swallow timeout
+                        response = await page.goto(self.url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
+                        # Wait for network idle with reasonable bound
                         try:
-                            await page.wait_for_load_state("networkidle", timeout=1000)
+                            await page.wait_for_load_state("networkidle", timeout=3000)
                         except Exception:
                             pass
-                        # Minimal pause for SPA hydration
-                        await asyncio.sleep(0.3)
+
+                        # For SPAs (React, Vite, Next.js), wait until container elements or text hydrate
+                        try:
+                            await page.wait_for_function(
+                                "() => {"
+                                "  const root = document.querySelector('#root, #__next, #app, main, [role=\"main\"], body');"
+                                "  return root && (root.children.length > 0 || (root.innerText && root.innerText.trim().length > 20));"
+                                "}",
+                                timeout=4000,
+                            )
+                        except Exception:
+                            pass
+
+                        # Settle dynamic styles, fonts, and client mounting
+                        await asyncio.sleep(1.0)
                         # Emit URL change so frontend can update address bar immediately
                         await self._emit("page.url_changed", {
                             "url": page.url,
@@ -379,21 +392,16 @@ class ExplorationEngine:
                         "candidate_missions": [],
                     }
 
-                # Emit page.loaded immediately (without screenshot) for fast URL bar update
+                # Emit page.loaded with title and capture initial rendered screenshot
+                page_title = await page.title()
                 page_event = {
                     "url": current_url,
-                    "title": await page.title(),
+                    "title": page_title,
                 }
                 await self._emit("page.loaded", page_event)
 
-                # Capture screenshot and upload in background
-                async def _capture_screenshot_bg():
-                    try:
-                        await self._capture_and_emit_screenshot(page)
-                    except Exception as e:
-                        logger.warning("Background screenshot capture failed: %s", e)
-
-                self._spawn_bg(_capture_screenshot_bg())
+                # Capture and stream fully rendered initial snapshot immediately
+                await self._capture_and_emit_screenshot(page)
 
                 # 3. Observe initial page
                 await self._emit("state_change", {"status": "EXPLORING"})
