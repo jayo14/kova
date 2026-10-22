@@ -70,6 +70,16 @@ function parseEvidenceItem(item: Record<string, unknown>): Evidence {
 }
 
 /**
+ * Build the authenticated trace download URL for an execution.
+ * Accepts an optional signed report signature so links work without a bearer token.
+ */
+export function getTraceDownloadUrl(executionId: string, signature?: string | null): string {
+  const base = getApiBaseUrl();
+  const query = signature ? `?signature=${encodeURIComponent(signature)}` : "";
+  return `${base}/api/v1/executions/${encodeURIComponent(executionId)}/trace${query}`;
+}
+
+/**
  * Fetch all evidence for an execution.
  * Returns evidence metadata with signed URLs for screenshot artifacts.
  */
