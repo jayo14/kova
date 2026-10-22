@@ -124,31 +124,17 @@ export function AgentBrowserViewport({
       </div>
 
       {/* ── Viewport: real Playwright screenshots ───────────────── */}
-      <div className="relative flex-1 min-h-[380px] md:min-h-[460px] bg-background/50 overflow-hidden select-none">
+      <div className="relative flex-1 min-h-[380px] md:min-h-[460px] bg-background overflow-hidden select-none flex items-center justify-center">
 
         {latestScreenshot ? (
-          /* Real browser view with scrollable full page and fit toggle */
-          <div
-            className={cn(
-              "absolute inset-0 flex flex-col items-center p-3 sm:p-5 select-text",
-              viewMode === "scroll" ? "overflow-y-auto cursor-default" : "overflow-hidden justify-center cursor-zoom-in"
-            )}
-            onClick={viewMode === "fit" ? () => setIsSnapshotExpanded(true) : undefined}
-          >
-
+          <div className="relative w-full h-full flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden group">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <div className={cn("relative flex items-center justify-center", viewMode === "scroll" ? "w-full max-w-4xl" : "max-h-full max-w-full")}>
-              <img
-                key={latestScreenshot}
-                src={latestScreenshot}
-                alt={`Kova browser view of ${hostname}`}
-                className={cn(
-                  "rounded-lg border border-border/80 shadow-md bg-background transition-opacity duration-200",
-                  viewMode === "scroll" ? "w-full h-auto object-top" : "max-h-full max-w-full w-auto h-auto object-contain"
-                )}
-              />
-            </div>
-
+            <img
+              key={latestScreenshot}
+              src={latestScreenshot}
+              alt={`Browser view of ${hostname}`}
+              className="w-full h-full object-contain select-none transition-opacity duration-200"
+            />
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
