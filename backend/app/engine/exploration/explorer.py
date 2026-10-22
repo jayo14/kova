@@ -190,12 +190,15 @@ class ExplorationEngine:
                 final_url=final_url,
             )
 
-    async def _capture_and_emit_screenshot(self, page) -> dict | None:
+    async def _capture_and_emit_screenshot(self, page, full_page: bool = False) -> dict | None:
         """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
         if not self._browser or not self._browser.is_started:
             return None
         try:
-            screenshot_bytes = await self._browser.screenshot()
+            try:
+                screenshot_bytes = await self._browser.screenshot(full_page=full_page)
+            except Exception:
+                screenshot_bytes = await self._browser.screenshot(full_page=False)
             parsed = urlparse(page.url)
             path = parsed.path or "/"
             if parsed.query:
@@ -514,8 +517,8 @@ class ExplorationEngine:
                 }
                 await self._emit("page.loaded", page_event)
 
-                # Capture and stream fully rendered initial snapshot immediately
-                await self._capture_and_emit_screenshot(page)
+                # Capture and stream fully rendered initial snapshot immediately (complete document)
+                await self._capture_and_emit_screenshot(page, full_page=True)
 
                 # 3. Observe initial page
                 await self._emit("state_change", {"status": "EXPLORING"})
@@ -682,7 +685,7 @@ class ExplorationEngine:
             })
 
             discoveries, missions = await self._discover_workflows(page, observation, selected_role)
-            await self._capture_and_emit_screenshot(page)
+            await self._capture_and_emit_screenshot(page, full_page=True)
 
             await self._emit("progress", {
                 "id": "exp-discover",
