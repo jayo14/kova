@@ -794,6 +794,33 @@ def _render_report_html(
             color: #38bdf8;
             text-decoration: none;
         }}
+        @media print {{
+            * {{
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }}
+            body {{
+                background: #ffffff !important;
+                color: #111827 !important;
+                padding: 0;
+            }}
+            .container {{
+                background: #ffffff !important;
+                border: none;
+                box-shadow: none;
+                padding: 0;
+            }}
+            .meta-grid,
+            th {{
+                background: #f3f4f6 !important;
+            }}
+            .badge {{
+                color: #ffffff !important;
+            }}
+            tr {{
+                break-inside: avoid;
+            }}
+        }}
     </style>
 </head>
 <body>
