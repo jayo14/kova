@@ -72,6 +72,7 @@ export function ExplorePage() {
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const [credentialLoading, setCredentialLoading] = useState(false);
   const [resolvedProjectId, setResolvedProjectId] = useState<string | null>(projectContextId);
+  const [customProjectName, setCustomProjectName] = useState<string | null>(null);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [showMissionsDialog, setShowMissionsDialog] = useState(true);
@@ -84,6 +85,7 @@ export function ExplorePage() {
 
   const abortRef = useRef<AbortController | null>(null);
   const startedUrlRef = useRef<string | null>(null);
+  const startedSessionIdRef = useRef<string | null>(null);
 
   const handleEvent = useCallback(
     (event: ExplorationEvent) => {
@@ -150,7 +152,8 @@ export function ExplorePage() {
   // Auto-start or recover exploration session
   useEffect(() => {
     if (initialSessionId) {
-      if (startedUrlRef.current === initialSessionId) return;
+      if (startedSessionIdRef.current === initialSessionId) return;
+      startedSessionIdRef.current = initialSessionId;
       startedUrlRef.current = initialSessionId;
 
       const controller = new AbortController();
@@ -180,7 +183,7 @@ export function ExplorePage() {
         } catch {
           // ignore transient network errors during active exploration
         }
-      }, 2000);
+      }, 3000);
 
       return () => {
         controller.abort();
@@ -208,6 +211,7 @@ export function ExplorePage() {
       controller.signal
     )
       .then((sessionId) => {
+        startedSessionIdRef.current = sessionId;
         if (typeof window !== "undefined" && window.location) {
           const nextParams = new URLSearchParams(window.location.search);
           nextParams.set("sessionId", sessionId);
@@ -502,6 +506,18 @@ export function ExplorePage() {
     }
   };
 
+  const handleProjectNameChange = async (newName: string) => {
+    setCustomProjectName(newName);
+    if (resolvedProjectId) {
+      try {
+        const { updateProject } = await import("@/lib/api/projects");
+        await updateProject(resolvedProjectId, { name: newName });
+      } catch (err) {
+        console.warn("Failed to update project name on server:", err);
+      }
+    }
+  };
+
   const activeUrl = state.url || initialUrl;
   const showSplitBrowser =
     Boolean(activeUrl) &&
@@ -524,7 +540,8 @@ export function ExplorePage() {
     <AgentShell
       url={activeUrl}
       state={state.state}
-      projectName={cleanProjectName}
+      projectName={customProjectName || cleanProjectName}
+      onProjectNameChange={handleProjectNameChange}
       onStop={handleStop}
       onBack={handleBack}
     >
