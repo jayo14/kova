@@ -140,12 +140,16 @@ async def _run_execution_async(task, execution_id: str):
         target_url = flow_snapshot.get("target_url", project.base_url if project else "")
 
         # Resolve organization and enforce concurrent execution quota
+        primary_org = None
         org_id = project.org_id if project else None
-        if not org_id and project:
+        if project:
             from app.modules.organizations.repository import OrganizationRepository
             org_repo = OrganizationRepository(db)
-            primary_org = await org_repo.get_user_primary_org(project.user_id)
-            org_id = primary_org.id if primary_org else None
+            if org_id:
+                primary_org = await org_repo.get_by_id(org_id)
+            elif project.user_id:
+                primary_org = await org_repo.get_user_primary_org(project.user_id)
+                org_id = primary_org.id if primary_org else None
 
         from app.modules.organizations.service import OrganizationService
         org_service = OrganizationService(db) if org_id else None
