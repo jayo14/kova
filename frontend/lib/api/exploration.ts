@@ -660,8 +660,11 @@ export async function startExploration(
         ) {
           clearInterval(pollInterval);
         }
-      } catch {
-        // Ignore poll errors
+      } catch (err: any) {
+        // Stop polling if session is not found (404) or on fatal abort
+        if (err?.status === 404 || (err?.message && String(err.message).includes("404"))) {
+          clearInterval(pollInterval);
+        }
       }
     }, 3000);
 
