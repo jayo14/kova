@@ -14,7 +14,7 @@ from typing import AsyncGenerator
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
 from sqlalchemy import delete, func, select
@@ -541,6 +541,88 @@ async def refresh_evidence_url(
         raise HTTPException(status_code=500, detail="Could not generate signed URL")
 
     return {"url": signed_url}
+
+
+@router.get("/{execution_id}/trace")
+@router.get("/{execution_id}/trace/download")
+async def get_execution_trace(
+    execution_id: str,
+    signature: str | None = None,
+    user: User | None = Depends(get_optional_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Download Playwright trace zip recording directly or via signed URL."""
+    import os
+    from app.config.settings import settings
+    from app.modules.executions.evidence_model import Evidence
+
+    try:
+        exec_uuid = uuid.UUID(execution_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid execution ID")
+
+    if signature:
+        if not _verify_report_signature(exec_uuid, signature):
+            raise HTTPException(status_code=401, detail="Invalid signature")
+    else:
+        if not user:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        execution = await _verify_execution_ownership(db, exec_uuid, user.id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+    # 1. Query evidence table for any recorded trace_url
+    ev_stmt = (
+        select(Evidence.trace_url)
+        .where(Evidence.execution_id == exec_uuid, Evidence.trace_url.isnot(None))
+        .order_by(Evidence.created_at.desc())
+        .limit(1)
+    )
+    ev_res = await db.execute(ev_stmt)
+    trace_url = ev_res.scalar_one_or_none()
+
+    # 2. If it's an external URL (e.g. S3/R2 presigned or public), redirect
+    if trace_url and (trace_url.startswith("http://") or trace_url.startswith("https://")):
+        return RedirectResponse(url=trace_url, status_code=302)
+
+    # 3. If it's a local file path
+    local_path = None
+    if trace_url:
+        cleaned = trace_url.replace("file://", "").strip()
+        if os.path.exists(cleaned):
+            local_path = cleaned
+
+    # 4. Search trace directories if not resolved yet
+    if not local_path:
+        search_dirs = [
+            getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_traces"),
+            "/tmp/kova_traces",
+            "/tmp/kova_videos",
+        ]
+        hex_id = exec_uuid.hex
+        for d in search_dirs:
+            if not os.path.exists(d):
+                continue
+            for fname in os.listdir(d):
+                if (hex_id in fname or fname.startswith("trace_")) and fname.endswith(".zip"):
+                    candidate = os.path.join(d, fname)
+                    if os.path.isfile(candidate):
+                        local_path = candidate
+                        break
+            if local_path:
+                break
+
+    if not local_path or not os.path.exists(local_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Trace recording not available for this execution"
+        )
+
+    return FileResponse(
+        path=local_path,
+        media_type="application/zip",
+        filename=f"trace_{exec_uuid}.zip",
+    )
 
 
 REPORT_SIGNATURE_TTL_SECONDS = 7 * 86400
