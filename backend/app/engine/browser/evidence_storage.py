@@ -204,14 +204,15 @@ class EvidenceStorage:
         content_type: str = "video/webm",
         purpose: str = "execution_artifact",
     ) -> str | None:
-        """Upload a file from disk to S3 and return its signed URL or fallback URI."""
+        """Upload a file from disk to S3 and return its signed URL or API route fallback."""
         import os
         import uuid
         if not os.path.exists(file_path):
             return None
 
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
-            return f"file://{file_path}"
+            # Return a server-side API route instead of raw file:// URI
+            return f"/api/v1/executions/{execution_id}/trace"
 
         try:
             with open(file_path, "rb") as f:
@@ -228,7 +229,7 @@ class EvidenceStorage:
                 return self.create_signed_url(res["storage_key"], execution_id)
         except Exception as e:
             logger.warning("Failed to upload file %s to S3: %s", file_path, e)
-        return f"file://{file_path}"
+        return f"/api/v1/executions/{execution_id}/trace"
 
 
 evidence_storage = EvidenceStorage()
