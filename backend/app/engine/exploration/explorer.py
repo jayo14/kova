@@ -412,6 +412,25 @@ class ExplorationEngine:
 
                         # Settle dynamic styles, fonts, and client mounting
                         await asyncio.sleep(1.0)
+
+                        # Trigger lazy-loaded components, images, and intersection observers across the document
+                        try:
+                            await page.evaluate(
+                                """async () => {
+                                    const total = Math.min(document.body.scrollHeight || 0, 4500);
+                                    let current = 0;
+                                    const step = 450;
+                                    while (current < total) {
+                                        window.scrollBy(0, step);
+                                        current += step;
+                                        await new Promise((r) => setTimeout(r, 60));
+                                    }
+                                    window.scrollTo(0, 0);
+                                }"""
+                            )
+                            await asyncio.sleep(0.5)
+                        except Exception:
+                            pass
                         # Emit URL change so frontend can update address bar immediately
                         await self._emit("page.url_changed", {
                             "url": page.url,
