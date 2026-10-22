@@ -33,6 +33,7 @@ interface LiveViewportProps {
   fallbackScreenshot?: string | null;
   onTakeover?: () => void;
   onRelease?: () => void;
+  hideHeader?: boolean;
 }
 
 const stateConfig: Record<ViewportState, { label: string; color: string; icon: string }> = {
@@ -80,6 +81,7 @@ export function LiveViewport({
   fallbackScreenshot,
   onTakeover,
   onRelease,
+  hideHeader = false,
 }: LiveViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -351,54 +353,56 @@ export function LiveViewport({
 
   return (
     <div className={cn("relative rounded-lg overflow-hidden border border-border bg-black", className)}>
-      {/* Browser toolbar */}
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-background/95 border-b border-border">
-        <div className={cn("h-2 w-2 rounded-full", config.color, state === "observing" || state === "executing" ? "animate-pulse" : "")} />
-        <MaterialIcon name={config.icon} className="h-3.5 w-3.5 text-muted-foreground" />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Back"
-            title={isHumanControlled ? "Back" : "Take over control to navigate"}
-            disabled={!isHumanControlled}
-            onClick={() => sendNav("back")}
-            className={cn(
-              "p-1 rounded text-muted-foreground transition-colors",
-              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
-            )}
-          >
-            <MaterialIcon name="arrow_back" size={14} />
-          </button>
-          <button
-            type="button"
-            aria-label="Forward"
-            title={isHumanControlled ? "Forward" : "Take over control to navigate"}
-            disabled={!isHumanControlled}
-            onClick={() => sendNav("forward")}
-            className={cn(
-              "p-1 rounded text-muted-foreground transition-colors",
-              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
-            )}
-          >
-            <MaterialIcon name="arrow_forward" size={14} />
-          </button>
-          <button
-            type="button"
-            aria-label="Reload"
-            title={isHumanControlled ? "Reload" : "Take over control to reload"}
-            disabled={!isHumanControlled}
-            onClick={() => sendNav("reload")}
-            className={cn(
-              "p-1 rounded text-muted-foreground transition-colors",
-              isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
-            )}
-          >
-            <MaterialIcon name="refresh" size={14} />
-          </button>
+      {/* Browser toolbar (hidden when embedded in an existing browser frame) */}
+      {!hideHeader && (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-background/95 border-b border-border">
+          <div className={cn("h-2 w-2 rounded-full", config.color, state === "observing" || state === "executing" ? "animate-pulse" : "")} />
+          <MaterialIcon name={config.icon} className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Back"
+              title={isHumanControlled ? "Back" : "Take over control to navigate"}
+              disabled={!isHumanControlled}
+              onClick={() => sendNav("back")}
+              className={cn(
+                "p-1 rounded text-muted-foreground transition-colors",
+                isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+              )}
+            >
+              <MaterialIcon name="arrow_back" size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label="Forward"
+              title={isHumanControlled ? "Forward" : "Take over control to navigate"}
+              disabled={!isHumanControlled}
+              onClick={() => sendNav("forward")}
+              className={cn(
+                "p-1 rounded text-muted-foreground transition-colors",
+                isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+              )}
+            >
+              <MaterialIcon name="arrow_forward" size={14} />
+            </button>
+            <button
+              type="button"
+              aria-label="Reload"
+              title={isHumanControlled ? "Reload" : "Take over control to reload"}
+              disabled={!isHumanControlled}
+              onClick={() => sendNav("reload")}
+              className={cn(
+                "p-1 rounded text-muted-foreground transition-colors",
+                isHumanControlled ? "hover:bg-muted hover:text-foreground cursor-pointer" : "opacity-40 cursor-not-allowed"
+              )}
+            >
+              <MaterialIcon name="refresh" size={14} />
+            </button>
+          </div>
+          <span className="text-caption text-muted-foreground truncate flex-1">{url || "No URL"}</span>
+          {title && <span className="text-caption text-muted-foreground/60 truncate max-w-[200px]">{title}</span>}
         </div>
-        <span className="text-caption text-muted-foreground truncate flex-1">{url || "No URL"}</span>
-        {title && <span className="text-caption text-muted-foreground/60 truncate max-w-[200px]">{title}</span>}
-      </div>
+      )}
 
       {/* Viewport canvas */}
       <div className="relative aspect-video bg-black flex items-center justify-center overflow-hidden">
