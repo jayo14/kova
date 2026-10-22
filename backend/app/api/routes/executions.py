@@ -921,8 +921,8 @@ async def get_execution_report(
             }
             break
 
-    timeline = build_timeline(events)
     persisted_status = execution.status.value if hasattr(execution.status, "value") else str(execution.status)
+    timeline = build_timeline(events, execution_status=persisted_status)
     report_status = persisted_status
     if persisted_status == ExecutionStatus.COMPLETED.value and not verification_dict["passed"]:
         report_status = ExecutionStatus.UNVERIFIED.value

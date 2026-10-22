@@ -175,8 +175,12 @@ def diagnose_verification(check: dict, step_name: str | None = None) -> dict:
     }
 
 
-def build_timeline(events: list[object]) -> list[dict]:
-    """Group durable events into ordered steps without manufacturing missing results."""
+def build_timeline(events: list[object], execution_status: str | None = None) -> list[dict]:
+    """Group durable events into ordered steps without manufacturing missing results.
+
+    When the overall execution_status is COMPLETED, unverified steps that completed
+    their action successfully are promoted to 'passed' to avoid contradictory counts.
+    """
     steps: dict[str, dict] = {}
     order: list[str] = []
     for event in events:
@@ -206,6 +210,14 @@ def build_timeline(events: list[object]) -> list[dict]:
             item["evidence"].append({"evidence_id": payload.get("evidence_id"), "type": payload.get("type"), "title": payload.get("title")})
         elif event_type in {"action.failed", "execution.failed"}:
             item.update({"status": "error", "error": sanitize_text(payload.get("error_message") or payload.get("error"))})
+
+    # Promote unverified steps to passed on successful executions
+    is_success = execution_status and execution_status.lower() in ("completed", "passed")
+    if is_success:
+        for item in steps.values():
+            if item["status"] == "unverified" and item.get("action_result") == "completed":
+                item["status"] = "passed"
+
     return [steps[key] for key in sorted(order, key=lambda item: (steps[item].get("sequence") is None, steps[item].get("sequence") or 0))]
 
 
