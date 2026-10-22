@@ -7,6 +7,12 @@ import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { cn } from "@/lib/utils";
 import { LiveViewport } from "@/components/agent/live-viewport";
 
+export interface StepScreenshot {
+  url: string;
+  title: string;
+  stepIndex: number | null;
+}
+
 export interface ExecutionBrowserProps {
   url: string;
   status: ExecutionStatus;
@@ -16,6 +22,7 @@ export interface ExecutionBrowserProps {
   currentAction?: string | null;
   events?: Array<{ eventType: string; payload?: Record<string, unknown> }>;
   executionId?: string;
+  stepScreenshots?: StepScreenshot[];
 }
 
 const activeStatuses: ExecutionStatus[] = [
@@ -48,9 +55,25 @@ export function ExecutionBrowser({
   currentAction,
   events = [],
   executionId,
+  stepScreenshots = [],
 }: ExecutionBrowserProps) {
   const [liveUrl, setLiveUrl] = useState<string>(url);
   const [actionFlash, setActionFlash] = useState<string | null>(null);
+  const [scrubber, setScrubber] = useState<{ count: number; index: number | null }>({
+    count: stepScreenshots.length,
+    index: null,
+  });
+
+  // A new set of screenshots resets the selection without an extra render pass.
+  const scrubberIndex = scrubber.count === stepScreenshots.length ? scrubber.index : null;
+
+  const selectedShot = useMemo(() => {
+    if (stepScreenshots.length === 0) return null;
+    if (scrubberIndex === null) return stepScreenshots[stepScreenshots.length - 1];
+    return stepScreenshots[scrubberIndex] ?? stepScreenshots[stepScreenshots.length - 1];
+  }, [stepScreenshots, scrubberIndex]);
+
+  const displayScreenshot = selectedShot?.url ?? latestScreenshot;
 
   const isActive = activeStatuses.includes(status);
   const isAgentControlled = agentControlledStatuses.includes(status);
@@ -201,12 +224,12 @@ export function ExecutionBrowser({
         ) : (
           /* Static screenshot fallback / final snapshot */
           <div className="absolute inset-0 w-full h-full z-20 flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden">
-            {latestScreenshot ? (
+            {displayScreenshot ? (
               <div className="relative w-full h-full flex items-center justify-center">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  key={latestScreenshot}
-                  src={latestScreenshot}
+                  key={displayScreenshot}
+                  src={displayScreenshot}
                   alt="Browser snapshot"
                   className="w-full h-full object-contain animate-in fade-in duration-200 select-none"
                 />
@@ -319,6 +342,45 @@ export function ExecutionBrowser({
           </div>
         )}
       </div>
+
+      {/* Step scrubber — replay each verified step without leaving the page */}
+      {!isActive && stepScreenshots.length > 0 && (
+        <div className="border-t border-border/70 bg-secondary/20 px-3 py-2.5">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-1.5 text-caption font-medium text-foreground">
+              <MaterialIcon name="history" size={14} className="text-muted-foreground" />
+              <span>Verified steps</span>
+            </div>
+            <span className="text-caption text-muted-foreground">
+              {selectedShot ? `${(scrubberIndex ?? stepScreenshots.length - 1) + 1} of ${stepScreenshots.length}` : ""}
+            </span>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {stepScreenshots.map((shot, index) => {
+              const active = (scrubberIndex ?? stepScreenshots.length - 1) === index;
+              return (
+                <button
+                  key={`${shot.url}-${index}`}
+                  type="button"
+                  onClick={() => setScrubber({ count: stepScreenshots.length, index })}
+                  aria-pressed={active}
+                  aria-label={`Show ${shot.title || `step ${index + 1}`}`}
+                  className={cn(
+                    "relative h-14 w-24 shrink-0 overflow-hidden rounded-md border-2 bg-background transition-colors",
+                    active ? "border-primary" : "border-border/60 hover:border-border"
+                  )}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={shot.url} alt="" className="h-full w-full object-cover" />
+                  <span className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 text-[10px] font-medium text-white">
+                    {shot.stepIndex != null ? `Step ${shot.stepIndex + 1}` : `Shot ${index + 1}`}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

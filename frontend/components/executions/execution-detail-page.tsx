@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useTransition } from "react";
+import { useState, useCallback, useEffect, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ExecutionDetail as ExecutionDetailType,
@@ -73,6 +73,35 @@ export function ExecutionDetailPage({
     }
     return evidence.find((e) => e.type === "SCREENSHOT" && e.url)?.url || null;
   })();
+
+  // Ordered screenshots for the step scrubber (deduped, by step index).
+  const stepScreenshots = useMemo(() => {
+    const seen = new Set<string>();
+    const shots = evidence
+      .filter((item) => item.type === "SCREENSHOT" && item.url)
+      .filter((item) => {
+        if (seen.has(item.url!)) return false;
+        seen.add(item.url!);
+        return true;
+      })
+      .map((item) => {
+        const raw = item.metadata?.stepIndex ?? item.metadata?.step_index;
+        const parsed = raw == null ? Number.NaN : Number(raw);
+        return {
+          url: item.url!,
+          title: item.title || item.purpose || "",
+          stepIndex: Number.isFinite(parsed) ? parsed : null,
+          createdAt: item.createdAt || "",
+        };
+      });
+
+    shots.sort((a, b) => {
+      if (a.stepIndex != null && b.stepIndex != null) return a.stepIndex - b.stepIndex;
+      return a.createdAt.localeCompare(b.createdAt);
+    });
+
+    return shots.map(({ url, title, stepIndex }) => ({ url, title, stepIndex }));
+  }, [evidence]);
 
   // Find live URL if page was navigated
   const liveUrl = (() => {
@@ -248,6 +277,7 @@ export function ExecutionDetailPage({
         currentAction={currentAction}
         events={events}
         executionId={execution.id}
+        stepScreenshots={stepScreenshots}
       />
 
       {/* 2-Column Section: Activity Stream + Result + Evidence */}
