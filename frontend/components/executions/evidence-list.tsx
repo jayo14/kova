@@ -2,11 +2,13 @@
 
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
-import type { Evidence } from "@/lib/api/evidence";
+import { getTraceDownloadUrl, type Evidence } from "@/lib/api/evidence";
 
 interface EvidenceListProps {
   evidence: Evidence[];
   onEvidenceClick?: (evidence: Evidence) => void;
+  executionId?: string;
+  traceSignature?: string | null;
 }
 
 const typeIcons: Record<string, string> = {
@@ -29,7 +31,7 @@ const statusColors: Record<string, string> = {
   FAILED: "text-destructive",
 };
 
-export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
+export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSignature }: EvidenceListProps) {
   const isDev = process.env.NODE_ENV !== "production";
   const orphanScreenshots = evidence.filter(
     (item) => item.type === "SCREENSHOT" && !item.stepId && !item.purpose && item.purpose !== "legacy"
@@ -89,21 +91,25 @@ export function EvidenceList({ evidence, onEvidenceClick }: EvidenceListProps) {
       {(() => {
         const traceItem = validEvidence.find((e) => e.traceUrl);
         if (!traceItem?.traceUrl) return null;
+        const traceHref = executionId
+          ? getTraceDownloadUrl(executionId, traceSignature)
+          : traceItem.traceUrl;
         return (
-          <div className="flex items-center justify-between p-3 rounded-xl border border-border bg-card/80 text-body-sm">
-            <div className="flex items-center gap-2 text-foreground">
-              <MaterialIcon name="timeline" size={18} className="text-primary" />
-              <span className="font-medium">Playwright Trace Recording</span>
+          <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-border bg-card/80 text-body-sm">
+            <div className="flex min-w-0 items-center gap-2 text-foreground">
+              <MaterialIcon name="timeline" size={18} className="text-primary shrink-0" />
+              <div className="min-w-0">
+                <p className="font-medium">Playwright trace recording</p>
+                <p className="text-caption text-muted-foreground">Full replay of every browser action, network call, and DOM snapshot.</p>
+              </div>
             </div>
             <a
-              href={traceItem.traceUrl}
+              href={traceHref ?? undefined}
               download
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-caption font-medium hover:bg-primary/20 transition-colors"
+              className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-caption font-medium hover:bg-primary/20 transition-colors"
             >
               <MaterialIcon name="download" size={14} />
-              <span>Download Trace (.zip)</span>
+              <span>Download .zip</span>
             </a>
           </div>
         );
