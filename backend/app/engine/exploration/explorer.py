@@ -414,17 +414,20 @@ class ExplorationEngine:
                         # Settle dynamic styles, fonts, and client mounting
                         await asyncio.sleep(1.0)
 
-                        # Trigger lazy-loaded components, images, and intersection observers across the document
+                        # Trigger lazy-loaded components, images, and intersection observers across the entire document
                         try:
                             await page.evaluate(
                                 """async () => {
-                                    const total = Math.min(document.body.scrollHeight || 0, 4500);
+                                    const total = Math.max(
+                                        document.body.scrollHeight || 0,
+                                        document.documentElement.scrollHeight || 0
+                                    );
                                     let current = 0;
-                                    const step = 450;
+                                    const step = 600;
                                     while (current < total) {
                                         window.scrollBy(0, step);
                                         current += step;
-                                        await new Promise((r) => setTimeout(r, 60));
+                                        await new Promise((r) => setTimeout(r, 40));
                                     }
                                     window.scrollTo(0, 0);
                                 }"""
