@@ -517,8 +517,8 @@ class ExplorationEngine:
                 }
                 await self._emit("page.loaded", page_event)
 
-                # Capture and stream fully rendered initial snapshot immediately (complete document)
-                await self._capture_and_emit_screenshot(page, full_page=True)
+                # Capture and stream fully rendered initial snapshot immediately (standard viewport)
+                await self._capture_and_emit_screenshot(page, full_page=False)
 
                 # 3. Observe initial page
                 await self._emit("state_change", {"status": "EXPLORING"})
