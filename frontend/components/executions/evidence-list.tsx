@@ -23,6 +23,25 @@ const typeLabels: Record<string, string> = {
   ARTIFACT: "Artifact",
 };
 
+const statusLabels: Record<string, string> = {
+  PENDING: "Pending",
+  UPLOADED: "Uploaded",
+  CAPTURED: "Captured",
+  VERIFIED: "Verified",
+  FAILED: "Failed",
+};
+
+/** Turn raw step ids like `mission-abc-step-2` into "Step 2". */
+function humanizeStepLabel(stepId: string): string {
+  if (stepId === "General") return "General evidence";
+  const numbered = stepId.match(/step[-_](\d+)$/i);
+  if (numbered) return `Step ${numbered[1]}`;
+  if (/^step[-_]/i.test(stepId)) return stepId.replace(/^step[-_]+/i, "Step ");
+  return stepId
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 const statusColors: Record<string, string> = {
   PENDING: "text-amber-500",
   UPLOADED: "text-muted-foreground",
@@ -124,7 +143,7 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
 
           <div className="flex items-center justify-between">
             <h4 className="text-body-sm font-semibold text-foreground">
-              {group.stepId.startsWith("step_") ? `Step ${group.stepId.replace("step_", "")}` : group.stepId}
+              {humanizeStepLabel(group.stepId)}
             </h4>
             <span className="text-[11px] text-muted-foreground/70">
               {group.items.length} {group.items.length === 1 ? "artifact" : "artifacts"}
@@ -267,7 +286,7 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <p className="text-body-sm font-medium text-foreground truncate">
+                  <p className="text-body-sm font-medium text-foreground line-clamp-2">
                     {item.title}
                   </p>
                   <p className="text-caption text-muted-foreground truncate">
@@ -304,8 +323,8 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
                       VIDEO
                     </span>
                   )}
-                  <span className={cn("text-[11px] font-medium capitalize", statusColors[item.status] || "text-muted-foreground")}>
-                    {item.status === "VERIFIED" ? "Verified" : item.status === "CAPTURED" ? "Captured" : "Failed"}
+                  <span className={cn("text-[11px] font-medium", statusColors[item.status] || "text-muted-foreground")}>
+                    {statusLabels[item.status] || item.status}
                   </span>
                 </div>
               </button>
