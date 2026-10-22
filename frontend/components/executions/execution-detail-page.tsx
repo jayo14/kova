@@ -451,26 +451,12 @@ export function ExecutionDetailPage({
               ) : <p className="text-body-sm text-muted-foreground">No step events were persisted for this execution.</p>}
             </>
           )}
-          <div className="pt-3 border-t border-border/70 flex flex-wrap items-center justify-between gap-3">
+          <div className="pt-3 border-t border-border/70">
             <span className="text-caption text-muted-foreground">
               {reportStatus === "completed"
-                ? "Flow verified successfully. Re-run anytime to test regression."
-                : "Review observations and re-run with latest updates."}
+                ? "Flow verified successfully. Use Run again in the header to test for regressions."
+                : "Review observations, then use Run again in the header to retest with the latest updates."}
             </span>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={handleRetry}
-              disabled={isRetrying}
-              className="gap-1.5 rounded-xl shrink-0"
-            >
-              {isRetrying ? (
-                <MaterialIcon name="progress_activity" size={14} className="animate-spin" />
-              ) : (
-                <MaterialIcon name="replay" size={14} />
-              )}
-              <span>Run again</span>
-            </Button>
           </div>
         </section>
       )}
