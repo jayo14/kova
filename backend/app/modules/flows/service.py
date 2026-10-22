@@ -187,8 +187,13 @@ class FlowService:
             flows.extend(proposed_flows)
             ai_proposals.extend(proposals)
 
-        # Persist generated flows with active=False (requiring review before CI)
+        # Persist generated flows with active=False (requiring review before CI).
+        # Skip flows with zero steps (possible via AI proposals) so broken
+        # FLOW_NOT_RUNNABLE shells are never persisted.
+        persisted_flows = []
         for f in flows:
+            if not f.internal:
+                continue
             p_flow = await self.repo.create(
                 project_id=project_id,
                 name=f.name,
@@ -204,6 +209,8 @@ class FlowService:
                 gherkin_repr=f.gherkin,
             )
             f.id = p_flow.id
+            persisted_flows.append(f)
+        flows = persisted_flows
 
         remaining_unresolved = (
             unresolved
