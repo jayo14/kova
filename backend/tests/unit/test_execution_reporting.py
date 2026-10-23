@@ -18,6 +18,27 @@ def test_classifies_failure_without_collapsing_status_and_category():
     }
 
 
+def test_classifies_flow_configuration_and_dispatch_failures():
+    assert classify_failure("FLOW_NOT_RUNNABLE") == "flow_configuration"
+    assert classify_failure("FLOW_EMPTY_NO_AGENT") == "flow_configuration"
+    assert classify_failure("DISPATCH_ERROR") == "dispatch_infrastructure"
+    assert classify_failure("ORG_AT_CAPACITY") == "quota_exceeded"
+
+
+def test_diagnoses_new_failure_codes_with_actionable_next_steps():
+    flow_diag = diagnose_failure("FLOW_NOT_RUNNABLE", "no steps")
+    assert flow_diag["category"] == "flow_configuration"
+    assert "AGENT_EXECUTION_ENABLED" in flow_diag["next_step"]
+
+    dispatch_diag = diagnose_failure("DISPATCH_ERROR", "celery down")
+    assert dispatch_diag["category"] == "dispatch_infrastructure"
+    assert dispatch_diag["next_step"]
+
+    quota_diag = diagnose_failure("ORG_AT_CAPACITY", "concurrency limit")
+    assert quota_diag["category"] == "quota_exceeded"
+    assert quota_diag["next_step"]
+
+
 def test_redacts_common_secrets_from_diagnostic_text():
     assert sanitize_text("password=hunter2 Bearer eyJtoken") == "password=[REDACTED] Bearer [REDACTED]"
     assert sanitize_payload({"nested": [{"access_key": "abc", "message": "token=xyz"}]}) == {
