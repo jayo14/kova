@@ -132,7 +132,7 @@ async def test_deterministic_runner_used_when_steps_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_deterministic_runner_used_when_flag_off(monkeypatch):
-    """Flow with objective but no steps terminates UNVERIFIED when feature flag is OFF."""
+    """Flow with objective but no steps fails fast as FLOW_NOT_RUNNABLE when feature flag is OFF."""
     monkeypatch.setattr(settings, "AGENT_EXECUTION_ENABLED", False)
 
     runner = FlowRunner()
@@ -146,9 +146,13 @@ async def test_deterministic_runner_used_when_flag_off(monkeypatch):
         success_condition={"text_visible": "Success"},
     )
 
-    mock_browser = _build_mock_browser()
+    browser_instantiated = []
 
-    with patch("app.engine.execution.runner.BrowserSession", return_value=mock_browser), \
+    class _BrowserSpy:
+        def __init__(self, *args, **kwargs):
+            browser_instantiated.append(True)
+
+    with patch("app.engine.execution.runner.BrowserSession", _BrowserSpy), \
          patch("app.engine.execution.runner.publish_frame", return_value=None), \
          patch.object(AISettings, "ai_enabled", new_callable=PropertyMock, return_value=False), \
          patch.object(AgentExecutor, "run", new_callable=AsyncMock) as mock_agent_run:
@@ -163,9 +167,11 @@ async def test_deterministic_runner_used_when_flag_off(monkeypatch):
         )
 
         assert not mock_agent_run.called, "AgentExecutor.run must NOT be called when flag is OFF"
+        assert browser_instantiated == [], "Browser must not launch for an empty non-runnable flow"
         assert result["success"] is False
-        assert result["state"] == ExecutionState.UNVERIFIED.value
-        assert result["failure_category"] == "no_steps_no_agent"
+        assert result["state"] == ExecutionState.FAILED.value
+        assert result["error_code"] == "FLOW_NOT_RUNNABLE"
+        assert result["failure_category"] == "flow_configuration"
 
 
 @pytest.mark.asyncio
