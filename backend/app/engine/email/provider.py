@@ -217,6 +217,15 @@ class HTTPPollMailboxProvider(TemporaryEmailProvider):
             logger.debug("Mailbox close failed (ignored): %s", e)
 
 
+_custom_email_provider: TemporaryEmailProvider | None = None
+
+
+def set_temp_email_provider(provider: TemporaryEmailProvider | None) -> None:
+    """Override the temporary email provider (e.g. for benchmark runs)."""
+    global _custom_email_provider
+    _custom_email_provider = provider
+
+
 def get_temp_email_provider() -> TemporaryEmailProvider | None:
     """Return the configured temp-email provider, or None when unavailable.
 
@@ -224,6 +233,8 @@ def get_temp_email_provider() -> TemporaryEmailProvider | None:
     deployments that protect the mail service; the key never enters logs or AI
     prompts.
     """
+    if _custom_email_provider is not None:
+        return _custom_email_provider
     service_url = (getattr(settings, "TEMPMAIL_SERVICE_URL", "") or "").strip()
     if not service_url:
         return None
