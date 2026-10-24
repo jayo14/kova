@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import logging
 import re
 import time
@@ -57,8 +58,100 @@ class OTPStrategy:
                 getattr(credential, "totp_secret", None)
                 or getattr(credential, "otp_secret", None)
             )
-            otp_code: str | None = None
+            email = getattr(credential, "email", None)
+            has_explicit_code = hasattr(credential, "otp_code")
 
+            if not totp_secret and not email and not has_explicit_code:
+                return AuthResult(
+                    success=False,
+                    failure_reason="OTP verification requires a TOTP secret or active email mailbox; no code available",
+                    reason_code=AuthReasonCode.NEEDS_OTP,
+                    failure_category="AUTH",
+                    evidence=evidence,
+                    attempts=[AuthAttempt(attempt_number=1, strategy="otp", success=False, error="Missing OTP code", duration_ms=int((time.monotonic() - t0) * 1000))],
+                )
+
+            async def _safe_loc(sel: str):
+                res = page.locator(sel)
+                if inspect.isawaitable(res):
+                    res = await res
+                return res
+
+            async def _safe_count(loc: Any) -> int:
+                if not hasattr(loc, "count"):
+                    return 0
+                c = loc.count()
+                if inspect.isawaitable(c):
+                    c = await c
+                return c
+
+            async def _safe_is_visible(loc: Any) -> bool:
+                if not hasattr(loc, "is_visible"):
+                    return False
+                v = loc.is_visible()
+                if inspect.isawaitable(v):
+                    v = await v
+                return v
+
+            # If OTP field is not immediately visible, check if we need to proceed past a preliminary stage
+            async def _find_visible_otp():
+                ac = await _safe_loc("input[autocomplete='one-time-code']")
+                if await _safe_count(ac) > 0 and await _safe_is_visible(ac.first):
+                    return ac.first
+                num = await _safe_loc("input[inputmode='numeric']")
+                if await _safe_count(num) > 0 and await _safe_is_visible(num.first):
+                    return num.first
+                for pat in (r"one-time", r"verification", r"authenticator", r"code", r"otp"):
+                    lbl = page.get_by_label(re.compile(pat, re.I))
+                    if inspect.isawaitable(lbl):
+                        lbl = await lbl
+                    if await _safe_count(lbl) > 0 and await _safe_is_visible(lbl.first):
+                        return lbl.first
+                for sel in ("input[name*='otp']", "input[name*='code']", "input[id*='otp']", "input[id*='code']"):
+                    el = await _safe_loc(sel)
+                    if await _safe_count(el) > 0 and await _safe_is_visible(el.first):
+                        return el.first
+                return None
+
+            otp_locator = await _find_visible_otp()
+            if not otp_locator:
+                # Fill any visible preliminary inputs (e.g. email or username/password)
+                email_val = getattr(credential, "email", None) or getattr(credential, "username", None) or ""
+                pwd_val = getattr(credential, "password", None) or ""
+
+                email_input = await _safe_loc("input[type='email'], input[name='email'], input[name='username']")
+                if await _safe_count(email_input) > 0 and await _safe_is_visible(email_input.first):
+                    if email_val:
+                        val = email_input.first.input_value()
+                        if inspect.isawaitable(val):
+                            val = await val
+                        if not val:
+                            fill_call = email_input.first.fill(email_val)
+                            if inspect.isawaitable(fill_call):
+                                await fill_call
+
+                pwd_input = await _safe_loc("input[type='password']")
+                if await _safe_count(pwd_input) > 0 and await _safe_is_visible(pwd_input.first):
+                    if pwd_val:
+                        val = pwd_input.first.input_value()
+                        if inspect.isawaitable(val):
+                            val = await val
+                        if not val:
+                            fill_call = pwd_input.first.fill(pwd_val)
+                            if inspect.isawaitable(fill_call):
+                                await fill_call
+
+                # Click any continue or send-code button to trigger OTP stage
+                trigger_btn = await _safe_loc(
+                    "#continueBtn, #sendOtpBtn, button:has-text('Continue'), button:has-text('Send Code'), button:has-text('Send Login Code'), button[type='submit']"
+                )
+                if await _safe_count(trigger_btn) > 0 and await _safe_is_visible(trigger_btn.first):
+                    click_call = trigger_btn.first.click()
+                    if inspect.isawaitable(click_call):
+                        await click_call
+                    await asyncio.sleep(0.3)
+
+            otp_code: str | None = None
             if totp_secret:
                 try:
                     otp_code = pyotp.TOTP(totp_secret).now()
@@ -66,7 +159,7 @@ class OTPStrategy:
                     logger.warning("Failed to compute TOTP from secret: %s", e)
 
             # If no TOTP secret, attempt temp-mail inbox lookup if email is available
-            if not otp_code and getattr(credential, "email", None):
+            if not otp_code and email:
                 email = credential.email
                 try:
                     from app.engine.email.provider import get_temp_email_provider, MailboxHandle
@@ -100,34 +193,7 @@ class OTPStrategy:
                 )
 
             # 3. Locate OTP field dynamically by label, autocomplete=one-time-code, inputmode and length
-            otp_locator = None
-
-            # a) autocomplete=one-time-code
-            ac_el = page.locator("input[autocomplete='one-time-code']")
-            if await ac_el.count() > 0 and await ac_el.first.is_visible():
-                otp_locator = ac_el.first
-
-            # b) inputmode=numeric with length 6-8
-            if not otp_locator:
-                num_el = page.locator("input[inputmode='numeric']")
-                if await num_el.count() > 0 and await num_el.first.is_visible():
-                    otp_locator = num_el.first
-
-            # c) accessible label matching OTP / verification code
-            if not otp_locator:
-                for label_pat in (r"one-time", r"verification", r"authenticator", r"code", r"otp"):
-                    lbl_el = page.get_by_label(re.compile(label_pat, re.I))
-                    if await lbl_el.count() > 0 and await lbl_el.first.is_visible():
-                        otp_locator = lbl_el.first
-                        break
-
-            # d) heuristic attribute selector fallback
-            if not otp_locator:
-                for sel in ("input[name*='otp']", "input[name*='code']", "input[id*='otp']", "input[id*='code']"):
-                    el = page.locator(sel)
-                    if await el.count() > 0 and await el.first.is_visible():
-                        otp_locator = el.first
-                        break
+            otp_locator = await _find_visible_otp()
 
             if not otp_locator:
                 # Escalate to agent loop with screenshot if deterministic selectors cannot find field

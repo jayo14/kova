@@ -2404,18 +2404,10 @@ class FlowRunner:
         event_recorder: Callable | None,
     ) -> None:
         """Execute a single step in the flow."""
-        # Observe before action
-        ctx.transition(ExecutionState.OBSERVING)
-        observation = await browser.observe()
-        ctx.record_observation(observation)
-        ctx.record_event(EventTypes.AGENT_OBSERVED, {
-            "step": step_index,
-            "step_id": step.get("step_id") if isinstance(step, dict) else None,
-            "observation": observation,
-        })
-        await self._emit_events(ctx, event_recorder)
-
         raw_type = (step.get("type") or step.get("action") or "").lower() if isinstance(step, dict) else ""
+        if raw_type == "locate":
+            return
+
         if raw_type in ("capture_evidence", "evidence", "screenshot"):
             ss_data = await self._capture_live_snapshot(browser, ctx.execution_id, state="evidence")
             ctx.record_event(EventTypes.EVIDENCE_CAPTURED, {
@@ -2426,9 +2418,6 @@ class FlowRunner:
                 **ss_data,
             })
             await self._emit_events(ctx, event_recorder)
-            return
-
-        if raw_type == "locate":
             return
 
         if raw_type in ("assert", "assertion"):
@@ -2446,6 +2435,17 @@ class FlowRunner:
                     })
                     await self._emit_events(ctx, event_recorder)
             return
+
+        # Observe before interactive action
+        ctx.transition(ExecutionState.OBSERVING)
+        observation = await browser.observe()
+        ctx.record_observation(observation)
+        ctx.record_event(EventTypes.AGENT_OBSERVED, {
+            "step": step_index,
+            "step_id": step.get("step_id") if isinstance(step, dict) else None,
+            "observation": observation,
+        })
+        await self._emit_events(ctx, event_recorder)
 
         # Map old/string format to new format if needed
         raw_action = self._normalize_step(step, target_url=ctx.target_url)
