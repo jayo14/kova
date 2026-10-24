@@ -93,7 +93,15 @@ class BillingService:
         return_url: Optional[str] = None,
     ) -> PortalSessionResponse:
         sub = await self.get_subscription(org_id)
-        customer_id = sub.stripe_customer_id or f"cus_mock_{org_id.hex[:12]}"
+        customer_id = sub.stripe_customer_id
+        if not customer_id:
+            if settings.allow_mocks:
+                customer_id = f"cus_mock_{org_id.hex[:12]}"
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No active Stripe customer found for this organization. Upgrade first.",
+                )
         portal_url = await self.stripe_client.create_portal_session(
             org_id=org_id,
             customer_id=customer_id,
@@ -147,6 +155,13 @@ class BillingService:
             plan = metadata.get("plan", "pro")
             customer_id = data_object.get("customer")
             subscription_id = data_object.get("subscription")
+
+            if customer_id and str(customer_id).startswith("cus_mock_") and not settings.allow_mocks:
+                logger.warning("Rejecting mock customer_id in webhook: %s", customer_id)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Mock customer IDs are not permitted",
+                )
 
             if org_id_str:
                 try:
