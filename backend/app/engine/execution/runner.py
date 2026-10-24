@@ -2415,6 +2415,38 @@ class FlowRunner:
         })
         await self._emit_events(ctx, event_recorder)
 
+        raw_type = (step.get("type") or step.get("action") or "").lower() if isinstance(step, dict) else ""
+        if raw_type in ("capture_evidence", "evidence", "screenshot"):
+            ss_data = await self._capture_live_snapshot(browser, ctx.execution_id, state="evidence")
+            ctx.record_event(EventTypes.EVIDENCE_CAPTURED, {
+                "step": step_index,
+                "step_id": step.get("step_id"),
+                "purpose": step.get("purpose", "step_evidence"),
+                "description": step.get("description", ""),
+                **ss_data,
+            })
+            await self._emit_events(ctx, event_recorder)
+            return
+
+        if raw_type == "locate":
+            return
+
+        if raw_type in ("assert", "assertion"):
+            target_key = step.get("target") or ""
+            expected_val = step.get("value")
+            if str(target_key).startswith("url") or step.get("assertion_type") == "page_loaded":
+                verifier = Verifier(browser.page)
+                check_res = await verifier.verify({"url_matches": str(expected_val)})
+                if not check_res.passed:
+                    ctx.record_event(EventTypes.VERIFICATION_FAILED, {
+                        "step": step_index,
+                        "target": target_key,
+                        "expected": expected_val,
+                        "details": check_res.details,
+                    })
+                    await self._emit_events(ctx, event_recorder)
+            return
+
         # Map old/string format to new format if needed
         raw_action = self._normalize_step(step, target_url=ctx.target_url)
         action_type = raw_action.get("type", "")
@@ -2833,8 +2865,12 @@ class FlowRunner:
             if not target:
                 target["css"] = "button, a, input, [role='button']"
 
-        if action_type == "navigate" and not value:
-            value = step.get("url") or target_url
+        if action_type == "navigate":
+            if not value:
+                value = step.get("url") or target_url
+            elif isinstance(value, str) and value.startswith("/") and target_url:
+                from urllib.parse import urljoin
+                value = urljoin(target_url, value)
 
         result = {"type": action_type, "target": target}
         if value:
