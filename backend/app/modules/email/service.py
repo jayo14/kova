@@ -31,9 +31,10 @@ class EmailService:
 
     @property
     def is_configured(self) -> bool:
-        """True if credentials or production environment allow sending."""
+        """True if credentials and sender are configured to allow sending."""
         has_keys = bool(settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY)
-        return has_keys or settings.ENVIRONMENT == "production"
+        has_sender = bool(settings.SES_FROM_EMAIL)
+        return has_keys and has_sender
 
     def send_email(
         self,
@@ -50,18 +51,32 @@ class EmailService:
         """
         sender = from_email or settings.SES_FROM_EMAIL
         if not sender:
-            logger.error("No sender email specified or configured in SES_FROM_EMAIL")
+            err = "No sender email specified or configured in SES_FROM_EMAIL"
+            logger.error(err)
+            if settings.is_production:
+                raise RuntimeError(f"Email delivery failed: {err}")
             return False
+
         config_set = configuration_set or settings.SES_CONFIGURATION_SET or "production-ses"
 
         if not self.is_configured:
-            logger.info(
-                "Mock sending email to %s (config_set=%s) - Subject: %s",
-                to_email,
-                config_set,
-                subject,
-            )
-            return True
+            if settings.allow_mocks:
+                logger.info(
+                    "DEV mock sending email to %s (config_set=%s) - Subject: %s",
+                    to_email,
+                    config_set,
+                    subject,
+                )
+                return True
+
+            err = "AWS SES email service is not configured"
+            if settings.is_production:
+                err = "AWS SES email service is not configured in production (missing AWS credentials or SES_FROM_EMAIL)"
+                logger.error(err)
+                raise RuntimeError(err)
+
+            logger.error("%s. Enable DEV_ALLOW_MOCKS for local development mocking.", err)
+            return False
 
         try:
             params: dict[str, Any] = {
