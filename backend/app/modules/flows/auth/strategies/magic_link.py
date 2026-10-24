@@ -75,37 +75,20 @@ class MagicLinkStrategy:
             temp_mail = get_temp_email_provider()
 
             # Poll via configured temp-mail provider
-            if temp_mail and hasattr(credential, "mailbox_handle"):
+            if temp_mail:
                 try:
-                    msg = await temp_mail.wait_for_message(credential.mailbox_handle, timeout_seconds=15.0)
-                    if msg:
-                        links = extract_links(msg.body_text)
-                        if links:
-                            magic_link = links[0]
+                    from app.engine.email.provider import MailboxHandle
+                    mailbox_handle = getattr(credential, "mailbox_handle", None) or (
+                        MailboxHandle(mailbox_id=email, address=email) if email else None
+                    )
+                    if mailbox_handle:
+                        msg = await temp_mail.wait_for_message(mailbox_handle, timeout_seconds=15.0)
+                        if msg:
+                            links = extract_links(msg.body_text)
+                            if links:
+                                magic_link = links[0]
                 except Exception as mail_err:
                     logger.debug("Temp-mail provider polling failed: %s", mail_err)
-
-            # Fallback: check local inbox endpoint for test fixtures
-            if not magic_link:
-                deadline = asyncio.get_event_loop().time() + 10.0
-                while asyncio.get_event_loop().time() < deadline:
-                    try:
-                        inbox_res = await page.request.get(f"/api/inbox/{email}")
-                        if inbox_res.ok:
-                            data = await inbox_res.json()
-                            messages = data.get("messages", [])
-                            if messages:
-                                body = messages[-1].get("body", "") or messages[-1].get("link", "")
-                                links = extract_links(body)
-                                if links:
-                                    magic_link = links[0]
-                                    break
-                                elif "http" in body:
-                                    magic_link = body
-                                    break
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.5)
 
             if not magic_link:
                 # Notify operator if human intervention is enabled
