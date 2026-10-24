@@ -83,90 +83,176 @@ class PageObserver:
                     continue
                 raise
 
+    async def _get_frames(self) -> list[Any]:
+        frames = [self.page.main_frame]
+        try:
+            for f in getattr(self.page, "frames", []):
+                if f != self.page.main_frame:
+                    frames.append(f)
+        except Exception:
+            pass
+        return frames
+
+    async def _get_bbox(self, element) -> dict[str, float] | None:
+        try:
+            box = await element.bounding_box()
+            if box:
+                return {
+                    "x": round(box["x"], 1),
+                    "y": round(box["y"], 1),
+                    "width": round(box["width"], 1),
+                    "height": round(box["height"], 1),
+                }
+        except Exception:
+            pass
+        return None
+
     async def _observe_buttons(self) -> list[dict]:
-        """Extract all visible buttons."""
-        buttons = await self.page.query_selector_all(
-            "button, [role='button'], input[type='submit'], input[type='button']"
-        )
+        """Extract visible buttons across main frame, child frames, and custom clickable divs."""
         results = []
-        for btn in buttons:
+        frames = await self._get_frames()
+        for frame in frames:
             try:
-                if not await btn.is_visible():
-                    continue
-                tag = await btn.evaluate("el => el.tagName.toLowerCase()")
-                name = await self._get_element_name(btn)
-                label = await self._get_element_label(btn)
-                role = await self._get_role(btn, tag)
-                selector = await self._build_selector(btn)
-                results.append({
-                    "type": "button",
-                    "name": name,
-                    "label": label,
-                    "role": role,
-                    "selector": selector,
-                })
+                frame_id = frame.url or frame.name or "main"
+                is_subframe = (frame != self.page.main_frame)
+                buttons = await frame.query_selector_all(
+                    "button, [role='button'], input[type='submit'], input[type='button'], "
+                    "div[role='button'], div.custom-btn, [tabindex='0'][role='button']"
+                )
+                for btn in buttons:
+                    try:
+                        if not await btn.is_visible():
+                            continue
+                        tag = await btn.evaluate("el => el.tagName.toLowerCase()")
+                        name = await self._get_element_name(btn)
+                        label = await self._get_element_label(btn)
+                        role = await self._get_role(btn, tag)
+                        selector = await self._build_selector(btn)
+                        bbox = await self._get_bbox(btn)
+                        disabled = False
+                        try:
+                            disabled = await btn.is_disabled()
+                        except Exception:
+                            pass
+                        results.append({
+                            "type": "button",
+                            "name": name or label or selector,
+                            "accessible_name": name or label,
+                            "label": label,
+                            "role": role or "button",
+                            "selector": selector,
+                            "bounding_box": bbox,
+                            "state": {"visible": True, "disabled": disabled},
+                            "frame": frame_id,
+                            "is_subframe": is_subframe,
+                        })
+                    except Exception:
+                        continue
             except Exception:
                 continue
         return results
 
     async def _observe_links(self) -> list[dict]:
-        """Extract all visible links."""
-        links = await self.page.query_selector_all("a[href]")
+        """Extract all visible links across frames."""
         results = []
-        for link in links:
+        frames = await self._get_frames()
+        for frame in frames:
             try:
-                if not await link.is_visible():
-                    continue
-                text = (await link.inner_text()).strip()[:200]
-                href = await link.get_attribute("href") or ""
-                selector = await self._build_selector(link)
-                results.append({
-                    "type": "link",
-                    "name": text,
-                    "label": text,
-                    "role": "link",
-                    "href": href,
-                    "selector": selector,
-                })
+                frame_id = frame.url or frame.name or "main"
+                is_subframe = (frame != self.page.main_frame)
+                links = await frame.query_selector_all("a[href], [role='link']")
+                for link in links:
+                    try:
+                        if not await link.is_visible():
+                            continue
+                        text = (await link.inner_text()).strip()[:200]
+                        href = await link.get_attribute("href") or ""
+                        selector = await self._build_selector(link)
+                        bbox = await self._get_bbox(link)
+                        results.append({
+                            "type": "link",
+                            "name": text,
+                            "accessible_name": text,
+                            "label": text,
+                            "role": "link",
+                            "href": href,
+                            "selector": selector,
+                            "bounding_box": bbox,
+                            "state": {"visible": True},
+                            "frame": frame_id,
+                            "is_subframe": is_subframe,
+                        })
+                    except Exception:
+                        continue
             except Exception:
                 continue
         return results
 
     async def _observe_inputs(self) -> list[dict]:
-        """Extract all visible input elements (text, password, email, etc.)."""
-        inputs = await self.page.query_selector_all(
-            "input[type='text'], input[type='password'], input[type='email'], "
-            "input[type='number'], input[type='tel'], input[type='url'], "
-            "input[type='search'], input:not([type])"
-        )
+        """Extract visible input elements across all frames."""
         results = []
-        for inp in inputs:
+        frames = await self._get_frames()
+        for frame in frames:
             try:
-                if not await inp.is_visible():
-                    continue
-                name = await inp.get_attribute("name") or ""
-                placeholder = await inp.get_attribute("placeholder") or ""
-                input_type = await inp.get_attribute("type") or "text"
-                label = await self._get_element_label(inp)
-                selector = await self._build_selector(inp)
-                # Empty-input tracking: lets callers tell "form needs filling"
-                # from "form already filled" (prevents re-typing loops).
-                # Password values are read too — only the boolean ever leaves
-                # this module (semantic observations expose `filled`, never values).
-                try:
-                    input_value = await inp.input_value()
-                except Exception:
-                    input_value = ""
-                results.append({
-                    "type": "input",
-                    "name": name or placeholder or selector,
-                    "label": label or placeholder,
-                    "role": "textbox",
-                    "input_type": input_type,
-                    "placeholder": placeholder,
-                    "selector": selector,
-                    "filled": bool(input_value.strip()),
-                })
+                frame_id = frame.url or frame.name or "main"
+                is_subframe = (frame != self.page.main_frame)
+                inputs = await frame.query_selector_all(
+                    "input[type='text'], input[type='password'], input[type='email'], "
+                    "input[type='number'], input[type='tel'], input[type='url'], "
+                    "input[type='search'], input:not([type]), input[type='checkbox'], input[type='radio']"
+                )
+                for inp in inputs:
+                    try:
+                        if not await inp.is_visible():
+                            continue
+                        name = await inp.get_attribute("name") or ""
+                        placeholder = await inp.get_attribute("placeholder") or ""
+                        input_type = await inp.get_attribute("type") or "text"
+                        label = await self._get_element_label(inp)
+                        selector = await self._build_selector(inp)
+                        bbox = await self._get_bbox(inp)
+                        try:
+                            input_value = await inp.input_value()
+                        except Exception:
+                            input_value = ""
+                        disabled = False
+                        try:
+                            disabled = await inp.is_disabled()
+                        except Exception:
+                            pass
+                        required = False
+                        try:
+                            required = bool(await inp.get_attribute("required") is not None)
+                        except Exception:
+                            pass
+                        val_msg = ""
+                        try:
+                            val_msg = await inp.evaluate("el => el.validationMessage || ''")
+                        except Exception:
+                            pass
+
+                        results.append({
+                            "type": "input",
+                            "name": name or placeholder or selector,
+                            "accessible_name": label or placeholder or name,
+                            "label": label or placeholder,
+                            "role": "textbox" if input_type not in ("checkbox", "radio") else input_type,
+                            "input_type": input_type,
+                            "placeholder": placeholder,
+                            "selector": selector,
+                            "bounding_box": bbox,
+                            "state": {
+                                "visible": True,
+                                "disabled": disabled,
+                                "required": required,
+                                "filled": bool(input_value.strip()),
+                                "validation_message": val_msg,
+                            },
+                            "frame": frame_id,
+                            "is_subframe": is_subframe,
+                        })
+                    except Exception:
+                        continue
             except Exception:
                 continue
         return results
@@ -439,35 +525,42 @@ class PageObserver:
 
     async def _observe_dialogs(self) -> list[dict]:
         """Extract visible modal dialogs and alerts."""
-        try:
-            modals = await self.page.query_selector_all(
-                "dialog[open], [role='dialog'], [role='alertdialog'], .modal:not([style*='display: none'])"
-            )
-            results = []
-            for m in modals:
-                try:
-                    if await m.is_visible():
-                        txt = (await m.inner_text()).strip()[:200]
-                        results.append({"text": txt})
-                except Exception:
-                    continue
-            return results[:3]
-        except Exception:
-            return []
+        results = []
+        frames = await self._get_frames()
+        for frame in frames:
+            try:
+                modals = await frame.query_selector_all(
+                    "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true'], .modal:not([style*='display: none'])"
+                )
+                for m in modals:
+                    try:
+                        if await m.is_visible():
+                            txt = (await m.inner_text()).strip()[:300]
+                            box = await self._get_bbox(m)
+                            results.append({"text": txt, "bounding_box": box})
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return results[:5]
 
     async def _observe_alerts(self) -> list[str]:
-        """Extract visible alerts, error banners, and notifications."""
-        try:
-            alerts_el = await self.page.query_selector_all("[role='alert'], .error, .alert, .notification")
-            results = []
-            for a in alerts_el:
-                try:
-                    if await a.is_visible():
-                        txt = (await a.inner_text()).strip()
-                        if txt:
-                            results.append(txt[:150])
-                except Exception:
-                    continue
-            return results[:4]
-        except Exception:
-            return []
+        """Extract visible alerts, toasts, error banners, and validation notifications."""
+        results = []
+        frames = await self._get_frames()
+        for frame in frames:
+            try:
+                alerts_el = await frame.query_selector_all(
+                    "[role='alert'], [role='status'], .toast, .alert, .error, .notification, :invalid"
+                )
+                for a in alerts_el:
+                    try:
+                        if await a.is_visible():
+                            txt = (await a.inner_text()).strip()
+                            if txt and txt[:150] not in results:
+                                results.append(txt[:150])
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        return results[:8]
