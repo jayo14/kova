@@ -78,6 +78,8 @@ class EventTypes:
     VERIFICATION_PROPOSED = "agent.verification_proposed"
     VERIFICATION_CONFIRMED = "agent.verification_confirmed"
     HUMAN_INPUT_REQUIRED = "agent.human_input_required"
+    VISION_ESCALATION_TRIGGERED = "agent.vision_escalation_triggered"
+    MODEL_FALLBACK_TRIGGERED = "ai.model_fallback_triggered"
     AGENT_COMPLETED = "agent.completed"
     AGENT_FAILED = "agent.failed"
 
