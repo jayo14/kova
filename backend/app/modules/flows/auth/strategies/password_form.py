@@ -161,6 +161,41 @@ class PasswordFormStrategy:
                     ],
                 )
 
+                target_frame = None
+                frames = getattr(page, "frames", None)
+                if (not user_sel or not pwd_sel) and isinstance(frames, (list, tuple)):
+                    for frame in frames:
+                        if frame == page.main_frame:
+                            continue
+                        f_user = await self._find_input_in_frame(
+                            frame,
+                            [
+                                "input[type=email]",
+                                "input[name=email]",
+                                "input[id=email]",
+                                "input[name=username]",
+                                "input[id=username]",
+                                "input[name=identifier]",
+                                "input[id=identifier]",
+                                "input[autocomplete=username]",
+                                "input[autocomplete=email]",
+                            ],
+                        )
+                        f_pwd = await self._find_input_in_frame(
+                            frame,
+                            [
+                                "input[type=password]",
+                                "input[name=password]",
+                                "input[id=password]",
+                                "input[autocomplete=current-password]",
+                            ],
+                        )
+                        if f_user and f_pwd:
+                            target_frame = frame
+                            user_sel = f_user
+                            pwd_sel = f_pwd
+                            break
+
                 # If multi-step login, user input might appear first before password
                 if user_sel and not pwd_sel:
                     await browser.fill(user_sel, email)
@@ -194,19 +229,47 @@ class PasswordFormStrategy:
                         attempts=[AuthAttempt(attempt_number=attempt_num, strategy="password_form", success=False, error="Fields not found", reason_code=AuthReasonCode.UNKNOWN, duration_ms=int((time.monotonic() - t0) * 1000))],
                     )
 
-                # 4. Fill credentials
-                await browser.fill(user_sel, email)
-                await browser.fill(pwd_sel, password)
+                # Capture pre-submit screenshot and network log evidence
+                pre_ss = await self._capture_screenshot_evidence(browser, step_id, "pre_submit")
+                if pre_ss:
+                    evidence_list.append(pre_ss)
 
-                # 5. Submit
-                submit_btn = await find_submit_button(browser.page)
-                if submit_btn:
-                    try:
-                        await browser.click(submit_btn)
-                    except Exception:
-                        await page.keyboard.press("Enter")
+                evidence_list.append({
+                    "type": "network_log",
+                    "title": f"Auth submission network log ({attempt_num})",
+                    "purpose": "auth_attempt",
+                    "step_id": step_id,
+                    "metadata": {
+                        "url": current_url,
+                        "email": email,
+                        "action": "submit",
+                        "password_redacted": True,
+                    },
+                })
+
+                # 4. Fill credentials & 5. Submit
+                if target_frame:
+                    await target_frame.fill(user_sel, email)
+                    await target_frame.fill(pwd_sel, password)
+                    submit_btn = await target_frame.query_selector(
+                        "button[type=submit], input[type=submit], button:has-text('Log In'), button:has-text('Sign In'), button:has-text('Authorize'), button"
+                    )
+                    if submit_btn and await submit_btn.is_visible():
+                        await submit_btn.click()
+                    else:
+                        await target_frame.locator(pwd_sel).press("Enter")
                 else:
-                    await page.keyboard.press("Enter")
+                    await browser.fill(user_sel, email)
+                    await browser.fill(pwd_sel, password)
+
+                    submit_btn = await find_submit_button(browser.page)
+                    if submit_btn:
+                        try:
+                            await browser.click(submit_btn)
+                        except Exception:
+                            await page.keyboard.press("Enter")
+                    else:
+                        await page.keyboard.press("Enter")
 
                 # Wait for response / navigation
                 try:
@@ -221,7 +284,16 @@ class PasswordFormStrategy:
                     evidence_list.append(post_ss)
 
                 # 7. Check outcome via unified verify_authenticated
+                success_pattern = getattr(capability, "success_url_pattern", None)
+                new_url = browser.page.url if browser.page else ""
+
                 is_authed, reason_code = await verify_authenticated(browser, capability)
+                if success_pattern:
+                    if re.search(success_pattern, new_url):
+                        is_authed = True
+                        reason_code = AuthReasonCode.SUCCESS
+                    else:
+                        is_authed = False
 
                 if is_authed:
                     session_state = await browser.save_session_state()
@@ -240,12 +312,17 @@ class PasswordFormStrategy:
                         attempts=attempts,
                     )
                 else:
+                    error_msg = (
+                        f"Post-login URL '{new_url}' did not match success pattern '{success_pattern}'"
+                        if (success_pattern and not re.search(success_pattern, new_url))
+                        else f"Password authentication failed: {reason_code}"
+                    )
                     # Record attempt failure with specific reason code
                     attempts.append(AuthAttempt(
                         attempt_number=attempt_num,
                         strategy="password_form",
                         success=False,
-                        error=reason_code,
+                        error=error_msg,
                         reason_code=reason_code,
                         duration_ms=int((time.monotonic() - t0) * 1000),
                     ))
@@ -267,7 +344,7 @@ class PasswordFormStrategy:
 
                     return AuthResult(
                         success=False,
-                        failure_reason=f"Password authentication failed: {reason_code}",
+                        failure_reason=error_msg,
                         reason_code=reason_code,
                         failure_category="AUTH",
                         evidence=evidence_list,
@@ -302,6 +379,16 @@ class PasswordFormStrategy:
         for sel in selectors:
             try:
                 el = await browser.page.query_selector(sel)
+                if el and await el.is_visible():
+                    return sel
+            except Exception:
+                continue
+        return None
+
+    async def _find_input_in_frame(self, frame: Any, selectors: list[str]) -> str | None:
+        for sel in selectors:
+            try:
+                el = await frame.query_selector(sel)
                 if el and await el.is_visible():
                     return sel
             except Exception:

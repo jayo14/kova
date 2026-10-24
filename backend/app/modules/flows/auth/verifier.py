@@ -150,19 +150,40 @@ async def verify_authenticated(
     if any(re.search(p, body_lower) for p in BAD_CREDENTIALS_PATTERNS):
         return False, AuthReasonCode.BAD_CREDENTIALS
 
+    # 2. Check if login form is still visible
+    login_form_visible = False
+    try:
+        pwd_input = await page.query_selector("input[type='password']")
+        if pwd_input and await pwd_input.is_visible():
+            login_form_visible = True
+        else:
+            frames = getattr(page, "frames", None)
+            if isinstance(frames, (list, tuple)):
+                for frame in frames:
+                    if frame == page.main_frame:
+                        continue
+                    f_pwd = await frame.query_selector("input[type='password']")
+                    if f_pwd and await f_pwd.is_visible():
+                        login_form_visible = True
+                        break
+    except Exception:
+        pass
+
     # OTP prompt active
     has_otp_field = False
     try:
         has_otp_field = bool(
             await page.query_selector("input[autocomplete='one-time-code']")
             or await page.query_selector("input[inputmode='numeric'][maxlength='6']")
-            or await page.query_selector("input[name='otp'], input[name='code']")
+            or await page.query_selector("input[name='otp'], input[id='otp']")
         )
+        if not has_otp_field and not login_form_visible:
+            has_otp_field = bool(await page.query_selector("input[name='code']"))
     except Exception:
         pass
 
-    if has_otp_field or any(re.search(p, body_lower) for p in NEEDS_OTP_PATTERNS):
-        # If password input is gone and OTP input is visible, we need OTP
+    has_otp_pattern = any(re.search(p, body_lower) for p in NEEDS_OTP_PATTERNS)
+    if has_otp_pattern or (has_otp_field and not login_form_visible):
         return False, AuthReasonCode.NEEDS_OTP
 
     # Email verification required
@@ -172,15 +193,6 @@ async def verify_authenticated(
     # SSO Only constraint
     if any(re.search(p, body_lower) for p in SSO_ONLY_PATTERNS):
         return False, AuthReasonCode.SSO_ONLY
-
-    # 2. Check if login form is still visible
-    login_form_visible = False
-    try:
-        pwd_input = await page.query_selector("input[type='password']")
-        if pwd_input and await pwd_input.is_visible():
-            login_form_visible = True
-    except Exception:
-        pass
 
     # 3. Determine if current page is on an auth URL
     parsed_current = urlparse(current_url)
@@ -224,6 +236,16 @@ async def verify_authenticated(
                 err_text = (await error_el.inner_text()).strip()
                 if err_text:
                     return False, AuthReasonCode.BAD_CREDENTIALS
+            frames = getattr(page, "frames", None)
+            if isinstance(frames, (list, tuple)):
+                for frame in frames:
+                    if frame == page.main_frame:
+                        continue
+                    f_err = await frame.query_selector(".error, .alert-danger, [role='alert'], #frameError")
+                    if f_err and await f_err.is_visible():
+                        f_err_text = (await f_err.inner_text()).strip()
+                        if f_err_text:
+                            return False, AuthReasonCode.BAD_CREDENTIALS
         except Exception:
             pass
         return False, AuthReasonCode.BAD_CREDENTIALS
