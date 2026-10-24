@@ -7,6 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Any
 
 
+from app.modules.exploration.capabilities import (
+    CapabilityInput,
+    CapabilityVerification,
+    DiscoveredCapability,
+)
+
+
 class DiscoveredMission(BaseModel):
     id: str = Field(default_factory=lambda: f"mission-{uuid.uuid4().hex[:8]}")
     flow_id: uuid.UUID | str | None = None
@@ -27,6 +34,15 @@ class DiscoveredMission(BaseModel):
     persona_evidence: str | None = None
     review_required: bool = True
     discovery_evidence: list[dict] = Field(default_factory=list)
+    user_goal: str | None = None
+    expected_outcome: str | None = None
+    prerequisites: list[str] = Field(default_factory=list)
+    verification_methods: list[dict] = Field(default_factory=list)
+    ranking_rationale: str | None = None
+    classification: str = "functional"  # functional, setup, navigation
+    discovery_status: str = "discovered"  # observed, inferred, partially_explored, verified
+    capability_id: str | None = None
+    is_core: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
