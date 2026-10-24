@@ -11,18 +11,53 @@ def email_service_instance():
     return EmailService()
 
 
-def test_email_service_unconfigured_mock_send(email_service_instance, monkeypatch):
+def test_email_service_unconfigured_fails_by_default(email_service_instance, monkeypatch):
     monkeypatch.setattr(settings, "AWS_ACCESS_KEY_ID", "")
     monkeypatch.setattr(settings, "AWS_SECRET_ACCESS_KEY", "")
     monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", False)
 
     assert email_service_instance.is_configured is False
     result = email_service_instance.send_email(
         to_email="user@example.com",
         subject="Test Subject",
         html_body="<p>Test</p>",
+        from_email="noreply@kova.app",
+    )
+    assert result is False
+
+
+def test_email_service_unconfigured_mock_send_when_flag_enabled(email_service_instance, monkeypatch):
+    monkeypatch.setattr(settings, "AWS_ACCESS_KEY_ID", "")
+    monkeypatch.setattr(settings, "AWS_SECRET_ACCESS_KEY", "")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", True)
+
+    assert email_service_instance.is_configured is False
+    result = email_service_instance.send_email(
+        to_email="user@example.com",
+        subject="Test Subject",
+        html_body="<p>Test</p>",
+        from_email="noreply@kova.app",
     )
     assert result is True
+
+
+def test_email_service_unconfigured_raises_in_production(email_service_instance, monkeypatch):
+    monkeypatch.setattr(settings, "AWS_ACCESS_KEY_ID", "")
+    monkeypatch.setattr(settings, "AWS_SECRET_ACCESS_KEY", "")
+    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", False)
+
+    assert email_service_instance.is_configured is False
+    with pytest.raises(RuntimeError) as exc_info:
+        email_service_instance.send_email(
+            to_email="user@example.com",
+            subject="Test Subject",
+            html_body="<p>Test</p>",
+            from_email="noreply@kova.app",
+        )
+    assert "production" in str(exc_info.value).lower()
 
 
 def test_email_service_sends_via_sesv2_with_configuration_set(email_service_instance, monkeypatch):
