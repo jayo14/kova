@@ -98,6 +98,20 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "In production, CREDENTIAL_ENCRYPTION_KEY must be a valid 32-byte url-safe base64-encoded Fernet key."
                 )
+            if self.DEV_ALLOW_MOCKS:
+                raise ValueError("DEV_ALLOW_MOCKS cannot be enabled in production.")
+            if self.REQUIRE_PRODUCTION_INTEGRATIONS:
+                missing = []
+                if not self.STRIPE_SECRET_KEY:
+                    missing.append("STRIPE_SECRET_KEY")
+                if not self.STRIPE_WEBHOOK_SECRET:
+                    missing.append("STRIPE_WEBHOOK_SECRET")
+                if not (self.AWS_ACCESS_KEY_ID and self.AWS_SECRET_ACCESS_KEY and self.SES_FROM_EMAIL):
+                    missing.append("AWS_SES")
+                if missing:
+                    raise ValueError(
+                        f"In production with REQUIRE_PRODUCTION_INTEGRATIONS, missing required credentials: {', '.join(missing)}"
+                    )
         return self
 
     @property
@@ -154,9 +168,16 @@ class Settings(BaseSettings):
     STRIPE_WEBHOOK_SECRET: str = ""
     STRIPE_PRO_PRICE_ID: str = "price_pro_default"
     STRIPE_ENTERPRISE_PRICE_ID: str = "price_enterprise_default"
+    DEV_ALLOW_MOCKS: bool = False
+    REQUIRE_PRODUCTION_INTEGRATIONS: bool = False
     FRONTEND_URL: str = "http://localhost:3000"
     DOCS_URL: str = "https://docs.kova.dev"
     STATUS_PAGE_URL: str = "https://status.kova.dev"
+
+    @property
+    def allow_mocks(self) -> bool:
+        """Allow mock integrations ONLY when explicitly enabled AND not in production."""
+        return bool(self.DEV_ALLOW_MOCKS and not self.is_production)
 
     @property
     def is_production(self) -> bool:
