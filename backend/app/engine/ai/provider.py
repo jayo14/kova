@@ -40,6 +40,26 @@ class AIProvider(ABC):
     """
 
     name: str = "base"
+    total_tokens_used: int = 0
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    model_calls: int = 0
+    last_usage: dict[str, Any] = {}
+
+    def get_usage(self) -> dict[str, Any]:
+        return {
+            "total_tokens": self.total_tokens_used,
+            "prompt_tokens": self.total_prompt_tokens,
+            "completion_tokens": self.total_completion_tokens,
+            "model_calls": self.model_calls,
+        }
+
+    def reset_usage(self) -> None:
+        self.total_tokens_used = 0
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
+        self.model_calls = 0
+        self.last_usage = {}
 
     @abstractmethod
     async def generate_structured(
@@ -187,6 +207,16 @@ class OpenAICompatibleProvider(AIProvider):
 
             try:
                 body = resp.json()
+                usage = body.get("usage") or {}
+                if usage:
+                    self.last_usage = usage
+                    self.total_prompt_tokens += usage.get("prompt_tokens", 0)
+                    self.total_completion_tokens += usage.get("completion_tokens", 0)
+                    self.total_tokens_used += usage.get("total_tokens", 0) or (
+                        usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+                    )
+                self.model_calls += 1
+
                 choice = body["choices"][0]
                 message = choice.get("message", {})
                 content = message.get("content") or ""
@@ -310,6 +340,26 @@ class FailoverAIProvider(AIProvider):
     @property
     def providers(self) -> list[AIProvider]:
         return self._providers
+
+    @property
+    def total_tokens_used(self) -> int:
+        return sum(getattr(p, "total_tokens_used", 0) for p in self._providers)
+
+    @property
+    def total_prompt_tokens(self) -> int:
+        return sum(getattr(p, "total_prompt_tokens", 0) for p in self._providers)
+
+    @property
+    def total_completion_tokens(self) -> int:
+        return sum(getattr(p, "total_completion_tokens", 0) for p in self._providers)
+
+    @property
+    def model_calls(self) -> int:
+        return sum(getattr(p, "model_calls", 0) for p in self._providers)
+
+    def reset_usage(self) -> None:
+        for p in self._providers:
+            p.reset_usage()
 
     async def generate_structured(
         self,
