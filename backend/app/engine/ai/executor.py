@@ -91,6 +91,7 @@ class AgentExecutor:
         max_turns: int = MAX_AGENT_TURNS,
         max_duration: float | None = None,
         safety_restrictions: Any | None = None,
+        vlm_client: Any | None = None,
     ):
         self.execution_id = execution_id
         self.reasoner = reasoner
@@ -104,6 +105,14 @@ class AgentExecutor:
         self.safety_guard = DestructiveActionGuard(safety_restrictions)
         self.mailbox: Any | None = None
         self.app_host: str | None = None
+        if vlm_client is not None:
+            self.vlm_client = vlm_client
+        else:
+            try:
+                from app.engine.visual.vlm_client import VLMClient
+                self.vlm_client = VLMClient()
+            except Exception:
+                self.vlm_client = None
 
     async def _emit(self, event_type: str, payload: dict) -> None:
         if self.event_emitter:
@@ -136,6 +145,65 @@ class AgentExecutor:
         if alt:
             from app.engine.ai.validator import _deterministic_target
             return _deterministic_target(alt)
+
+        # Vision escalation when target is ambiguous or text-based healing failed
+        if self.vlm_client and getattr(self.vlm_client, "has_vision_capability", lambda: False)():
+            vis = await self.escalate_vision(
+                browser,
+                obs,
+                objective=f"Locate target element for action {step.get('type')} with selector {step.get('target')}",
+                reason="target_ambiguous_heal",
+            )
+            if vis and vis.get("matched_element"):
+                mel = vis["matched_element"]
+                from app.engine.ai.validator import _deterministic_target
+                return _deterministic_target({"css": mel.get("selector"), "text": mel.get("name")})
+
+        return None
+
+    async def escalate_vision(
+        self,
+        browser: BrowserSession,
+        observation: dict[str, Any],
+        objective: str,
+        reason: str = "stuck",
+    ) -> dict[str, Any] | None:
+        """Send a numbered set-of-marks screenshot to a vision-capable model.
+
+        Used only when the agent is stuck, a target is ambiguous, or an assertion
+        needs visual confirmation. If the model has no vision, skips gracefully and logs.
+        """
+        if not self.vlm_client or not getattr(self.vlm_client, "has_vision_capability", lambda: False)():
+            logger.info("Vision escalation skipped: no vision model configured or lacks vision capability.")
+            return None
+
+        import base64
+        from app.engine.visual.set_of_marks import capture_set_of_marks
+
+        elements = observation.get("ranked_elements") or observation.get("elements") or []
+        screenshot_bytes, marks = await capture_set_of_marks(browser, elements)
+        if not screenshot_bytes or not marks:
+            logger.info("Vision escalation skipped: no visual marks could be captured.")
+            return None
+
+        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+        res = await self.vlm_client.escalate_set_of_marks(
+            screenshot_b64=screenshot_b64,
+            marks=marks,
+            objective=objective,
+            reason=reason,
+            context=f"URL: {browser.page.url if browser.page else 'unknown'}",
+        )
+
+        if res.get("escalated"):
+            await self._emit(EventTypes.VISION_ESCALATION_TRIGGERED, {
+                "reason": reason,
+                "selected_mark": res.get("selected_mark"),
+                "target_name": res.get("target_name"),
+                "confidence": res.get("confidence"),
+            })
+            return res
+
         return None
 
     # ── Main loop ───────────────────────────────────────────────────
@@ -245,6 +313,20 @@ class AgentExecutor:
                 memory, interpretation, observation,
                 recent_failure=self.recent_failure_detail or None,
             )
+
+            # Vision escalation: when agent is stuck or target is ambiguous, escalate to vision model
+            if self.recent_failure_detail and self.vlm_client and getattr(self.vlm_client, "has_vision_capability", lambda: False)():
+                vis_res = await self.escalate_vision(
+                    browser,
+                    observation,
+                    objective=objective,
+                    reason=f"agent_stuck: {self.recent_failure_detail}",
+                )
+                if vis_res and vis_res.get("matched_element"):
+                    mel = vis_res["matched_element"]
+                    proposal.target = {"css": mel.get("selector"), "text": mel.get("name")}
+                    if vis_res.get("action") in ("click", "fill", "press"):
+                        proposal.action = vis_res["action"]
 
             # Prompt injection defense check
             from app.engine.ai.prompt_sanitizer import detect_injection_in_proposal
