@@ -123,9 +123,11 @@ async def stripe_webhook(
     service = BillingService(db)
     try:
         return await service.handle_webhook(payload, stripe_signature)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to process Stripe webhook: %s", e)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Webhook error",
+            detail=f"Webhook error: {e}",
         )

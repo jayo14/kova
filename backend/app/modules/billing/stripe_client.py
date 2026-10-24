@@ -6,6 +6,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from fastapi import HTTPException, status
 import stripe
 
 from app.config.settings import settings
@@ -37,9 +38,20 @@ class StripeClient:
         c_url = cancel_url or f"{base_frontend}/billing?status=cancelled"
 
         if not self.is_configured():
-            mock_id = f"cs_test_{uuid.uuid4().hex[:24]}"
-            mock_url = f"{base_frontend}/billing?session_id={mock_id}&status=success"
-            return mock_url, mock_id
+            if settings.allow_mocks:
+                mock_id = f"cs_test_{uuid.uuid4().hex[:24]}"
+                mock_url = f"{base_frontend}/billing?session_id={mock_id}&status=success"
+                return mock_url, mock_id
+
+            if settings.is_production:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Stripe is not configured in production (STRIPE_SECRET_KEY is missing)",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe is not configured. Enable DEV_ALLOW_MOCKS for local development mocking.",
+            )
 
         price_id = (
             settings.STRIPE_ENTERPRISE_PRICE_ID
@@ -77,8 +89,32 @@ class StripeClient:
         base_frontend = settings.FRONTEND_URL.rstrip("/")
         r_url = return_url or f"{base_frontend}/billing"
 
-        if not self.is_configured() or not customer_id or customer_id.startswith("cus_mock_"):
-            return f"{base_frontend}/billing?portal=mock_active"
+        if not self.is_configured():
+            if settings.allow_mocks:
+                return f"{base_frontend}/billing?portal=mock_active"
+            if settings.is_production:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Stripe is not configured in production (STRIPE_SECRET_KEY is missing)",
+                )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Stripe is not configured. Enable DEV_ALLOW_MOCKS for local development mocking.",
+            )
+
+        if not customer_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No Stripe customer ID associated with this organization.",
+            )
+
+        if customer_id.startswith("cus_mock_"):
+            if settings.allow_mocks:
+                return f"{base_frontend}/billing?portal=mock_active"
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Mock customer IDs are not permitted.",
+            )
 
         session = stripe.billing_portal.Session.create(
             customer=customer_id,
@@ -94,20 +130,70 @@ class StripeClient:
     ) -> Any:
         """Verify and construct a Stripe webhook event from raw payload and signature."""
         secret = webhook_secret or settings.STRIPE_WEBHOOK_SECRET
-        if not secret or secret == "mock_secret" or not sig_header:
+        if not secret:
+            if settings.is_production:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="STRIPE_WEBHOOK_SECRET is not configured in production",
+                )
+            if not settings.allow_mocks:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="STRIPE_WEBHOOK_SECRET is not configured",
+                )
             import json
-            data = json.loads(payload) if isinstance(payload, (bytes, str)) else payload
-            return data
+            return json.loads(payload) if isinstance(payload, (bytes, str)) else payload
 
-        return stripe.Webhook.construct_event(
-            payload=payload,
-            sig_header=sig_header,
-            secret=secret,
-        )
+        if not sig_header:
+            if settings.allow_mocks and secret == "mock_secret":
+                import json
+                return json.loads(payload) if isinstance(payload, (bytes, str)) else payload
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing Stripe-Signature header",
+            )
+
+        if secret == "mock_secret":
+            if not settings.allow_mocks:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Mock webhook secret is only permitted when DEV_ALLOW_MOCKS is enabled in development",
+                )
+            import json
+            return json.loads(payload) if isinstance(payload, (bytes, str)) else payload
+
+        try:
+            return stripe.Webhook.construct_event(
+                payload=payload,
+                sig_header=sig_header,
+                secret=secret,
+            )
+        except stripe.error.SignatureVerificationError as e:
+            logger.warning("Stripe webhook signature verification failed: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid Stripe webhook signature: {e}",
+            )
+        except Exception as e:
+            logger.error("Failed to construct Stripe webhook event: %s", e)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Webhook event construction failed: {e}",
+            )
 
     async def cancel_subscription(self, stripe_subscription_id: str) -> None:
         """Cancel a subscription at period end."""
         if not self.is_configured() or stripe_subscription_id.startswith("sub_mock_"):
+            if settings.is_production:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Stripe is not configured in production",
+                )
+            if not settings.allow_mocks:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Stripe is not configured",
+                )
             return
         stripe.Subscription.modify(stripe_subscription_id, cancel_at_period_end=True)
 
