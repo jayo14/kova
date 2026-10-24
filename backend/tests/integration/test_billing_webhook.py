@@ -31,6 +31,12 @@ def _make_auth_header(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+@pytest.fixture(autouse=True)
+def enable_dev_mocks(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+
 @pytest.mark.asyncio
 async def test_end_to_end_billing_and_limits(db_session: AsyncSession):
     async def override_get_session():
