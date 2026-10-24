@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from typing import Any
+from urllib.parse import urljoin
 import pyotp
 
 from app.engine.browser.session import BrowserSession
@@ -49,9 +50,15 @@ class OTPStrategy:
             )
 
         try:
-            # 1. Navigate if not already on the auth page
-            if not page.url or page.url.endswith("/"):
-                await browser.navigate(login_url)
+            # 1. Navigate if needed
+            current_url = page.url or ""
+            if login_url.startswith("http"):
+                if not current_url or current_url != login_url:
+                    await browser.navigate(login_url)
+            elif login_url and current_url:
+                target_abs = urljoin(current_url, login_url)
+                if current_url != target_abs and not (login_url == "/" and current_url.rstrip("/").count("/") <= 2):
+                    await browser.navigate(target_abs)
 
             # 2. Derive OTP code: require TOTP secret (pyotp) or email OTP. NO 123456 fallback.
             totp_secret = (
@@ -223,6 +230,8 @@ class OTPStrategy:
 
             submit_btn = None
             for btn_sel in (
+                "#verifyOtpBtn",
+                "#verifyEmailOtpBtn",
                 "button[type=submit]",
                 "input[type=submit]",
                 "button:has-text('Verify')",
@@ -230,15 +239,24 @@ class OTPStrategy:
                 "button:has-text('Continue')",
                 "button:has-text('Log In')",
             ):
-                btn = page.locator(btn_sel)
-                if await btn.count() > 0 and await btn.first.is_visible():
-                    submit_btn = btn.first
+                loc = await _safe_loc(btn_sel)
+                cnt = await _safe_count(loc)
+                for i in range(cnt):
+                    item = loc.nth(i)
+                    if await _safe_is_visible(item):
+                        submit_btn = item
+                        break
+                if submit_btn:
                     break
 
             if submit_btn:
-                await submit_btn.click()
+                click_call = submit_btn.click()
+                if inspect.isawaitable(click_call):
+                    await click_call
             else:
-                await otp_locator.press("Enter")
+                press_call = otp_locator.press("Enter")
+                if inspect.isawaitable(press_call):
+                    await press_call
 
             # 5. Wait for the result of the submit (navigation / DOM mutation)
             try:

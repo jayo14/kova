@@ -5,7 +5,7 @@ import re
 import socket
 import time
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from app.engine.browser.auth import classify_auth_page, find_submit_button
 from app.engine.browser.session import BrowserSession
@@ -99,10 +99,15 @@ class PasswordFormStrategy:
                 )
 
             try:
-                # 1. Navigate
+                # 1. Navigate if needed
                 current_url = browser.page.url if browser.page else ""
-                if not current_url or current_url.endswith("/"):
-                    await browser.navigate(login_url)
+                if login_url.startswith("http"):
+                    if not current_url or current_url != login_url:
+                        await browser.navigate(login_url)
+                elif login_url and current_url:
+                    target_abs = urljoin(current_url, login_url)
+                    if current_url != target_abs and not (login_url == "/" and current_url.rstrip("/").count("/") <= 2):
+                        await browser.navigate(target_abs)
 
                 page = browser.page
                 if not page:
@@ -288,12 +293,10 @@ class PasswordFormStrategy:
                 new_url = browser.page.url if browser.page else ""
 
                 is_authed, reason_code = await verify_authenticated(browser, capability)
-                if success_pattern:
-                    if re.search(success_pattern, new_url):
-                        is_authed = True
-                        reason_code = AuthReasonCode.SUCCESS
-                    else:
+                if is_authed and success_pattern and success_pattern != "/":
+                    if not re.search(success_pattern, new_url):
                         is_authed = False
+                        reason_code = AuthReasonCode.UNKNOWN
 
                 if is_authed:
                     session_state = await browser.save_session_state()
@@ -326,6 +329,21 @@ class PasswordFormStrategy:
                         reason_code=reason_code,
                         duration_ms=int((time.monotonic() - t0) * 1000),
                     ))
+
+                    # If 2FA OTP is required and credential contains OTP secret, complete second factor via OTPStrategy
+                    if reason_code == AuthReasonCode.NEEDS_OTP and (
+                        getattr(credential, "totp_secret", None)
+                        or getattr(credential, "otp_secret", None)
+                        or hasattr(credential, "otp_code")
+                    ):
+                        from app.modules.flows.auth.strategies.otp import OTPStrategy
+                        return await OTPStrategy().execute(
+                            capability=capability,
+                            browser=browser,
+                            credential=credential,
+                            execution_id=execution_id,
+                            event_recorder=event_recorder,
+                        )
 
                     # If OTP or CAPTCHA is required, do not retry password
                     if reason_code in (AuthReasonCode.NEEDS_OTP, AuthReasonCode.NEEDS_CAPTCHA, AuthReasonCode.SSO_ONLY):
