@@ -283,7 +283,7 @@ async def liveness():
 @app.get("/health/ready")
 @app.get("/api/v1/health/ready")
 async def readiness():
-    """Report readiness only when the database and Redis are reachable."""
+    """Report readiness only when dependencies are reachable, reporting live integration status."""
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
@@ -298,6 +298,40 @@ async def readiness():
         workers = await asyncio.to_thread(inspector.ping) if inspector else None
         if not workers:
             raise RuntimeError("No execution workers are available")
-    except Exception:
+    except Exception as e:
         raise HTTPException(status_code=503, detail="Service dependencies unavailable")
-    return {"status": "ready"}
+
+    from app.modules.billing.stripe_client import StripeClient
+    from app.modules.email.service import EmailService
+
+    stripe_live = StripeClient().is_configured()
+    stripe_webhook_live = bool(settings.STRIPE_WEBHOOK_SECRET and settings.STRIPE_WEBHOOK_SECRET != "mock_secret")
+    ses_live = EmailService().is_configured
+
+    integrations = {
+        "database": True,
+        "redis": True,
+        "celery": True,
+        "stripe": stripe_live,
+        "stripe_webhook": stripe_webhook_live,
+        "ses": ses_live,
+    }
+
+    if settings.is_production:
+        missing = []
+        if not stripe_live:
+            missing.append("stripe")
+        if not stripe_webhook_live:
+            missing.append("stripe_webhook")
+        if not ses_live:
+            missing.append("ses")
+        if missing:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Production readiness failed: missing required integrations ({', '.join(missing)})",
+            )
+
+    return {
+        "status": "ready",
+        "integrations": integrations,
+    }

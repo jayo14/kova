@@ -64,7 +64,8 @@ async def test_health_routes_separate_liveness_from_readiness(monkeypatch):
 
         ready = await client.get("/health/ready")
         assert ready.status_code == 200
-        assert ready.json() == {"status": "ready"}
+        assert ready.json()["status"] == "ready"
+        assert "integrations" in ready.json()
 
         assert (await client.get("/sentry-debug")).status_code == 404
 
