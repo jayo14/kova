@@ -234,6 +234,20 @@ class DeterministicFlowGenerator:
                     target_actions = [a for a in all_actions if a.page_id == p.id]
                     break
 
+        # 4. Fallback: match page from actions
+        if not target_page and all_actions:
+            action_by_page: dict[uuid.UUID, list[ProductAction]] = {}
+            for a in all_actions:
+                action_by_page.setdefault(a.page_id, []).append(a)
+            if action_by_page:
+                best_pid = max(action_by_page.keys(), key=lambda pid: len(action_by_page[pid]))
+                target_page = next((p for p in all_pages if p.id == best_pid), None)
+                target_actions = action_by_page[best_pid]
+
+        if not target_page and all_pages:
+            target_page = all_pages[0]
+            target_actions = [a for a in all_actions if a.page_id == target_page.id]
+
         if not target_page:
             logger.info("Deterministic generator: No page found for capability %s", cap.name)
             return None
@@ -266,7 +280,18 @@ class DeterministicFlowGenerator:
 
             steps.append(step_locate(act.selector, description=f"Locate {act.name}"))
             if act.action_type == "input":
-                steps.append(step_input(act.selector, "test_input", description=f"Enter input into {act.name}"))
+                val = "test_input"
+                act_name_lower = act.name.lower()
+                sel_lower = act.selector.lower()
+                if "email" in act_name_lower or "email" in sel_lower:
+                    val = "test@example.com"
+                elif "name" in act_name_lower or "name" in sel_lower:
+                    val = "Test User"
+                elif "message" in act_name_lower or "message" in sel_lower or "textarea" in sel_lower:
+                    val = "Hello from Kova benchmark"
+                elif "password" in act_name_lower or "password" in sel_lower:
+                    val = "ValidPassword123!"
+                steps.append(step_input(act.selector, val, description=f"Enter input into {act.name}"))
             elif act.action_type in ("click", "submit"):
                 steps.append(step_click(act.selector, description=f"Click {act.name}"))
             else:
