@@ -16,6 +16,12 @@ def infer_effect_from_label(
     """Infer expected effect, mutated keys, confidence, and source from element text and tag."""
     t = text.strip().lower()
 
+    if any(k in t for k in ("report", "generate", "document", "logbook", "export")):
+        return [StateAssertion(key="report_generated", value=True, predicate="eq")], ["report_generated"], 0.75, "heuristic"
+    if any(k in t for k in ("defence", "defense", "mock", "practice", "quiz", "test", "exam")):
+        return [StateAssertion(key="simulation_completed", value=True, predicate="eq")], ["simulation_completed"], 0.75, "heuristic"
+    if any(k in t for k in ("search", "find", "filter", "query")):
+        return [StateAssertion(key="search_executed", value=True, predicate="eq")], ["search_executed"], 0.70, "heuristic"
     if any(k in t for k in ("enroll", "join course", "take course")):
         return [StateAssertion(key="enrolled", value=True, predicate="eq")], ["enrolled"], 0.65, "heuristic"
     if any(k in t for k in ("log in", "login", "sign in", "signin")):
@@ -127,6 +133,45 @@ class CapabilityExtractor:
 
             # Group discovered actions into capabilities
             effect_keys = {k for a in actions for k in a.mutates}
+            if "report_generated" in effect_keys:
+                capabilities.append(
+                    Capability(
+                        project_id=self.project_id,
+                        name="report_generation",
+                        description="Ability to submit logbook content, generate technical reports, and review outputs",
+                        produces_state=[StateMutation(key="report_generated", action="set", value=True)],
+                        kind="primary",
+                        source_files=page_obj.source_files or [],
+                        source="discovered",
+                        confidence=0.85,
+                    )
+                )
+            if "simulation_completed" in effect_keys:
+                capabilities.append(
+                    Capability(
+                        project_id=self.project_id,
+                        name="practice_session",
+                        description="Ability to conduct mock defence sessions, quizzes, or interactive practice reviews",
+                        produces_state=[StateMutation(key="simulation_completed", action="set", value=True)],
+                        kind="primary",
+                        source_files=page_obj.source_files or [],
+                        source="discovered",
+                        confidence=0.80,
+                    )
+                )
+            if "search_executed" in effect_keys:
+                capabilities.append(
+                    Capability(
+                        project_id=self.project_id,
+                        name="search_and_discovery",
+                        description="Ability to search, filter, and discover application resources and content",
+                        produces_state=[StateMutation(key="search_executed", action="set", value=True)],
+                        kind="primary",
+                        source_files=page_obj.source_files or [],
+                        source="discovered",
+                        confidence=0.75,
+                    )
+                )
             if "enrolled" in effect_keys:
                 capabilities.append(
                     Capability(
