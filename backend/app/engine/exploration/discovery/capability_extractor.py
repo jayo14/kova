@@ -56,15 +56,15 @@ class CapabilityExtractor:
             elements: list[dict[str, Any]] = await browser_page.evaluate("""
                 () => {
                     const items = [];
-                    const selectors = 'button, input[type="submit"], input[type="button"], a[role="button"], form';
+                    const selectors = 'button, input[type="submit"], input[type="button"], a[role="button"], [role="button"], input:not([type="hidden"]), textarea, select, a[href]';
                     document.querySelectorAll(selectors).forEach((el, idx) => {
                         // Check visibility
                         const rect = el.getBoundingClientRect();
                         if (rect.width === 0 || rect.height === 0) return;
 
-                        let text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || '').trim();
+                        let text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || el.getAttribute('placeholder') || '').trim();
                         let tag = el.tagName.toLowerCase();
-                        let type = el.getAttribute('type') || 'button';
+                        let type = el.getAttribute('type') || (tag === 'textarea' ? 'textarea' : (tag === 'select' ? 'select' : 'button'));
                         let id = el.id ? '#' + el.id : '';
                         let name = el.getAttribute('name');
                         let testId = el.getAttribute('data-testid');
@@ -92,7 +92,12 @@ class CapabilityExtractor:
                     el["text"], el["tag"], page_obj.url_pattern
                 )
 
-                act_type = "submit" if el["type"] == "submit" else "click"
+                if el["tag"] in ("input", "textarea", "select") and el["type"] not in ("submit", "button", "reset"):
+                    act_type = "input"
+                elif el["type"] == "submit":
+                    act_type = "submit"
+                else:
+                    act_type = "click"
                 action_name = el["text"][:80] if el["text"] else f"{act_type.capitalize()} on {page_obj.url_pattern}"
 
                 action = Action(
@@ -149,12 +154,16 @@ class CapabilityExtractor:
                     )
                 )
             if any(k in effect_keys for k in ("saved", "profile_updated", "contact_form_submitted")):
+                state_mutations = [StateMutation(key="form_submitted", action="set", value=True)]
+                for k in ("saved", "profile_updated", "contact_form_submitted"):
+                    if k in effect_keys:
+                        state_mutations.append(StateMutation(key=k, action="set", value=True))
                 capabilities.append(
                     Capability(
                         project_id=self.project_id,
                         name="data_submission",
                         description=f"Form submission capability on {page_obj.url_pattern}",
-                        produces_state=[StateMutation(key="form_submitted", action="set", value=True)],
+                        produces_state=state_mutations,
                         kind="primary",
                         source_files=page_obj.source_files or [],
                         source="heuristic",
