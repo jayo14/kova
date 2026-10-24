@@ -69,21 +69,18 @@ class OTPStrategy:
             if not otp_code and getattr(credential, "email", None):
                 email = credential.email
                 try:
-                    from app.engine.email.provider import get_temp_email_provider
+                    from app.engine.email.provider import get_temp_email_provider, MailboxHandle
                     temp_mail = get_temp_email_provider()
-                    if temp_mail and hasattr(credential, "mailbox_handle"):
-                        msg = await temp_mail.wait_for_message(credential.mailbox_handle, timeout_seconds=10.0)
+                    if temp_mail:
+                        mailbox_handle = getattr(credential, "mailbox_handle", None) or MailboxHandle(
+                            mailbox_id=email, address=email
+                        )
+                        msg = await temp_mail.wait_for_message(mailbox_handle, timeout_seconds=10.0)
                         if msg:
                             # Search for 6-digit number in subject or body
                             match = re.search(r"\b\d{6}\b", msg.body_text or msg.subject)
                             if match:
                                 otp_code = match.group(0)
-                    else:
-                        # Check local fixture temp inbox if running in local test environment
-                        inbox_res = await page.request.get(f"/api/inbox/{email}")
-                        if inbox_res.ok:
-                            inbox_data = await inbox_res.json()
-                            otp_code = inbox_data.get("latest_code")
                 except Exception as mail_err:
                     logger.debug("Temp-mail OTP retrieval attempt failed: %s", mail_err)
 
