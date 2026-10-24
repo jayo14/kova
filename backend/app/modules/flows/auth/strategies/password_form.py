@@ -293,7 +293,11 @@ class PasswordFormStrategy:
                 new_url = browser.page.url if browser.page else ""
 
                 is_authed, reason_code = await verify_authenticated(browser, capability)
-                if is_authed and success_pattern and success_pattern != "/":
+                if not is_authed and success_pattern and success_pattern not in ("/", "^/$", ".*"):
+                    if re.search(success_pattern, new_url):
+                        is_authed = True
+                        reason_code = AuthReasonCode.SUCCESS
+                elif is_authed and success_pattern and success_pattern not in ("/", "^/$", ".*"):
                     if not re.search(success_pattern, new_url):
                         is_authed = False
                         reason_code = AuthReasonCode.UNKNOWN
