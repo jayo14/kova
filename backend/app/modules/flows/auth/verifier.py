@@ -211,7 +211,10 @@ async def verify_authenticated(
 
     # Check cookies/tokens in context
     try:
-        cookies = await browser.context.cookies()
+        ctx = getattr(browser, "context", None)
+        if ctx is None and hasattr(browser, "page") and browser.page:
+            ctx = getattr(browser.page, "context", None)
+        cookies = await ctx.cookies() if ctx else []
         has_session_cookie = any(
             any(k in c["name"].lower() for k in ("session", "token", "auth", "jwt", "sid"))
             for c in cookies

@@ -499,6 +499,11 @@ class BrowserSession:
         logger.info("Browser session closed")
 
     @property
+    def context(self) -> BrowserContext | None:
+        """Get the current browser context."""
+        return self._context
+
+    @property
     def page(self) -> Page:
         """Get the current page. Raises if session not started."""
         if self._page is None:
