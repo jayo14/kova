@@ -16,6 +16,12 @@ from app.modules.organizations.repository import OrganizationRepository
 from app.modules.users.models import User
 
 
+@pytest.fixture(autouse=True)
+def enable_dev_mocks(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+
+
 @pytest.fixture
 async def billing_user_and_org(db_session: AsyncSession):
     user_id = uuid.uuid4()
