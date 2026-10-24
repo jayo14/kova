@@ -145,3 +145,44 @@ async def test_breaking_auth_causes_benchmark_failure():
     assert res.auth_success is False
     assert res.false_positives == 1
     assert report.metrics.false_positive_rate > 0.0
+
+
+@pytest.mark.asyncio
+async def test_disabling_auth_strategies_causes_benchmark_failure():
+    """Acceptance check: disabling auth strategies drops auth success and fails benchmark."""
+    from unittest.mock import patch
+    from app.modules.flows.auth.strategies.base import AuthResult
+    from app.modules.flows.auth.verifier import AuthReasonCode
+
+    auth_fixture = next(f for f in DEFAULT_SUITE.fixtures if f.fixture_id == "working_auth_flow")
+    runner = BenchmarkRunner(suite=type(DEFAULT_SUITE)(name="disabled_auth_test", fixtures=[auth_fixture]))
+
+    with patch(
+        "app.modules.flows.auth.authenticator.Authenticator.authenticate",
+        return_value=AuthResult(success=False, reason_code=AuthReasonCode.UNKNOWN, failure_reason="Auth strategies disabled"),
+    ):
+        report = await runner.run()
+
+    res = report.fixture_results[0]
+    assert res.auth_success is False
+    assert res.false_positives == 1
+    assert report.metrics.auth_success_rate == 0.0
+
+
+@pytest.mark.asyncio
+async def test_ai_disabled_produces_zero_model_calls_and_cost():
+    """Acceptance check: running in deterministic AI-off mode incurs zero tokens, calls, and cost."""
+    contact_fixture = next(f for f in DEFAULT_SUITE.fixtures if f.fixture_id == "working_contact_form")
+    runner = BenchmarkRunner(
+        suite=type(DEFAULT_SUITE)(name="deterministic_test", fixtures=[contact_fixture]),
+        agent_enabled=False,
+    )
+    report = await runner.run()
+
+    res = report.fixture_results[0]
+    assert res.model_calls == 0
+    assert res.cost_usd == 0.0
+    assert res.tokens_used == 0
+    assert report.metrics.model_calls_per_validation == 0.0
+    assert report.metrics.cost_per_validation_usd == 0.0
+    assert report.metrics.total_tokens == 0
