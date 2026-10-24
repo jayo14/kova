@@ -115,14 +115,15 @@ class DiscoveryCrawler:
                 if depth >= self.depth_budget:
                     continue
 
-                # Extract links from page
+                # Extract links, iframes, and forms from page
                 links: list[str] = await browser_page.evaluate("""
                     () => {
                         const hrefs = [];
-                        document.querySelectorAll('a[href]').forEach(a => {
-                            const h = a.getAttribute('href');
+                        document.querySelectorAll('a[href], iframe[src], form[action]').forEach(el => {
+                            const h = el.getAttribute('href') || el.getAttribute('src') || el.getAttribute('action');
                             if (h && !h.startsWith('#') && !h.startsWith('javascript:') && !h.startsWith('mailto:') && !h.startsWith('tel:')) {
-                                hrefs.push(a.href);
+                                const full = el.href || el.src || el.action;
+                                if (full) hrefs.push(full);
                             }
                         });
                         return hrefs;

@@ -48,8 +48,13 @@ class AuthDetector:
         auth_capabilities: list[AuthCapability] = []
         for page in pages:
             p_lower = page.url_pattern.lower()
-            is_login_page = any(k in p_lower for k in ("/login", "/signin", "/sign-in", "/log-in", "/session"))
-            if not is_login_page and not (page.requires_auth and any(k in p_lower for k in ("auth", "register", "signup"))):
+            is_login_page = any(k in p_lower for k in ("/login", "/signin", "/sign-in", "/log-in", "/session", "/frame/login"))
+            page_actions = [a for a in actions if a.page_id == page.id]
+            has_auth_actions = any(
+                any(k in (a.selector or "").lower() for k in ("password", "otp", "code", "login", "signin", "modal", "auth", "identifier", "username"))
+                for a in page_actions
+            )
+            if not is_login_page and not has_auth_actions and not (page.requires_auth and any(k in p_lower for k in ("auth", "register", "signup"))):
                 continue
 
             strategy = self._infer_strategy(page, actions)

@@ -42,15 +42,13 @@ BAD_CREDENTIALS_PATTERNS = [
 ]
 
 NEEDS_OTP_PATTERNS = [
-    r"two-factor",
-    r"2fa",
+    r"enter (the )?(two-factor|2fa|authenticator|verification|one-time|sms|totp|\d-digit) code",
+    r"(two-factor|2fa|totp) (authentication )?(code|required|prompt|challenge)",
     r"authenticator code",
     r"verification code",
     r"one-time (code|password)",
-    r"enter the (6|8)-digit code",
     r"enter your code",
     r"sms code",
-    r"totp",
 ]
 
 NEEDS_CAPTCHA_PATTERNS = [
@@ -172,18 +170,24 @@ async def verify_authenticated(
     # OTP prompt active
     has_otp_field = False
     try:
-        has_otp_field = bool(
+        otp_el = (
             await page.query_selector("input[autocomplete='one-time-code']")
             or await page.query_selector("input[inputmode='numeric'][maxlength='6']")
             or await page.query_selector("input[name='otp'], input[id='otp']")
         )
-        if not has_otp_field and not login_form_visible:
-            has_otp_field = bool(await page.query_selector("input[name='code']"))
+        if not otp_el and not login_form_visible:
+            otp_el = await page.query_selector("input[name='code']")
+        if otp_el and await otp_el.is_visible():
+            has_otp_field = True
     except Exception:
         pass
 
-    has_otp_pattern = any(re.search(p, body_lower) for p in NEEDS_OTP_PATTERNS)
-    if has_otp_pattern or (has_otp_field and not login_form_visible):
+    has_otp_prompt = has_otp_field or (
+        any(re.search(p, body_lower) for p in NEEDS_OTP_PATTERNS)
+        and not any(re.search(p, body_lower) for p in AUTHENTICATED_INDICATORS)
+        and not any(k in body_lower for k in ("successful", "verified", "passed"))
+    )
+    if has_otp_prompt and not login_form_visible:
         return False, AuthReasonCode.NEEDS_OTP
 
     # Email verification required
