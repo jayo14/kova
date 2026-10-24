@@ -26,15 +26,28 @@ jobs:
       - name: Check metric gates
         run: |
           python -c "
-          import json
-          r = json.load(open('/tmp/benchmark_ai_off.json'))
-          m = r.get('metrics', {})
-          assert m.get('auth_success_rate', 0) >= 0.95, f'Auth success rate {m.get(\"auth_success_rate\")} below 0.95'
-          assert m.get('flow_completion_rate', 0) >= 0.85, f'Flow completion rate {m.get(\"flow_completion_rate\")} below 0.85'
-          assert m.get('true_positive_rate', 0) >= 0.90, f'TP rate {m.get(\"true_positive_rate\")} below 0.90'
-          assert m.get('false_positive_rate', 1.0) <= 0.05, f'FP rate {m.get(\"false_positive_rate\")} above 0.05'
-          assert m.get('evidence_completeness', 0) >= 0.98, f'Evidence completeness {m.get(\"evidence_completeness\")} below 0.98'
-          print('All real benchmark gates passed successfully')
+          import json, sys
+
+          def check_metrics(filepath, mode_name, is_ai_off=False):
+              print(f'Checking metric gates for {mode_name} ({filepath})...')
+              with open(filepath) as f:
+                  r = json.load(f)
+              m = r.get('metrics', {})
+              assert m.get('auth_success_rate', 0) >= 0.95, f'[{mode_name}] Auth success rate {m.get(\"auth_success_rate\")} below 0.95 floor'
+              assert m.get('flow_completion_rate', 0) >= 0.85, f'[{mode_name}] Flow completion rate {m.get(\"flow_completion_rate\")} below 0.85 floor'
+              assert m.get('true_positive_rate', 0) >= 0.90, f'[{mode_name}] TP rate {m.get(\"true_positive_rate\")} below 0.90 floor'
+              assert m.get('false_positive_rate', 1.0) <= 0.05, f'[{mode_name}] FP rate {m.get(\"false_positive_rate\")} above 0.05 ceiling'
+              assert m.get('evidence_completeness', 0) >= 0.98, f'[{mode_name}] Evidence completeness {m.get(\"evidence_completeness\")} below 0.98 floor'
+              if is_ai_off:
+                  print('  AI-off met performance floor by itself.')
+              print(f'  All {mode_name} gates passed successfully.')
+
+          # Invariant 2 & Requirement 4: AI-off must meet the floor by itself
+          check_metrics('/tmp/benchmark_ai_off.json', 'AI-off (Deterministic)', is_ai_off=True)
+
+          # AI-on run must also satisfy benchmark quality standards
+          check_metrics('/tmp/benchmark_ai_on.json', 'AI-on (Agent Assisted)')
+          print('Both AI-off and AI-on benchmark runs passed all gating criteria.')
           "
       - name: Upload report
         uses: actions/upload-artifact@v4
