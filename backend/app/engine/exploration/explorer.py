@@ -943,11 +943,11 @@ class ExplorationEngine:
         candidates = [
             'button[type="submit"]',
             'input[type="submit"]',
+            'button:has-text("Sign in"), button:has-text("Sign In"), button:has-text("Log in"), button:has-text("Log In"), button:has-text("Login")',
             'button:has-text("Create account"), button:has-text("Create Account"), button:has-text("Sign up"), button:has-text("Sign Up"), button:has-text("Register")',
             '#login-btn, #submit-btn, [data-testid*="login" i], [data-testid*="submit" i]',
-            'button:has-text("Sign in"), button:has-text("Log in"), button:has-text("Login")',
             'button:has-text("Continue"), button:has-text("Submit"), button:has-text("Next")',
-            'a[role="button"]:has-text("Sign in"), a[role="button"]:has-text("Log in")',
+            'a[role="button"]:has-text("Sign in"), a[role="button"]:has-text("Sign In"), a[role="button"]:has-text("Log in"), a[role="button"]:has-text("Log In")',
         ]
         for sel in candidates:
             try:
@@ -1035,12 +1035,26 @@ class ExplorationEngine:
             'input[data-testid*="password" i]'
         )
 
+        # Ensure React/Next.js/Vite SPA has rendered into DOM
+        try:
+            await page.wait_for_selector('input[type="email"], input[type="password"], input:not([type="hidden"]), form', timeout=4000)
+        except Exception:
+            pass
+
         async def _find_inputs():
             found_name, found_email, found_pwd, found_scope = None, None, None, page
-            for scope in frames:
+            all_frames = [page]
+            try:
+                for f in getattr(page, "frames", []):
+                    if f not in all_frames:
+                        all_frames.append(f)
+            except Exception:
+                pass
+
+            for scope in all_frames:
                 try:
                     loc = scope.locator(email_selector).first
-                    if await loc.is_visible(timeout=1000):
+                    if await loc.is_visible(timeout=2000):
                         found_email = loc
                         found_scope = scope
                 except Exception:
@@ -1048,7 +1062,7 @@ class ExplorationEngine:
 
                 try:
                     loc = scope.locator(password_selector).first
-                    if await loc.is_visible(timeout=1000):
+                    if await loc.is_visible(timeout=2000):
                         found_pwd = loc
                         found_scope = scope
                 except Exception:
@@ -1057,16 +1071,25 @@ class ExplorationEngine:
                 if not found_email:
                     try:
                         loc = scope.locator(fallback_email_selector).first
-                        if await loc.is_visible(timeout=600):
+                        if await loc.is_visible(timeout=1000):
                             found_email = loc
                             found_scope = scope
                     except Exception:
                         pass
 
-                if found_email or found_pwd:
+                if found_email and found_pwd:
                     try:
                         loc = scope.locator(name_selector).first
-                        if await loc.is_visible(timeout=300):
+                        if await loc.is_visible(timeout=500):
+                            found_name = loc
+                    except Exception:
+                        pass
+                    break
+
+                if (found_email or found_pwd) and len(all_frames) == 1:
+                    try:
+                        loc = scope.locator(name_selector).first
+                        if await loc.is_visible(timeout=500):
                             found_name = loc
                     except Exception:
                         pass
@@ -1381,6 +1404,14 @@ class ExplorationEngine:
 
     async def _ensure_on_auth_form(self, page, is_signup: bool = False) -> bool:
         """Ensures the browser is on the login or signup page/form before credential injection."""
+        # 0. If current URL is already an auth path (e.g. /signin, /login), give SPA time to hydrate into DOM
+        current_url = getattr(page, "url", "").lower()
+        if any(kw in current_url for kw in ["/signin", "/login", "/signup", "/register", "/auth/"]):
+            try:
+                await page.wait_for_selector('input[type="email"], input[type="password"], input:not([type="hidden"]), form', timeout=4000)
+            except Exception:
+                pass
+
         # 1. Check if auth inputs are already visible
         if await self._has_visible_auth_inputs(page):
             # If on signin form but signup requested (or vice versa), check for toggle/switch link

@@ -111,11 +111,27 @@ from fastapi import Request
 
 logger = logging.getLogger(__name__)
 
-# CORS: restrict in production, allow all in development
+import re
+
+def _is_allowed_origin(origin: str | None) -> bool:
+    if not origin:
+        return False
+    if not settings.is_production:
+        return True
+    clean = origin.rstrip("/")
+    if clean in [o.rstrip("/") for o in settings.cors_origins_list]:
+        return True
+    if re.match(r"^https://([a-zA-Z0-9_-]+\.)*(kova\.app|vercel\.app|rumptycloud\.app)$", clean):
+        return True
+    return False
+
+
+# CORS: restrict in production with regex, allow all in development
 if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
+        allow_origin_regex=r"https://.*(kova\.app|vercel\.app|rumptycloud\.app).*",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -134,17 +150,14 @@ def _cors_headers_for_request(request: Request) -> dict[str, str]:
     origin = request.headers.get("origin")
     if not origin:
         return {}
-    if settings.is_production:
-        if origin in settings.cors_origins_list:
-            return {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Credentials": "true",
-            }
-        return {}
-    return {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Credentials": "true",
-    }
+    if _is_allowed_origin(origin):
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        }
+    return {}
 
 
 from app.observability.redaction import redact
