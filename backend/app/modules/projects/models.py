@@ -49,3 +49,22 @@ class Project(Base):
     user = relationship("User", backref="projects")
     organization = relationship("Organization", back_populates="projects")
     members = relationship("ProjectMember", back_populates="project", cascade="all, delete-orphan")
+
+    @property
+    def logo_url(self) -> str | None:
+        """Returns the project's brand logo or favicon URL from env_config or base_url."""
+        if isinstance(self.env_config, dict):
+            val = self.env_config.get("logo_url") or self.env_config.get("favicon_url")
+            if val:
+                return val
+        if self.base_url:
+            import re
+            from urllib.parse import urlparse
+            try:
+                host = urlparse(self.base_url).hostname
+                if host:
+                    clean_host = re.sub(r"^www\d*\.", "", host.lower())
+                    return f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128"
+            except Exception:
+                pass
+        return None

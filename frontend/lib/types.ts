@@ -142,6 +142,8 @@ export interface EnvironmentConfig {
   baseUrlOverride?: string | null;
   allowedHosts?: string[] | null;
   blockedHosts?: string[] | null;
+  logoUrl?: string | null;
+  faviconUrl?: string | null;
 }
 
 export interface ExecutionLimits {
@@ -185,6 +187,7 @@ export interface Project {
   safetyRestrictions?: SafetyRestrictions;
   browserSettings?: BrowserSettings;
   testCredentialsRef?: string | null;
+  logoUrl?: string | null;
 }
 
 export interface ProjectSummary extends Project {

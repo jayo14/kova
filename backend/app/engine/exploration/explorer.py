@@ -191,6 +191,94 @@ class ExplorationEngine:
                 final_url=final_url,
             )
 
+    async def _extract_brand_metadata(self, page) -> dict[str, Any]:
+        """Extract brand assets (favicon, logo, og:image) from the loaded page."""
+        clean_host = re.sub(r"^www\d*\.", "", (urlparse(self.url).hostname or "").lower())
+        fallback_favicon = f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128" if clean_host else None
+        try:
+            data = await page.evaluate(
+                """() => {
+                    const results = {
+                        favicon_url: null,
+                        logo_url: null,
+                        og_image: null,
+                    };
+
+                    // 1. Favicon links in head
+                    const iconLinks = Array.from(document.querySelectorAll('link[rel*="icon" i], link[rel="apple-touch-icon" i]'));
+                    for (const link of iconLinks) {
+                        const href = link.getAttribute('href');
+                        if (!href) continue;
+                        try {
+                            const abs = new URL(href, document.baseURI).href;
+                            const rel = (link.getAttribute('rel') || '').toLowerCase();
+                            if (rel.includes('apple-touch-icon') || rel.includes('icon')) {
+                                results.favicon_url = abs;
+                                break;
+                            }
+                        } catch (_) {}
+                    }
+
+                    // 2. OpenGraph / Twitter meta image
+                    const ogMeta = document.querySelector('meta[property="og:image"], meta[name="twitter:image"], meta[name="og:image"]');
+                    if (ogMeta) {
+                        const content = ogMeta.getAttribute('content');
+                        if (content) {
+                            try {
+                                results.og_image = new URL(content, document.baseURI).href;
+                            } catch (_) {}
+                        }
+                    }
+
+                    // 3. Logo element in DOM (header, nav, brand, logo classes/ids)
+                    const logoCandidates = [
+                        'header img[alt*="logo" i]',
+                        'nav img[alt*="logo" i]',
+                        'header [class*="logo" i] img',
+                        'nav [class*="logo" i] img',
+                        'a[href="/"] img',
+                        '[data-testid*="logo" i] img',
+                        '[id*="logo" i] img',
+                        'img[src*="logo" i]',
+                        'img[alt*="logo" i]',
+                        'header img',
+                        'nav img',
+                    ];
+                    for (const sel of logoCandidates) {
+                        const el = document.querySelector(sel);
+                        if (el && el instanceof HTMLImageElement && el.src) {
+                            try {
+                                const rect = el.getBoundingClientRect();
+                                if (rect.width >= 16 && rect.height >= 16 && rect.width <= 600 && rect.height <= 300) {
+                                    results.logo_url = el.src;
+                                    break;
+                                }
+                            } catch (_) {}
+                        }
+                    }
+
+                    if (!results.logo_url) {
+                        results.logo_url = results.favicon_url || results.og_image;
+                    }
+
+                    return results;
+                }"""
+            )
+            logo = (data or {}).get("logo_url") or fallback_favicon
+            favicon = (data or {}).get("favicon_url") or fallback_favicon
+            return {
+                "logo_url": logo,
+                "favicon_url": favicon,
+                "og_image": (data or {}).get("og_image"),
+            }
+        except Exception as e:
+            logger.debug("Failed to extract brand metadata: %s", e)
+            return {
+                "logo_url": fallback_favicon,
+                "favicon_url": fallback_favicon,
+                "og_image": None,
+            }
+
     async def _capture_and_emit_screenshot(self, page, full_page: bool = False) -> dict | None:
         """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
         if not self._browser or not self._browser.is_started:
@@ -511,13 +599,18 @@ class ExplorationEngine:
                         "candidate_missions": [],
                     }
 
-                # Emit page.loaded with title and capture initial rendered screenshot
+                # Emit page.loaded with title, brand metadata, and capture initial rendered screenshot
                 page_title = await page.title()
+                brand_meta = await self._extract_brand_metadata(page)
+                self._brand_metadata = brand_meta
                 page_event = {
                     "url": current_url,
                     "title": page_title,
+                    **(brand_meta or {}),
                 }
                 await self._emit("page.loaded", page_event)
+                if brand_meta:
+                    await self._emit("brand.discovered", brand_meta)
 
                 # Capture and stream fully rendered initial snapshot immediately (standard viewport)
                 await self._capture_and_emit_screenshot(page, full_page=False)
@@ -722,6 +815,7 @@ class ExplorationEngine:
                 "discoveries": [d.model_dump() for d in discoveries],
                 "candidate_missions": [m.model_dump() for m in missions],
                 "discovery_result": discovery_result.model_dump(mode="json") if discovery_result else None,
+                "brand_metadata": getattr(self, "_brand_metadata", None),
             }
 
         finally:

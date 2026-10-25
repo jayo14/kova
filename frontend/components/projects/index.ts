@@ -1,5 +1,6 @@
 export { ProjectList } from "./project-list";
 export { ProjectRow } from "./project-row";
+export { ProductLogo } from "./product-logo";
 export { ProjectEmptyState } from "./project-empty-state";
 export {
   ProjectSkeleton,

@@ -6,6 +6,7 @@ import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { Project } from "@/lib/types";
 import { ProjectSettingsDialog } from "./project-settings";
+import { ProductLogo } from "./product-logo";
 import { cn } from "@/lib/utils";
 
 interface ProjectHeaderProps {
@@ -50,10 +51,12 @@ export function ProjectHeader({
       </nav>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-h1 text-foreground mb-1.5 truncate">
-            {currentProject.name}
-          </h1>
+        <div className="flex items-start gap-4 min-w-0">
+          <ProductLogo project={currentProject} size="lg" className="mt-0.5" />
+          <div className="min-w-0">
+            <h1 className="text-h1 text-foreground mb-1.5 truncate">
+              {currentProject.name}
+            </h1>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-body-sm text-muted-foreground">
             <a
               href={currentProject.baseUrl}
@@ -72,6 +75,7 @@ export function ProjectHeader({
             )}
           </div>
         </div>
+      </div>
 
         <div className="flex items-center gap-2 shrink-0">
           <Button

@@ -16,9 +16,16 @@ export interface BackendProject {
   safety_restrictions?: Record<string, unknown>;
   browser_settings?: Record<string, unknown>;
   test_credentials_ref?: string | null;
+  logo_url?: string | null;
 }
 
 export function toFrontendProject(raw: BackendProject): Project {
+  const logoUrl =
+    raw.logo_url ||
+    (raw.env_config?.logo_url as string | undefined) ||
+    (raw.env_config?.favicon_url as string | undefined) ||
+    null;
+
   return {
     id: raw.id,
     userId: raw.user_id,
@@ -33,6 +40,7 @@ export function toFrontendProject(raw: BackendProject): Project {
     safetyRestrictions: raw.safety_restrictions ? (mapKeysToCamel(raw.safety_restrictions) as unknown as SafetyRestrictions) : undefined,
     browserSettings: raw.browser_settings ? (mapKeysToCamel(raw.browser_settings) as unknown as BrowserSettings) : undefined,
     testCredentialsRef: raw.test_credentials_ref ?? null,
+    logoUrl,
   };
 }
 

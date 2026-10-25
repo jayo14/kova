@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { ProductLogo } from "./product-logo";
 import type { ProjectSummary } from "@/lib/types";
 
 interface ProjectRowProps {
@@ -44,22 +45,26 @@ export function ProjectRow({ project }: ProjectRowProps) {
       href={`/projects/${project.id}`}
       className="group flex items-center justify-between rounded-xl border border-border/80 bg-card px-4 py-3.5 transition-all duration-200 hover:border-muted-foreground/30 hover:bg-secondary/20 shadow-xs"
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <p className="text-body-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
-            {project.name}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 mt-0.5">
-          <p className="text-caption font-mono text-muted-foreground truncate">{displayUrl}</p>
-          {project.description && (
-            <>
-              <span className="text-caption text-muted-foreground/60">·</span>
-              <p className="text-caption text-muted-foreground truncate">
-                {project.description}
-              </p>
-            </>
-          )}
+      <div className="flex items-center gap-3.5 min-w-0 flex-1">
+        <ProductLogo project={project} size="md" />
+
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="text-body-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
+              {project.name}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-caption font-mono text-muted-foreground truncate">{displayUrl}</p>
+            {project.description && (
+              <>
+                <span className="text-caption text-muted-foreground/60">·</span>
+                <p className="text-caption text-muted-foreground truncate">
+                  {project.description}
+                </p>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
