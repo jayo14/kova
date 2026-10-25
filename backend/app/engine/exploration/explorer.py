@@ -103,6 +103,7 @@ class ExplorationEngine:
         self._last_route_map: list[dict] = []
         self._last_interactive_elements: list[dict] = []
         self._last_persona: str = "User"
+        self._discovered_sections: list[dict] = []
 
     def _spawn_bg(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -333,21 +334,64 @@ class ExplorationEngine:
             return None
 
     async def _stream_page_exploration(self, page) -> None:
-        """Stream real one-direction browser actions (scrolling, inspecting, section mapping) to the user viewport."""
+        """Stream real one-direction browser actions and extract semantic sections."""
         try:
-            # Measure document height vs viewport height
-            scroll_data = await page.evaluate(
+            # Measure document height vs viewport height and extract semantic sections
+            extracted_data = await page.evaluate(
                 """() => {
                     const docHeight = Math.max(
-                        document.body.scrollHeight || 0, document.documentElement.scrollHeight || 0,
-                        document.body.offsetHeight || 0, document.documentElement.offsetHeight || 0
+                        document.body ? (document.body.scrollHeight || 0) : 0,
+                        document.documentElement ? (document.documentElement.scrollHeight || 0) : 0,
+                        document.body ? (document.body.offsetHeight || 0) : 0,
+                        document.documentElement ? (document.documentElement.offsetHeight || 0) : 0
                     );
                     const viewHeight = window.innerHeight || 800;
-                    return { docHeight, viewHeight };
+
+                    const sectionNodes = Array.from(document.querySelectorAll(
+                        'header, nav, main, section, article, form, footer, [role="region"], [role="banner"], [role="main"]'
+                    ));
+                    const sections = [];
+                    const seenHeadings = new Set();
+
+                    for (const sec of sectionNodes) {
+                        const heading = sec.querySelector('h1, h2, h3, [role="heading"]');
+                        const headingText = heading ? (heading.innerText || heading.textContent || '').trim() : '';
+                        const ariaLabel = sec.getAttribute('aria-label') || sec.getAttribute('name') || '';
+                        const label = headingText || ariaLabel || sec.tagName.toLowerCase();
+                        if (label && !seenHeadings.has(label.toLowerCase()) && label.length >= 2 && label.length <= 80) {
+                            seenHeadings.add(label.toLowerCase());
+                            const interactiveCount = sec.querySelectorAll('a, button, input, select, textarea').length;
+                            sections.push({
+                                tag: sec.tagName.toLowerCase(),
+                                label: label,
+                                interactiveCount: interactiveCount,
+                            });
+                        }
+                    }
+
+                    const metaDescEl = document.querySelector('meta[name="description"]') || document.querySelector('meta[property="og:description"]');
+                    const metaDesc = metaDescEl ? (metaDescEl.getAttribute('content') || '') : '';
+                    const h1El = document.querySelector('h1');
+                    const h1 = h1El ? (h1El.innerText || h1El.textContent || '').trim() : '';
+
+                    return { docHeight, viewHeight, sections, metaDesc, h1 };
                 }"""
             )
-            doc_height = scroll_data.get("docHeight", 800)
-            view_height = scroll_data.get("viewHeight", 800)
+            doc_height = 800
+            view_height = 800
+            sections: list[dict] = []
+            if isinstance(extracted_data, dict):
+                doc_height = extracted_data.get("docHeight", 800)
+                view_height = extracted_data.get("viewHeight", 800)
+                sections = extracted_data.get("sections") or []
+                meta_desc = extracted_data.get("metaDesc", "")
+                h1 = extracted_data.get("h1", "")
+                self._discovered_sections = sections
+                if not self.goal and (h1 or meta_desc):
+                    inferred = h1 or meta_desc
+                    if len(inferred) > 80:
+                        inferred = inferred[:77] + "..."
+                    self.goal = f"Verify core journeys for: {inferred}"
 
             # 1. Smoothly scroll through sections covering the entire document height
             max_scroll = max(0, doc_height - view_height)
@@ -356,9 +400,10 @@ class ExplorationEngine:
                 steps = [int(max_scroll * (i / num_steps)) for i in range(1, num_steps + 1)]
 
                 for idx, scroll_pos in enumerate(steps, start=1):
+                    sec_name = sections[idx - 1]["label"] if (sections and idx <= len(sections)) else f"({idx}/{len(steps)})"
                     await self._emit("progress", {
                         "id": f"exp-stream-scroll-{idx}",
-                        "message": f"Exploring application sections ({idx}/{len(steps)})",
+                        "message": f"Exploring application section: {sec_name}" if (sections and idx <= len(sections)) else f"Exploring application sections ({idx}/{len(steps)})",
                         "status": "active",
                     })
                     await page.evaluate(f"window.scrollTo({{ top: {scroll_pos}, behavior: 'smooth' }})")
@@ -648,7 +693,6 @@ class ExplorationEngine:
 
                 if is_auth_required and not credential:
                     should_close_browser = False
-                    await self._emit("state_change", {"status": "AUTH_REQUIRED"})
                     hostname = urlparse(self.url).hostname or "application"
                     auth_reason = (
                         f"This product requires an account. Kova needs a test account "
@@ -662,18 +706,57 @@ class ExplorationEngine:
                     await self._emit("auth.required", {"request": credential_request})
                     await self._emit("progress", {
                         "id": "exp-auth",
-                        "message": "Found authentication barrier",
-                        "status": "completed",
+                        "message": "Found authentication barrier — mapping public areas",
+                        "status": "active",
                     })
 
-                    return {
-                        "status": ExplorationStatus.AUTH_REQUIRED,
-                        "credential_request": credential_request,
-                        "discoveries": [
-                            {"label": "Authentication", "description": "Sign in / registration required to access application workspace"}
-                        ],
-                        "candidate_missions": [],
+                    # Discover workflows on current public page and navigation
+                    discoveries, missions = await self._discover_workflows(page, observation, selected_role)
+
+                    # Ensure authentication finding is included
+                    auth_finding = {
+                        "label": "Authentication Barrier",
+                        "description": "Sign in / registration required to access application workspace",
+                        "category": "auth",
                     }
+                    has_auth_disc = any(
+                        (d.get("category") if isinstance(d, dict) else getattr(d, "category", "")) == "auth"
+                        for d in discoveries
+                    )
+                    if not has_auth_disc:
+                        from app.modules.exploration.schemas import DiscoveryItem
+                        discoveries.append(DiscoveryItem(**auth_finding))
+
+                    disc_payload = [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries]
+                    miss_payload = [m.model_dump() if hasattr(m, "model_dump") else m for m in missions]
+
+                    await self._emit("discovery", {"discoveries": disc_payload})
+                    await self._emit("missions", {"missions": miss_payload})
+
+                    # If public missions exist, mark READY so user can test them
+                    public_missions = [m for m in missions if getattr(m, "category", "") != "auth"]
+                    has_public_missions = len(public_missions) > 0
+
+                    if has_public_missions:
+                        await self._emit("state_change", {"status": "READY"})
+                        return {
+                            "status": ExplorationStatus.READY,
+                            "goal": self.goal,
+                            "selected_role": self._last_persona or selected_role or "Visitor",
+                            "credential_request": credential_request,
+                            "discoveries": disc_payload,
+                            "candidate_missions": miss_payload,
+                        }
+                    else:
+                        await self._emit("state_change", {"status": "AUTH_REQUIRED"})
+                        return {
+                            "status": ExplorationStatus.AUTH_REQUIRED,
+                            "goal": self.goal,
+                            "selected_role": self._last_persona or selected_role or "Visitor",
+                            "credential_request": credential_request,
+                            "discoveries": disc_payload,
+                            "candidate_missions": miss_payload,
+                        }
 
             # 4. Handle authentication if credentials provided
             if credential:
@@ -706,17 +789,86 @@ class ExplorationEngine:
                     should_close_browser = False
                     error_msg = auth_detail or "Authentication failed with provided credentials."
                     await self._emit("auth.failed", {"error": error_msg})
-                    await self._emit("state_change", {"status": "AUTH_REQUIRED"})
-                    return {
-                        "status": ExplorationStatus.AUTH_REQUIRED,
-                        "error_message": error_msg,
-                        "credential_request": CredentialRequest(
-                            type="login",
-                            reason=error_msg,
-                        ).model_dump(),
-                        "discoveries": [],
-                        "candidate_missions": [],
+                    logger.info("Auth did not succeed (%s) — continuing to discover accessible public workflows", error_msg)
+
+                    from app.engine.browser.auth import diagnose_auth_failure, AuthFailureCategory
+                    diag = await diagnose_auth_failure(page, is_signup=create_account, initial_url=page.url, credential=credential)
+
+                    req_type = "login"
+                    if create_account:
+                        if diag.category == AuthFailureCategory.EMAIL_VERIFICATION_REQUIRED:
+                            req_type = "email_verification"
+                        elif diag.category == AuthFailureCategory.CAPTCHA_REQUIRED:
+                            req_type = "captcha"
+                        elif diag.category == AuthFailureCategory.CUSTOM_FIELDS_REQUIRED:
+                            req_type = "custom_fields"
+                        else:
+                            req_type = "registration"
+
+                    cred_req = CredentialRequest(
+                        type=req_type,
+                        reason=error_msg,
+                    ).model_dump()
+
+                    # Re-observe page and navigate back to base/home if stuck on auth form to map public areas
+                    try:
+                        base_url_parsed = urlparse(self.url)
+                        home_url = f"{base_url_parsed.scheme or 'https'}://{base_url_parsed.netloc}"
+                        if home_url != page.url:
+                            await page.goto(home_url, wait_until="domcontentloaded", timeout=5000)
+                    except Exception as nav_e:
+                        logger.debug("Could not re-navigate to home: %s", nav_e)
+
+                    observation = await self._browser.observe()
+                    discoveries, missions = await self._discover_workflows(page, observation, selected_role)
+
+                    # Add the authentication finding to discoveries so findings are preserved
+                    auth_disc = {
+                        "label": "Account Registration Barrier" if create_account else "Authentication Barrier",
+                        "description": error_msg,
+                        "category": "auth",
                     }
+                    discoveries.append(DiscoveryItem(**auth_disc) if hasattr(discoveries[0] if discoveries else None, "model_dump") else auth_disc)
+
+                    public_missions = [m for m in missions if getattr(m, "category", "") != "auth"]
+                    has_public_missions = len(public_missions) > 0
+
+                    if has_public_missions:
+                        await self._emit("state_change", {"status": "READY"})
+                        await self._emit("missions", {
+                            "missions": [m.model_dump() for m in missions],
+                            "recommendation": f"Discovered {len(missions)} workflows. Authentication barrier noted ({error_msg}), but public journeys are ready to test.",
+                        })
+                        await self._emit("discovery", {
+                            "discoveries": [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries]
+                        })
+                        return {
+                            "status": ExplorationStatus.READY,
+                            "goal": self.goal,
+                            "selected_role": self._last_persona or selected_role or "Visitor",
+                            "error_message": error_msg,
+                            "credential_request": cred_req,
+                            "discoveries": [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries],
+                            "candidate_missions": [m.model_dump() for m in missions],
+                        }
+                    else:
+                        await self._emit("state_change", {"status": "AUTH_REQUIRED"})
+                        await self._emit("auth.required", {"request": cred_req})
+                        await self._emit("missions", {
+                            "missions": [m.model_dump() for m in missions],
+                        })
+                        await self._emit("discovery", {
+                            "discoveries": [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries]
+                        })
+                        return {
+                            "status": ExplorationStatus.AUTH_REQUIRED,
+                            "goal": self.goal,
+                            "selected_role": self._last_persona or selected_role or "Visitor",
+                            "error_message": error_msg,
+                            "credential_request": cred_req,
+                            "discoveries": [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries],
+                            "candidate_missions": [m.model_dump() for m in missions],
+                        }
 
                 await self._emit("authenticated", {})
                 await self._emit("progress", {
@@ -756,10 +908,21 @@ class ExplorationEngine:
                     ).model_dump()
 
                     await self._emit("question", {"question": question})
+                    role_discoveries = [
+                        {"label": r["label"], "description": r["description"]}
+                        for r in detected_roles
+                    ]
+                    if self._discovered_sections:
+                        role_discoveries.extend([
+                            {"label": s["label"], "description": f"[{s.get('tag', 'section').upper()}] {s['label']}"}
+                            for s in self._discovered_sections[:3]
+                        ])
                     return {
                         "status": ExplorationStatus.ASKING,
                         "question": question,
-                        "discoveries": [],
+                        "goal": self.goal,
+                        "selected_role": self._last_persona or selected_role,
+                        "discoveries": role_discoveries,
                         "candidate_missions": [],
                     }
 
@@ -812,6 +975,8 @@ class ExplorationEngine:
             should_close_browser = False
             return {
                 "status": ExplorationStatus.READY,
+                "goal": self.goal,
+                "selected_role": self._last_persona or selected_role or "Visitor",
                 "discoveries": [d.model_dump() for d in discoveries],
                 "candidate_missions": [m.model_dump() for m in missions],
                 "discovery_result": discovery_result.model_dump(mode="json") if discovery_result else None,
@@ -972,6 +1137,12 @@ class ExplorationEngine:
             "invalid email or password", "those credentials don't match",
             "credentials are incorrect", "account not found", "does not exist",
             "unauthorized", "forbidden",
+            "already registered", "already exists", "already taken", "in use",
+            "passwords do not match", "passwords must match", "password confirmation",
+            "password is too short", "password must be", "password requirements",
+            "this field is required", "is required", "please fill out",
+            "invalid phone", "phone number required", "must agree to terms",
+            "verification required", "verify your account", "robot", "captcha",
         ]
         try:
             for sel in error_selectors:
@@ -1422,9 +1593,31 @@ class ExplorationEngine:
                 is_still_password = False
 
             if stayed_on_auth and is_still_password:
-                logger.info("Auth failed — still on auth page with password field visible after %.1fs", max_wait_seconds)
-                fail_msg = "Account creation failed. The registration form may require additional verification or custom fields." if is_signup else "Login failed. The credentials may be incorrect or the page requires additional input."
-                return False, fail_msg
+                logger.info("Auth did not redirect — running evidence-based diagnostics (elapsed: %.1fs)", max_wait_seconds)
+                from app.engine.browser.auth import (
+                    diagnose_auth_failure,
+                    attempt_registration_recovery,
+                    AuthFailureCategory,
+                )
+                diagnosis = await diagnose_auth_failure(
+                    page,
+                    is_signup=is_signup,
+                    initial_url=page.url,
+                    credential=credential,
+                )
+                if diagnosis.category == AuthFailureCategory.ACCOUNT_ALREADY_CREATED:
+                    return True, diagnosis.detail
+
+                if is_signup and diagnosis.can_retry_autonomously:
+                    logger.info("Attempting autonomous registration recovery: %s", diagnosis.detail)
+                    recovered, rec_detail = await attempt_registration_recovery(page, diagnosis, credential)
+                    if recovered:
+                        return True, rec_detail
+                    diagnosis = await diagnose_auth_failure(
+                        page, is_signup=is_signup, initial_url=page.url, credential=credential
+                    )
+
+                return False, diagnosis.detail
 
             return True, ""
 
@@ -2471,6 +2664,19 @@ class ExplorationEngine:
                         description=f"Control: {el.get('type', 'element')} — candidate journey entry",
                     )
                 )
+
+        # Include mapped semantic sections in discovered areas
+        if self._discovered_sections:
+            for sec in self._discovered_sections:
+                sec_label = sec.get("label", "").strip()
+                if sec_label and not any(d.label.lower() == sec_label.lower() for d in discovered_areas):
+                    discovered_areas.append(
+                        DiscoveryItem(
+                            label=sec_label,
+                            description=f"[{sec.get('tag', 'section').upper()}] {sec_label} ({sec.get('interactiveCount', 0)} interactive controls)",
+                            category="feature" if sec.get('tag') in ('form', 'main', 'section') else "navigation",
+                        )
+                    )
 
         # Phase 3: Generate intelligent user journeys (AI-synthesized feature journeys first)
         mission_count = 0
