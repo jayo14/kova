@@ -27,6 +27,7 @@ from app.modules.exploration.schemas import (
     DiscoveredMission,
     DiscoveryItem,
 )
+from app.modules.exploration.journey_validator import deduplicate_and_rank_journeys
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
 
@@ -2582,6 +2583,9 @@ class ExplorationEngine:
                 } for el in interactive_elements[:3])
             unique.append(mission)
 
+        # Run journey quality validation, repair, deduplication, and explainable ranking
+        unique = deduplicate_and_rank_journeys(unique, goal=self.goal)
+
         return discovered_areas, unique
 
     async def _synthesize_fallback_missions(
@@ -2685,7 +2689,7 @@ class ExplorationEngine:
                     description=f"Navigate primary interface sections and interactive elements on {title_clean}.",
                     objective=f"Confirm that primary application views, navigation headers, and feature sections render correctly",
                     persona=persona,
-                    category="feature",
+                    category="navigation",
                     journey=[
                         f"Open {title_clean}",
                         "Explore primary navigation and core feature sections",
@@ -2699,6 +2703,10 @@ class ExplorationEngine:
                     confidence=0.85,
                     recommended=True,
                     estimated_time_seconds=15,
+                    user_goal="Navigate primary application sections",
+                    expected_outcome="Main application interface and interactive controls render",
+                    classification="navigation",
+                    is_core=False,
                 )
             )
             missions.append(
@@ -2709,7 +2717,7 @@ class ExplorationEngine:
                     description=f"Verify visual integrity, responsive layout, and interactive affordances on {title_clean}.",
                     objective="Ensure full page loads without client runtime errors or broken layout containers",
                     persona=persona,
-                    category="workflow",
+                    category="navigation",
                     journey=[
                         f"Open {title_clean}",
                         "Scroll through full page layout to inspect content flow",
@@ -2723,6 +2731,10 @@ class ExplorationEngine:
                     confidence=0.80,
                     recommended=False,
                     estimated_time_seconds=12,
+                    user_goal="Inspect application layout structure",
+                    expected_outcome="Application containers render without client errors",
+                    classification="navigation",
+                    is_core=False,
                 )
             )
 
@@ -3215,6 +3227,10 @@ class ExplorationEngine:
             recommended=False,
             route_analysis=auth_route,
             estimated_time_seconds=20,
+            user_goal=f"Authenticate user session via {path}",
+            expected_outcome="Session is authenticated and user accesses destination view",
+            classification="auth",
+            is_core=False,
         )
 
     async def _build_chained_auth_mission(
@@ -3354,6 +3370,10 @@ class ExplorationEngine:
             recommended=False,
             route_analysis={"signup": signup_route, "login": login_route},
             estimated_time_seconds=30,
+            user_goal="Sign up and log in to application",
+            expected_outcome="User registers, signs in, and reaches authenticated account page",
+            classification="auth",
+            is_core=False,
         )
 
     def _build_standalone_form_mission(
@@ -3411,6 +3431,10 @@ class ExplorationEngine:
             recommended=False,
             route_analysis=form_route,
             estimated_time_seconds=15,
+            user_goal=f"Submit {form_name.lower()} form",
+            expected_outcome="Form submits successfully and renders confirmation feedback",
+            classification="functional",
+            is_core=False,
         )
 
     def _build_feature_mission(
@@ -3438,21 +3462,52 @@ class ExplorationEngine:
             recommended = False
 
         path_lower = path.lower()
-        if any(k in path_lower for k in ["quiz", "exam", "test"]):
+        is_functional = False
+        is_core = False
+        user_goal = None
+        expected_outcome = None
+        if any(k in path_lower for k in ["quiz", "exam", "test", "defence", "defense", "practice", "simulation"]):
             mission_title = f"Practice and review {feature_name}"
-            objective = f"Verify that {persona} can access {feature_name} and interact with quiz workflows"
+            objective = f"Verify that {persona} can access {feature_name} and interact with simulation and testing workflows"
+            user_goal = f"Conduct interactive simulation and evaluation for {feature_name}"
+            expected_outcome = f"Simulation interface for {feature_name} renders with interactive evaluation controls and feedback"
+            is_functional = True
+            is_core = True
+        elif any(k in path_lower for k in ["report", "logbook", "siwes"]):
+            mission_title = f"Generate and review {feature_name}"
+            objective = f"Verify that {persona} can access {feature_name} to generate and review reports"
+            user_goal = f"Generate technical reports from logbook entries via {feature_name}"
+            expected_outcome = f"Report interface renders with content generation controls and document preview"
+            is_functional = True
+            is_core = True
         elif any(k in path_lower for k in ["study", "flashcard", "deck", "material", "course"]):
             mission_title = f"Explore {feature_name} study resources"
             objective = f"Verify that {persona} can view and study {feature_name}"
-        elif any(k in path_lower for k in ["dashboard", "workspace", "portal", "console", "analytics"]):
-            mission_title = f"Review {feature_name} overview and activity"
-            objective = f"Confirm {feature_name} renders key metrics and interactive workflows"
+            user_goal = f"Access educational material for {feature_name}"
+            expected_outcome = f"Study content entries and material cards render"
+            is_functional = True
+            is_core = True
         elif any(k in path_lower for k in ["create", "generate", "generator", "new"]):
             mission_title = f"Create new {feature_name}"
             objective = f"Verify that {persona} can access the {feature_name} creation workflow"
+            user_goal = f"Create new {feature_name} entity"
+            expected_outcome = f"Creation form renders with validation and submission controls"
+            is_functional = True
+            is_core = True
+        elif any(k in path_lower for k in ["dashboard", "workspace", "portal", "console", "analytics"]):
+            mission_title = f"Review {feature_name} overview and activity"
+            objective = f"Confirm {feature_name} renders key metrics and interactive workflows"
+            user_goal = f"Review platform dashboard activity"
+            expected_outcome = f"Dashboard widgets and summary analytics render"
+            is_functional = False
+            is_core = False
         else:
             mission_title = f"Explore {feature_name}"
             objective = f"Reach the {feature_name} page and confirm it renders interactive content"
+            user_goal = f"Navigate to {feature_name}"
+            expected_outcome = f"{feature_name} destination page loads"
+            is_functional = False
+            is_core = False
 
         if route.get("is_button") and route.get("selector"):
             steps = [
@@ -3505,6 +3560,10 @@ class ExplorationEngine:
             recommended=recommended,
             route_analysis=route,
             estimated_time_seconds=12,
+            user_goal=user_goal,
+            expected_outcome=expected_outcome,
+            classification="functional" if is_functional else "navigation",
+            is_core=is_core,
         )
 
     def _build_content_mission(
@@ -3555,6 +3614,10 @@ class ExplorationEngine:
             recommended=recommended,
             route_analysis=route,
             estimated_time_seconds=12,
+            user_goal=f"Browse {content_name} catalog",
+            expected_outcome=f"Directory of {content_name} entries renders with links",
+            classification="navigation",
+            is_core=False,
         )
 
     def _build_element_mission(
@@ -3600,6 +3663,10 @@ class ExplorationEngine:
             confidence=journey_data["confidence"],
             recommended=recommended,
             estimated_time_seconds=journey_data["estimated_time"],
+            user_goal=journey_data.get("user_goal"),
+            expected_outcome=journey_data.get("expected_outcome"),
+            classification=journey_data.get("classification", "functional"),
+            is_core=journey_data.get("is_core", False),
         )
 
     def _classify_intent(self, element_name: str) -> str:
@@ -3616,6 +3683,14 @@ class ExplorationEngine:
             return "login"
         if any(kw in lower for kw in ["logout", "sign out", "log out"]):
             return "logout"
+
+        # Core functional capabilities (report generation, mock defence/simulations)
+        if any(kw in lower for kw in ["mock defence", "mock defense", "defence", "defense", "practice", "simulation", "quiz", "exam", "assessment"]):
+            return "practice_simulation"
+        if any(kw in lower for kw in ["create your report", "generate report", "create report", "draft report", "new report", "build report", "logbook", "siwes"]):
+            return "generate_report"
+        if "report" in lower and not any(kw in lower for kw in ["bug", "issue", "abuse", "violation", "contact", "feedback"]):
+            return "generate_report"
 
         # Search / Discovery intents
         if any(kw in lower for kw in ["search", "find", "lookup", "discover"]):
@@ -3646,7 +3721,7 @@ class ExplorationEngine:
             return "view_profile"
         if any(kw in lower for kw in ["help", "support", "docs", "documentation", "faq"]):
             return "get_help"
-        if any(kw in lower for kw in ["contact", "feedback", "report"]):
+        if any(kw in lower for kw in ["contact", "feedback", "bug report", "report bug", "report issue", "report abuse"]):
             return "contact"
 
         # Default: treat as a feature to explore
@@ -3665,6 +3740,158 @@ class ExplorationEngine:
         """
 
         app_name = title or "the application"
+
+        if intent == "generate_report":
+            textarea_selector = "textarea, div[contenteditable='true'], input[name*='content' i], input[name*='log' i], input[placeholder*='log' i], input[placeholder*='report' i], textarea[placeholder*='entry' i]"
+            submit_btn = "button[type='submit'], button:has-text('Generate'), button:has-text('Create'), button:has-text('Submit'), button:has-text('Build Report'), button:has-text('Save')"
+            return {
+                "name": f"Generate {el_name or 'Report'}",
+                "description": (
+                    f"Navigate to {el_name or 'report generation'}, enter logbook activity data, "
+                    f"submit report synthesis, and verify the resulting technical report document renders."
+                ),
+                "objective": f"Verify that {persona} can generate a technical report with concrete document output",
+                "category": "workflow",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Open report generation interface via '{el_name}'",
+                    "Input logbook weekly activity and technical entries",
+                    "Submit and trigger report generation",
+                    "Verify the generated report document and sections render in the document viewer",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "type", "target": textarea_selector, "value": "Completed week 1-4 engineering documentation, circuit design analysis, and firmware debugging."},
+                    {"type": "click", "target": submit_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[data-testid*='report' i], .report-content, .report-viewer, article, [role='document'], h1, h2",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.85,
+                "estimated_time": 25,
+                "user_goal": "Generate technical report from logbook entries",
+                "expected_outcome": "Application processes entries and renders generated technical report document",
+                "classification": "functional",
+                "is_core": True,
+            }
+
+        if intent == "practice_simulation":
+            start_btn = "button:has-text('Start'), button:has-text('Begin'), button:has-text('Practice'), button:has-text('Mock'), button[type='submit']"
+            answer_input = "textarea, input[type='text'], [role='textbox']"
+            submit_answer_btn = "button:has-text('Submit'), button:has-text('Next'), button:has-text('Finish'), button[type='submit']"
+            return {
+                "name": f"Practice {el_name or 'Mock Defence'}",
+                "description": (
+                    f"Launch {el_name or 'mock defence simulation'}, answer question prompts, "
+                    f"and verify defence evaluation feedback and assessment metrics render."
+                ),
+                "objective": f"Verify that {persona} can complete a mock defence simulation and receive evaluation feedback",
+                "category": "workflow",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Launch simulation interface via '{el_name}'",
+                    "Start mock defence session and view question prompt",
+                    "Submit technical answer and defence response",
+                    "Verify evaluation feedback, scoring, or defence tips are rendered",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "click", "target": start_btn},
+                    {"type": "type", "target": answer_input, "value": "The system utilizes event-driven architecture with deterministic verifiers to ensure outcome reliability."},
+                    {"type": "click", "target": submit_answer_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[data-testid*='feedback' i], [data-testid*='score' i], .evaluation, .feedback, .score, [role='region'], article",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.85,
+                "estimated_time": 30,
+                "user_goal": "Conduct mock defence practice and receive automated evaluation",
+                "expected_outcome": "Simulation completes and renders detailed evaluation feedback and scoring metrics",
+                "classification": "functional",
+                "is_core": True,
+            }
+
+        if intent == "create_content":
+            input_sel = "input[type='text'], input[name*='title' i], textarea, [role='textbox']"
+            submit_btn = "button[type='submit'], button:has-text('Create'), button:has-text('Save'), button:has-text('Add')"
+            return {
+                "name": f"Create new {el_name.lower().replace('create', '').replace('new', '').strip() or 'item'}",
+                "description": f"Use '{el_name}' to open the creation form, enter content, and save the new record.",
+                "objective": f"Verify that {persona} can create and persist a new record",
+                "category": "crud",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Open creation flow via '{el_name}'",
+                    "Fill in required fields",
+                    "Submit new record",
+                    "Verify the new record appears in the list or detail view",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "type", "target": input_sel, "value": "New Test Item"},
+                    {"type": "click", "target": submit_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[role='status'], .alert-success, table, article, [data-testid*='item' i]",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.75,
+                "estimated_time": 20,
+                "user_goal": f"Create and save new item via {el_name}",
+                "expected_outcome": "New record is created and appears in list or confirmation view",
+                "classification": "functional",
+                "is_core": True,
+            }
+
+        if intent == "contact":
+            name_input = "input[name*='name' i], input[placeholder*='name' i], input[type='text']"
+            email_input = "input[name*='email' i], input[type='email']"
+            msg_input = "textarea, input[name*='message' i]"
+            submit_btn = "button[type='submit'], button:has-text('Send'), button:has-text('Submit')"
+            return {
+                "name": f"Submit {el_name or 'Feedback'}",
+                "description": f"Open {el_name}, enter inquiry details, and submit message.",
+                "objective": f"Verify that {persona} can submit an inquiry or message",
+                "category": "form",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Open '{el_name}' form",
+                    "Enter contact details and message",
+                    "Submit inquiry",
+                    "Verify submission confirmation feedback",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "type", "target": name_input, "value": "Kova Tester"},
+                    {"type": "type", "target": email_input, "value": "test@example.com"},
+                    {"type": "type", "target": msg_input, "value": "Validation check from automated test suite."},
+                    {"type": "click", "target": submit_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[role='status'], .success, .alert, p:has-text('Thank'), p:has-text('received')",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.75,
+                "estimated_time": 20,
+                "user_goal": "Submit inquiry or feedback form",
+                "expected_outcome": "Form submits and renders confirmation notification",
+                "classification": "functional",
+                "is_core": False,
+            }
 
         if intent == "create_account":
             if not credential_id:
@@ -3685,6 +3912,10 @@ class ExplorationEngine:
                     "success_condition": None,
                     "confidence": 0.4,
                     "estimated_time": 25,
+                    "user_goal": "Register new user account",
+                    "expected_outcome": "User account is registered and authenticated session is established",
+                    "classification": "auth",
+                    "is_core": False,
                 }
             email_selector = "input[type='email'], input[name='email'], input[name='username']"
             password_selector = "input[type='password'], input[name='password']"
@@ -3714,6 +3945,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.7,
                 "estimated_time": 25,
+                "user_goal": "Register new user account",
+                "expected_outcome": "User account is registered and authenticated session is established",
+                "classification": "auth",
+                "is_core": False,
             }
 
         if intent == "search":
@@ -3755,6 +3990,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.7,
                 "estimated_time": 20,
+                "user_goal": "Search catalog for matching items",
+                "expected_outcome": "Application returns search result listings matching the query",
+                "classification": "functional",
+                "is_core": True,
             }
 
         if intent == "browse":
@@ -3782,6 +4021,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.65,
                 "estimated_time": 15,
+                "user_goal": f"Browse {el_name} collection",
+                "expected_outcome": f"Collection catalog renders with clickable entries and details",
+                "classification": "navigation",
+                "is_core": False,
             }
 
         if intent == "view_content":
@@ -3810,6 +4053,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.6,
                 "estimated_time": 15,
+                "user_goal": f"View {el_name} details",
+                "expected_outcome": f"Content view for {el_name} renders with full article text and heading",
+                "classification": "navigation",
+                "is_core": False,
             }
 
         if intent == "login":
@@ -3832,6 +4079,10 @@ class ExplorationEngine:
                     "success_condition": None,
                     "confidence": 0.4,
                     "estimated_time": 20,
+                    "user_goal": "Authenticate existing user",
+                    "expected_outcome": "User is authenticated and redirected to application dashboard",
+                    "classification": "auth",
+                    "is_core": False,
                 }
             email_selector = "input[type='email'], input[name='email'], input[name='username']"
             password_selector = "input[type='password'], input[name='password']"
@@ -3861,6 +4112,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.7,
                 "estimated_time": 20,
+                "user_goal": "Authenticate existing user",
+                "expected_outcome": "User is authenticated and redirected to application dashboard",
+                "classification": "auth",
+                "is_core": False,
             }
 
         if intent == "navigate_dashboard":
@@ -3888,6 +4143,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.65,
                 "estimated_time": 12,
+                "user_goal": f"Access {el_name}",
+                "expected_outcome": f"{el_name} view loads with dashboard widgets",
+                "classification": "navigation",
+                "is_core": False,
             }
 
         if intent == "purchase":
@@ -3915,6 +4174,10 @@ class ExplorationEngine:
                 },
                 "confidence": 0.5,
                 "estimated_time": 15,
+                "user_goal": f"Access purchase options via {el_name}",
+                "expected_outcome": "Purchase and pricing interface displays tiers and options",
+                "classification": "functional",
+                "is_core": False,
             }
 
         if intent == "get_help":
@@ -3942,21 +4205,25 @@ class ExplorationEngine:
                 },
                 "confidence": 0.6,
                 "estimated_time": 12,
+                "user_goal": f"Access {el_name} documentation",
+                "expected_outcome": f"Help center or documentation pages load with reference guides",
+                "classification": "navigation",
+                "is_core": False,
             }
 
         # Default: bounded navigation check with honest description.
         return {
             "name": f"Open {el_name}",
             "description": (
-                f"Use the '{el_name}' control and verify the application visibly "
-                f"responds (page state changes)."
+                f"Use the '{el_name}' control and verify the destination "
+                f"page or modal responds with content."
             ),
             "objective": f"Verify that {persona} can use '{el_name}' and the app responds",
             "category": "feature",
             "journey": [
                 f"Open {app_name}",
                 f"Use '{el_name}'",
-                "Verify the application state changes in response",
+                "Verify the destination interface renders with content",
             ],
             "steps": [
                 {"type": "navigate", "url": base_url},
@@ -3965,9 +4232,14 @@ class ExplorationEngine:
             ],
             "success_condition": {
                 "url_changed_to": {"from": base_url},
+                "element_count": {"selector": "a[href], button, h1, h2, h3", "min": 1},
             },
             "confidence": 0.55,
             "estimated_time": 10,
+            "user_goal": f"Navigate to {el_name}",
+            "expected_outcome": f"Destination view for {el_name} loads with content",
+            "classification": "navigation",
+            "is_core": False,
         }
 
     def _generate_recommendation(self, missions: list[DiscoveredMission]) -> str:
@@ -3979,6 +4251,8 @@ class ExplorationEngine:
         recommended_missions = [m for m in missions if m.recommended]
         if recommended_missions:
             rec = recommended_missions[0]
+            if getattr(rec, "ranking_rationale", None):
+                return rec.ranking_rationale
             feature_name = rec.title or rec.name
             return (
                 f"I discovered {len(missions)} journeys and recommend '{feature_name}' "
