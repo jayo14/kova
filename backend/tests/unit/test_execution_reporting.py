@@ -39,6 +39,26 @@ def test_diagnoses_new_failure_codes_with_actionable_next_steps():
     assert quota_diag["next_step"]
 
 
+def test_classifies_ai_provider_failures_separately_from_flow_configuration():
+    assert classify_failure("AI_PROVIDER_MISCONFIGURED") == "ai_provider_misconfigured"
+    assert classify_failure("AI_PLANNING_FAILED") == "ai_planning"
+
+    misconfig = diagnose_failure("AI_PROVIDER_MISCONFIGURED", "invalid api key for gemini")
+    assert misconfig["category"] == "ai_provider_misconfigured"
+    assert "provider key" in misconfig["next_step"].lower()
+
+    planning = diagnose_failure("AI_PLANNING_FAILED", "planner returned nothing")
+    assert planning["category"] == "ai_planning"
+    assert planning["next_step"]
+
+
+def test_flow_configuration_advice_is_provider_agnostic():
+    flow_diag = diagnose_failure("FLOW_NOT_RUNNABLE", "no steps")
+    assert "any AI provider" in flow_diag["next_step"]
+    assert "GEMINI_API_KEY" in flow_diag["next_step"]
+    assert "AGENT_EXECUTION_ENABLED" in flow_diag["next_step"]
+
+
 def test_redacts_common_secrets_from_diagnostic_text():
     assert sanitize_text("password=hunter2 Bearer eyJtoken") == "password=[REDACTED] Bearer [REDACTED]"
     assert sanitize_payload({"nested": [{"access_key": "abc", "message": "token=xyz"}]}) == {
