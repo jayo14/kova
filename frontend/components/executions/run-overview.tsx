@@ -14,6 +14,7 @@ import { getExecution, getExecutionEvents } from "@/lib/api/executions";
 import { mapExecutionEvents } from "@/lib/executions/event-mapper";
 import { ExecutionDetailPage } from "./execution-detail-page";
 import { RunHeader } from "./run-header";
+import { RunSummaryStats } from "./run-summary-stats";
 import type { ExecutionDetail, ActivityItem, ExecutionEvent } from "@/lib/types";
 
 interface RunOverviewProps {
@@ -174,8 +175,6 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
     );
   }
 
-  const isRunning = run.status === "RUNNING";
-
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Top Navigation & Status Bar */}
@@ -187,51 +186,11 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
           onCancel={handleCancelRun}
         />
 
-        {/* Progress Bar & Counters */}
-        <div className="space-y-2 pt-2 border-t border-border/40">
-          <div className="flex items-center justify-between text-xs text-muted-foreground font-medium">
-            <span>Overall Progress ({run.progress}%)</span>
-            <span>
-              {run.summary.passed + run.summary.failed + run.summary.blocked} of {run.summary.total} completed
-            </span>
-          </div>
-          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-            <div
-              className={`h-full transition-all duration-500 rounded-full ${
-                run.status === "FAILED"
-                  ? "bg-destructive"
-                  : run.status === "PASSED"
-                  ? "bg-emerald-500"
-                  : "bg-primary"
-              }`}
-              style={{ width: `${Math.min(100, Math.max(run.progress, isRunning ? 5 : 0))}%` }}
-            />
-          </div>
-
-          {/* Metric Badges */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2">
-            <div className="p-2.5 rounded-lg bg-background/50 border border-border/40 text-center">
-              <span className="block text-xs text-muted-foreground">Total Missions</span>
-              <span className="text-base font-semibold text-foreground">{run.summary.total}</span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-blue-500/5 border border-blue-500/20 text-center">
-              <span className="block text-xs text-blue-600">Running</span>
-              <span className="text-base font-semibold text-blue-700">{run.summary.running}</span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/20 text-center">
-              <span className="block text-xs text-emerald-600">Passed</span>
-              <span className="text-base font-semibold text-emerald-700">{run.summary.passed}</span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-destructive/5 border border-destructive/20 text-center">
-              <span className="block text-xs text-destructive">Failed</span>
-              <span className="text-base font-semibold text-destructive">{run.summary.failed}</span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-background/50 border border-border/40 text-center">
-              <span className="block text-xs text-muted-foreground">Queued</span>
-              <span className="text-base font-semibold text-muted-foreground">{run.summary.queued}</span>
-            </div>
-          </div>
-        </div>
+        <RunSummaryStats
+          summary={run.summary}
+          progress={run.progress}
+          status={run.status}
+        />
       </div>
 
       {/* Main Two-Column View: Mission Selector + Active Journey Stream */}
