@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.credentials.repository import CredentialRepository
-from app.modules.credentials.schemas import CredentialCreate
+from app.modules.credentials.schemas import CredentialCreate, CredentialUpdate
 
 
 class CredentialService:

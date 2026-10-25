@@ -8,13 +8,18 @@ Always transitions to terminal state on exit.
 """
 
 import asyncio
+import json
 import logging
+import os
 import re
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 from urllib.parse import urlparse
+
+from app.engine.browser.evidence_storage import evidence_storage
+from app.engine.browser.screenshot_storage import screenshot_storage
 
 ALLOWED_NAMED_KEYS = {
     "Backspace",
