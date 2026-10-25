@@ -87,6 +87,12 @@ def classify_failure(error_code: str | None, status: str | None = None) -> str |
         return "destructive_action_blocked"
     if code in {"INJECTION_ATTEMPT_DETECTED", "PROMPT_INJECTION_DETECTED"}:
         return "prompt_injection_detected"
+    if code in {"CLIENT_VALIDATION_ERROR", "VALIDATION_FAILED"}:
+        return "client_validation_error"
+    if code in {"PAGE_ALERT", "SERVER_ERROR", "SERVER_REJECTION"}:
+        return "server_rejection"
+    if code in {"AUTH_BARRIER", "AUTH_REQUIRED", "EMAIL_VERIFICATION_REQUIRED", "CAPTCHA_REQUIRED"}:
+        return "authentication_barrier"
     if code in {"AUTH_BLOCKED", "AUTHENTICATION_FAILED", "CREDENTIALS_MISSING", "FORBIDDEN"}:
         return "authentication_or_authorization"
     if code in {"PREREQUISITE_UNSATISFIED", "PRECONDITION_FAILED"}:
@@ -124,6 +130,9 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
     advice = {
         "destructive_action_blocked": "To permit this action, add it to the project's safety_restrictions.destructive_action_allowlist.",
         "prompt_injection_detected": "Review untrusted page content and sanitize inputs to prevent prompt injection attempts.",
+        "client_validation_error": "The application rejected form inputs with client-side validation errors. Review required fields and constraints.",
+        "server_rejection": "The application server responded with an error banner or rejected the submission. Inspect network logs and console output.",
+        "authentication_barrier": "The requested journey requires authentication or additional account verification before it can proceed.",
         "authentication_or_authorization": "Confirm that the configured test account is valid and has the required role.",
         "missing_prerequisite": "Review the flow prerequisites and confirm required application state is available.",
         "element_resolution": "Check whether the expected component rendered and whether its selector still matches uniquely.",

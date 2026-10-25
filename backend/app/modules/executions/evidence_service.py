@@ -53,20 +53,25 @@ class EvidenceService:
             raise ValueError(f"Invalid evidence purpose '{purpose}'. Must be one of {valid_purposes}")
 
         resolved_purpose = purpose or "step_evidence"
+        safe_metadata = sanitize_payload(metadata or {})
+        safe_network_log = sanitize_payload(network_log) if network_log is not None else None
+        safe_description = sanitize_text(description) if description is not None else None
+        safe_title = sanitize_text(title)
+
         return await self.repo.create(
             execution_id=execution_id,
             type=type,
-            title=title,
+            title=safe_title,
             purpose=resolved_purpose,
             step_id=step_id,
-            description=description,
+            description=safe_description,
             status=status,
             storage_key=storage_key,
             mime_type=mime_type,
-            metadata=metadata or {},
+            metadata=safe_metadata if isinstance(safe_metadata, dict) else {},
             dom_snapshot=dom_snapshot,
             a11y_tree=a11y_tree,
-            network_log=network_log,
+            network_log=safe_network_log,
             video_url=video_url,
             trace_url=trace_url,
             element_locator=element_locator,
