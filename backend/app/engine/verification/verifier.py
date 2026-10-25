@@ -354,10 +354,25 @@ class VerificationResult:
     checks: list[VerificationCheck]
     evidence_ids: list[str] = field(default_factory=list)
     screenshot_bytes: bytes | None = None
+    outcome: str | None = None
+
+    def __post_init__(self):
+        if self.outcome is None:
+            if not self.checks:
+                self.outcome = "UNVERIFIED"
+            elif any(c.type in ("unknown_condition", "empty_condition", "malformed_condition") for c in self.checks):
+                self.outcome = "UNVERIFIED"
+            elif any(c.type == "auth_barrier" or "auth required" in (c.message or "").lower() for c in self.checks):
+                self.outcome = "BLOCKED"
+            elif self.passed:
+                self.outcome = "PASSED"
+            else:
+                self.outcome = "FAILED"
 
     def to_dict(self) -> dict:
         return {
             "passed": self.passed,
+            "outcome": self.outcome,
             "checks": [c.to_dict() if hasattr(c, "to_dict") else c for c in self.checks],
             "evidence_ids": self.evidence_ids,
         }
@@ -490,6 +505,18 @@ class Verifier:
                 checks.append(check)
 
         if "page_loaded" in condition:
+            if len(condition) == 1:
+                return VerificationResult(
+                    passed=False,
+                    outcome="UNVERIFIED",
+                    checks=[VerificationCheck(
+                        type="page_loaded",
+                        passed=False,
+                        expected="observable user outcome check",
+                        actual=self.page.url if hasattr(self.page, "url") else "loaded",
+                        message="Page loading alone cannot prove mission outcome — specific state assertion required",
+                    )],
+                )
             check = await self._check_page_loaded()
             checks.append(check)
 

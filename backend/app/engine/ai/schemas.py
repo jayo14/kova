@@ -222,6 +222,8 @@ class AIGeneratedJourney(BaseModel):
         default_factory=dict,
         description="Verification condition (text_visible, element_visible, url_changed_to, etc.)",
     )
+    expected_outcome: str = Field(default="", description="Measurable state assertion proving the journey succeeded")
+    outcome: str | None = Field(default=None, description="Execution outcome: PASSED, FAILED, BLOCKED, UNVERIFIED")
     confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     recommended: bool = Field(default=False, description="True for the primary core product workflow")
     estimated_time_seconds: int = Field(default=25, ge=5, le=120)
