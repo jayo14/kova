@@ -511,6 +511,21 @@ class AgentExecutor:
             self.recent_failure_detail = detail
             return None
 
+        has_error, error_text, error_type = await self._inspect_post_action_evidence(browser.page, proposal)
+        if has_error:
+            self._set_recent_failure(f"Action {proposal.action} surfaced error: {error_text}")
+            self._set_recent_failure_tag("CLIENT_VALIDATION_ERROR" if error_type == "validation" else "PAGE_ALERT")
+            memory.record_action(
+                turn, proposal.action, proposal.reason, proposal.reason,
+                "error_surfaced", error_text, browser.page.url,
+            )
+            await self._emit(EventTypes.RECOVERY_PROPOSED, {
+                "turn": turn,
+                "error_code": "CLIENT_VALIDATION_ERROR" if error_type == "validation" else "PAGE_ALERT",
+                "detail": error_text,
+            })
+            return None
+
         memory.record_action(
             turn, proposal.action, proposal.reason, proposal.reason,
             "success", "", browser.page.url,
@@ -546,6 +561,38 @@ class AgentExecutor:
         return None
 
     recent_failure_detail: str = ""
+    failure_tag: str = ""
+
+    async def _inspect_post_action_evidence(self, page: Any, proposal: ActionProposal) -> tuple[bool, str, str | None]:
+        """Inspect page for immediate visible validation errors or alert banners after an action."""
+        if not page or proposal.action not in ("click", "press", "submit"):
+            return False, "", None
+        try:
+            error_data = await page.evaluate(
+                """() => {
+                    const alertEl = document.querySelector(
+                        '[role="alert"], .alert-danger, .error-message, .form-error, .invalid-feedback, .text-danger'
+                    );
+                    if (alertEl) {
+                        const txt = (alertEl.innerText || alertEl.textContent || '').trim();
+                        if (txt.length >= 3 && txt.length <= 200) {
+                            return { type: 'alert', text: txt };
+                        }
+                    }
+                    const invalidInput = document.querySelector('input:invalid, select:invalid, textarea:invalid');
+                    if (invalidInput) {
+                        const label = invalidInput.getAttribute('aria-label') || invalidInput.name || invalidInput.id || 'field';
+                        const msg = invalidInput.validationMessage || 'is required or invalid';
+                        return { type: 'validation', text: `${label}: ${msg}` };
+                    }
+                    return null;
+                }"""
+            )
+            if isinstance(error_data, dict) and error_data.get("text"):
+                return True, error_data["text"], error_data.get("type")
+        except Exception:
+            pass
+        return False, "", None
 
     def _set_recent_failure(self, detail: str) -> None:
         self.recent_failure_detail = detail
