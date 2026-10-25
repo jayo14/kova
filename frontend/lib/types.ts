@@ -225,44 +225,6 @@ export type ExecutionStatus =
   | "blocked"
   | "unverified";
 
-export const executionStatusLabels: Record<ExecutionStatus, string> = {
-  created: "Preparing execution",
-  queued: "Waiting to start",
-  initializing: "Preparing Kova",
-  browser_ready: "Browser ready",
-  running: "Kova is working",
-  waiting: "Kova needs something",
-  paused: "Kova paused",
-  human_controlled: "You have control",
-  resuming: "Resuming Kova",
-  completed: "Completed",
-  failed: "Execution failed",
-  error: "Execution infrastructure error",
-  cancelled: "Execution cancelled",
-  timeout: "Execution timed out",
-  blocked: "Mission blocked (auth wall)",
-  unverified: "Ran but couldn't verify",
-};
-
-export const executionStatusShortLabels: Record<ExecutionStatus, string> = {
-  created: "Created",
-  queued: "Queued",
-  initializing: "Initializing",
-  browser_ready: "Browser ready",
-  running: "Running",
-  waiting: "Waiting",
-  paused: "Paused",
-  human_controlled: "Your control",
-  resuming: "Resuming",
-  completed: "Completed",
-  failed: "Failed",
-  error: "Error",
-  cancelled: "Cancelled",
-  timeout: "Timed out",
-  blocked: "Blocked",
-  unverified: "Unverified",
-};
-
 export const terminalStatuses: ExecutionStatus[] = [
   "completed",
   "failed",
