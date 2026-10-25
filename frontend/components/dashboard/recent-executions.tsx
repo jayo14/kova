@@ -1,33 +1,10 @@
 import Link from "next/link";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
-import type { ExecutionDetail, ExecutionStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/components/shared/status-badge";
+import type { ExecutionDetail } from "@/lib/types";
 
 interface RecentExecutionsProps {
   executions: ExecutionDetail[];
-}
-
-function StatusBadge({ status }: { status: ExecutionStatus }) {
-  const config = getExecutionStatusConfig(status);
-
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-caption font-medium select-none",
-        config.badgeClass
-      )}
-    >
-      <span
-        className={cn(
-          "h-1.5 w-1.5 rounded-full",
-          config.dotClass,
-          config.isAnimated && "animate-pulse"
-        )}
-      />
-      <span>{config.label}</span>
-    </span>
-  );
 }
 
 export function RecentExecutions({ executions }: RecentExecutionsProps) {
@@ -67,7 +44,7 @@ export function RecentExecutions({ executions }: RecentExecutionsProps) {
             </div>
 
             <div className="flex items-center gap-3 shrink-0">
-              <StatusBadge status={exec.status} />
+              <StatusBadge status={exec.status} className="rounded-full px-2.5 py-0.5" />
               <MaterialIcon
                 name="chevron_right"
                 size={16}

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { Mission, MissionExecution } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
@@ -127,21 +128,7 @@ export function ProjectMissions({
                     {statusConfig ? (
                       <>
                         <span className="text-border" aria-hidden="true">·</span>
-                        <span
-                          className={cn(
-                            "inline-flex items-center gap-1 text-caption font-medium px-2 py-0.5 rounded-md",
-                            statusConfig.badgeClass
-                          )}
-                        >
-                          <span
-                            className={cn(
-                              "h-1.5 w-1.5 rounded-full",
-                              statusConfig.dotClass,
-                              statusConfig.isAnimated && "animate-pulse"
-                            )}
-                          />
-                          <span>{statusConfig.label}</span>
-                        </span>
+                        <StatusBadge config={statusConfig} className="gap-1 px-2 py-0.5 rounded-md" />
                       </>
                     ) : (
                       <>
