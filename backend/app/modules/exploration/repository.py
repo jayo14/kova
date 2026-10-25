@@ -73,6 +73,7 @@ class ExplorationRepository:
         credential_request: dict | None = None,
         selected_role: str | None = None,
         project_id: uuid.UUID | None = None,
+        goal: str | None = None,
         clear_credential_request: bool = False,
         clear_question: bool = False,
     ) -> ExplorationSession | None:
@@ -101,6 +102,8 @@ class ExplorationRepository:
             session.selected_role = selected_role
         if project_id is not None:
             session.project_id = project_id
+        if goal is not None and (session.goal is None or not session.goal.strip()):
+            session.goal = goal
 
         session.updated_at = datetime.now(timezone.utc)
         await self.db.flush()

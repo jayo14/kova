@@ -706,7 +706,8 @@ class ExplorationService:
                     candidate_missions=result.get("candidate_missions"),
                     question=result.get("question"),
                     credential_request=result.get("credential_request"),
-                    selected_role=selected_role,
+                    selected_role=result.get("selected_role") or selected_role,
+                    goal=result.get("goal") or goal,
                     clear_credential_request=(result.get("credential_request") is None and status != ExplorationStatus.AUTH_REQUIRED),
                     clear_question=(result.get("question") is None and status != ExplorationStatus.ASKING),
                 )
