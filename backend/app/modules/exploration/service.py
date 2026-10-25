@@ -616,6 +616,7 @@ class ExplorationService:
 
             # Resolve a project credential so generated auth journeys can
             # reference it by id instead of embedding secrets in steps.
+            # Also populate decrypted credential for progressive exploration if not provided.
             credential_id: str | None = None
             if resolved_project_id:
                 try:
@@ -623,7 +624,15 @@ class ExplorationService:
                     cred_repo = CredentialRepository(db)
                     project_creds = await cred_repo.list_by_project(resolved_project_id, limit=1)
                     if project_creds:
-                        credential_id = project_creds[0].name
+                        cred_obj = project_creds[0]
+                        credential_id = cred_obj.name
+                        if credential is None and cred_obj.value:
+                            from app.modules.credentials.crypto import decrypt_credential
+                            try:
+                                decrypted_val = decrypt_credential(cred_obj.value)
+                                credential = {"email": cred_obj.name, "password": decrypted_val}
+                            except Exception as ex:
+                                logger.debug("Could not decrypt project credential for exploration: %s", ex)
                 except Exception as e:
                     logger.debug("Could not resolve project credential for exploration: %s", e)
 
