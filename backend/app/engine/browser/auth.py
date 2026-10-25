@@ -7,6 +7,7 @@ logging in using available test account credentials.
 
 import asyncio
 from dataclasses import dataclass, field
+from enum import Enum
 import inspect
 import logging
 import re
@@ -58,6 +59,35 @@ def _levenshtein_distance(s1: str, s2: str) -> int:
             current_row.append(min(insertions, deletions, substitutions))
         previous_row = current_row
     return previous_row[-1]
+
+
+class AuthFailureCategory(str, Enum):
+    CLIENT_VALIDATION = "client_validation"
+    REQUIRED_CONSENT = "required_consent"
+    CUSTOM_FIELDS_REQUIRED = "custom_fields_required"
+    SERVER_REJECTION = "server_rejection"
+    EMAIL_VERIFICATION_REQUIRED = "email_verification_required"
+    RATE_LIMITED = "rate_limited"
+    CAPTCHA_REQUIRED = "captcha_required"
+    HUMAN_INTERVENTION_REQUIRED = "human_intervention_required"
+    ACCOUNT_ALREADY_CREATED = "account_already_created"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class AuthFailureDiagnosis:
+    category: str
+    detail: str
+    missing_fields: list[str] = field(default_factory=list)
+    invalid_fields: list[dict[str, str]] = field(default_factory=list)
+    server_error: str | None = None
+    unfilled_required_fields: list[dict[str, str]] = field(default_factory=list)
+    captcha_detected: bool = False
+    email_verification_detected: bool = False
+    consent_required: list[str] = field(default_factory=list)
+    can_retry_autonomously: bool = False
+    recommended_recovery_action: str | None = None
+    evidence: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -1156,8 +1186,426 @@ async def perform_login(
             if iteration >= max_iterations:
                 break
 
-        return False, f"Submitted credentials but page remained on auth URL: {initial_url}"
+        # Evidence-based failure diagnosis and bounded recovery
+        diagnosis = await diagnose_auth_failure(
+            page,
+            is_signup=is_signup,
+            initial_url=initial_url,
+            credential={"email": email, "password": password, "name": name},
+        )
+        if diagnosis.category == AuthFailureCategory.ACCOUNT_ALREADY_CREATED:
+            return True, diagnosis.detail
+        if diagnosis.can_retry_autonomously:
+            recovered, rec_detail = await attempt_registration_recovery(
+                page,
+                diagnosis,
+                credential={"email": email, "password": password, "name": name},
+            )
+            if recovered:
+                return True, rec_detail
+            return False, rec_detail
+
+        return False, diagnosis.detail
 
     except Exception as e:
         logger.warning("perform_login failed with exception: %s", e)
         return False, f"Error during login: {str(e)[:150]}"
+
+
+async def diagnose_auth_failure(
+    page: Any,
+    is_signup: bool = False,
+    initial_url: str = "",
+    credential: dict | None = None,
+    network_errors: list[dict] | None = None,
+) -> AuthFailureDiagnosis:
+    """Inspects the browser state and live DOM after an auth or registration submission.
+
+    Produces a concrete, evidence-based diagnostic distinguishing client validation,
+    missing required/custom fields, consent barriers, CAPTCHA challenges, server rejections,
+    email verification, rate limiting, and unknown states.
+    """
+    credential = credential or {}
+    evidence: dict[str, Any] = {
+        "initial_url": initial_url,
+        "current_url": getattr(page, "url", ""),
+        "is_signup": is_signup,
+    }
+
+    # 1. Check network errors / responses if available
+    if network_errors:
+        for net_err in network_errors:
+            status = net_err.get("status")
+            if status == 429:
+                return AuthFailureDiagnosis(
+                    category=AuthFailureCategory.RATE_LIMITED,
+                    detail="Server responded with HTTP 429 (Too Many Requests / Rate Limited).",
+                    can_retry_autonomously=False,
+                    recommended_recovery_action="continue_public_exploration",
+                    evidence={**evidence, "network_error": net_err},
+                )
+            elif status in (400, 422):
+                msg = net_err.get("body") or net_err.get("message") or f"HTTP {status}"
+                return AuthFailureDiagnosis(
+                    category=AuthFailureCategory.SERVER_REJECTION,
+                    detail=f"Server rejected submission with HTTP {status}: {msg}",
+                    server_error=msg,
+                    can_retry_autonomously=False,
+                    recommended_recovery_action="continue_public_exploration",
+                    evidence={**evidence, "network_error": net_err},
+                )
+
+    # 2. In-browser DOM and form evaluation
+    dom_data = {}
+    try:
+        if hasattr(page, "evaluate"):
+            eval_result = await page.evaluate("""
+                () => {
+                    const fields = [];
+                    const invalidFields = [];
+                    const unfilledRequired = [];
+                    const consentRequired = [];
+                    let captchaDetected = false;
+                    let emailVerificationDetected = false;
+                    let serverError = null;
+
+                    // 1. CAPTCHA detection
+                    const captchaSelectors = [
+                        'iframe[src*="recaptcha"]',
+                        'iframe[src*="hcaptcha"]',
+                        'iframe[src*="challenges.cloudflare.com"]',
+                        'iframe[src*="turnstile"]',
+                        '.g-recaptcha',
+                        '.h-captcha',
+                        '#cf-turnstile',
+                        '[data-sitekey]'
+                    ];
+                    for (const sel of captchaSelectors) {
+                        try {
+                            const el = document.querySelector(sel);
+                            if (el && (el.offsetWidth > 0 || el.offsetHeight > 0 || el.tagName === 'IFRAME')) {
+                                captchaDetected = true;
+                                break;
+                            }
+                        } catch (e) {}
+                    }
+
+                    // 2. Form input examination
+                    const inputs = Array.from(document.querySelectorAll('input, select, textarea'));
+                    for (const el of inputs) {
+                        try {
+                            const type = (el.type || 'text').toLowerCase();
+                            if (['hidden', 'submit', 'button', 'reset', 'image'].includes(type)) continue;
+
+                            const name = (el.name || el.id || el.getAttribute('aria-label') || '').toLowerCase();
+                            const labelEl = el.id ? document.querySelector(`label[for="${el.id}"]`) : el.closest('label');
+                            const labelText = (labelEl?.innerText || el.placeholder || el.getAttribute('aria-label') || name || '').trim();
+                            const isRequired = el.required || el.getAttribute('aria-required') === 'true';
+                            const val = el.value || '';
+                            const isChecked = el.checked;
+
+                            const isInvalid = el.getAttribute('aria-invalid') === 'true' || (el.validity && !el.validity.valid);
+                            const validationMsg = el.validationMessage || '';
+
+                            let inlineError = '';
+                            const parent = el.parentElement;
+                            if (parent) {
+                                const errEl = parent.querySelector('.error, .invalid-feedback, .text-destructive, [role="alert"], [class*="error"]');
+                                if (errEl && errEl.innerText) {
+                                    inlineError = errEl.innerText.trim();
+                                }
+                            }
+
+                            const fieldInfo = {
+                                type,
+                                name: el.name || el.id || '',
+                                label: labelText,
+                                required: isRequired,
+                                isEmpty: type === 'checkbox' || type === 'radio' ? !isChecked : !val.trim(),
+                                isInvalid,
+                                validationMessage: validationMsg || inlineError,
+                            };
+                            fields.push(fieldInfo);
+
+                            if (isRequired && fieldInfo.isEmpty) {
+                                if (type === 'checkbox') {
+                                    consentRequired.push(labelText || name || 'Terms / Consent');
+                                } else {
+                                    unfilledRequired.push({ name: fieldInfo.name, label: labelText, type });
+                                }
+                            } else if (isInvalid || inlineError) {
+                                invalidFields.push({ name: fieldInfo.name, label: labelText, error: validationMsg || inlineError });
+                            }
+                        } catch (e) {}
+                    }
+
+                    // 3. Visible alert banners
+                    const alertSelectors = [
+                        '[role="alert"]',
+                        '.alert-error',
+                        '.alert-danger',
+                        '.alert',
+                        '.error-message',
+                        '.toast',
+                        '[aria-live="polite"]',
+                        '[aria-live="assertive"]',
+                        '.text-destructive',
+                        '.text-red-500',
+                        '.text-red-600'
+                    ];
+                    for (const sel of alertSelectors) {
+                        try {
+                            const els = document.querySelectorAll(sel);
+                            for (const el of els) {
+                                if (el.offsetWidth > 0 || el.offsetHeight > 0) {
+                                    const txt = (el.innerText || '').trim();
+                                    if (txt.length >= 4) {
+                                        serverError = txt.slice(0, 300);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (serverError) break;
+                        } catch (e) {}
+                    }
+
+                    // 4. Verification phrases in body text
+                    try {
+                        const bodyText = (document.body ? document.body.innerText : '').toLowerCase();
+                        const verificationPhrases = [
+                            'check your email',
+                            'verification link',
+                            'we sent a verification link',
+                            'we sent a code',
+                            'confirm your email',
+                            'verification email sent',
+                            'verify your account',
+                            'magic link sent'
+                        ];
+                        for (const phrase of verificationPhrases) {
+                            if (bodyText.includes(phrase)) {
+                                emailVerificationDetected = true;
+                                break;
+                            }
+                        }
+                    } catch (e) {}
+
+                    return {
+                        fields,
+                        invalidFields,
+                        unfilledRequired,
+                        consentRequired,
+                        captchaDetected,
+                        emailVerificationDetected,
+                        serverError,
+                        currentUrl: window.location.href,
+                        pageTitle: document.title
+                    };
+                }
+            """)
+            if isinstance(eval_result, dict):
+                dom_data = eval_result
+    except Exception as e:
+        logger.debug("diagnose_auth_failure DOM evaluation error: %s", e)
+
+    evidence["dom_data"] = dom_data
+
+    # Check for body-level verification signals if not already detected
+    if not dom_data.get("emailVerificationDetected") and hasattr(page, "inner_text"):
+        try:
+            b_txt = (await page.inner_text("body", timeout=500) or "").lower()
+            if any(term in b_txt for term in ["check your email", "verification email", "we sent a link", "verify your account"]):
+                dom_data["emailVerificationDetected"] = True
+        except Exception:
+            pass
+
+    # Check if URL or title changed to dashboard/app (Account actually created!)
+    curr_url = getattr(page, "url", "").lower()
+    if curr_url and not is_auth_url(curr_url) and curr_url != initial_url.lower():
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.ACCOUNT_ALREADY_CREATED,
+            detail=f"Account created successfully; application navigated to {curr_url}.",
+            can_retry_autonomously=False,
+            recommended_recovery_action=None,
+            evidence=evidence,
+        )
+
+    if dom_data.get("emailVerificationDetected"):
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.EMAIL_VERIFICATION_REQUIRED,
+            detail="Registration initiated; application requires email verification or confirmation link.",
+            email_verification_detected=True,
+            can_retry_autonomously=False,
+            recommended_recovery_action="check_email",
+            evidence=evidence,
+        )
+
+    if dom_data.get("captchaDetected"):
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.CAPTCHA_REQUIRED,
+            detail="Registration is blocked by CAPTCHA challenge or bot protection.",
+            captcha_detected=True,
+            can_retry_autonomously=False,
+            recommended_recovery_action="request_human",
+            evidence=evidence,
+        )
+
+    consent_req = dom_data.get("consentRequired") or []
+    if consent_req:
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.REQUIRED_CONSENT,
+            detail=f"Registration requires explicit consent: {', '.join(consent_req)}.",
+            consent_required=consent_req,
+            can_retry_autonomously=True,
+            recommended_recovery_action="check_consent",
+            evidence=evidence,
+        )
+
+    unfilled = dom_data.get("unfilledRequired") or []
+    if unfilled:
+        missing_labels = [f.get("label") or f.get("name") for f in unfilled if f.get("name") or f.get("label")]
+        unfilled_names = [f.get("name", "").lower() for f in unfilled]
+        is_custom = any(k not in ("email", "password", "name", "username") for k in unfilled_names)
+        category = AuthFailureCategory.CUSTOM_FIELDS_REQUIRED if is_custom else AuthFailureCategory.CLIENT_VALIDATION
+        can_auto_recover = any(
+            any(cand in k for cand in ("first", "last", "confirm", "phone"))
+            for k in unfilled_names
+        )
+        return AuthFailureDiagnosis(
+            category=category,
+            detail=f"Registration form has required fields not filled: {', '.join(missing_labels)}.",
+            missing_fields=missing_labels,
+            unfilled_required_fields=unfilled,
+            can_retry_autonomously=can_auto_recover,
+            recommended_recovery_action="fill_missing_fields" if can_auto_recover else "continue_public_exploration",
+            evidence=evidence,
+        )
+
+    invalid_fields = dom_data.get("invalidFields") or []
+    if invalid_fields:
+        inv_summary = [f"{f.get('label') or f.get('name')}: {f.get('error')}" for f in invalid_fields]
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.CLIENT_VALIDATION,
+            detail=f"Form validation errors detected: {'; '.join(inv_summary)}.",
+            invalid_fields=invalid_fields,
+            can_retry_autonomously=False,
+            recommended_recovery_action="continue_public_exploration",
+            evidence=evidence,
+        )
+
+    server_err = dom_data.get("serverError")
+    if server_err:
+        return AuthFailureDiagnosis(
+            category=AuthFailureCategory.SERVER_REJECTION,
+            detail=f"Server rejected registration: {server_err}",
+            server_error=server_err,
+            can_retry_autonomously=False,
+            recommended_recovery_action="continue_public_exploration",
+            evidence=evidence,
+        )
+
+    return AuthFailureDiagnosis(
+        category=AuthFailureCategory.UNKNOWN,
+        detail=f"Registration did not complete: browser remained on {curr_url or initial_url} without explicit error banner or redirect.",
+        can_retry_autonomously=False,
+        recommended_recovery_action="continue_public_exploration",
+        evidence=evidence,
+    )
+
+
+async def attempt_registration_recovery(
+    page: Any,
+    diagnosis: AuthFailureDiagnosis,
+    credential: dict,
+) -> tuple[bool, str]:
+    """Attempt autonomous recovery for safely identifiable input errors."""
+    if not diagnosis.can_retry_autonomously:
+        return False, diagnosis.detail
+
+    password = credential.get("password", "")
+    email = credential.get("email", "")
+    recovered_any = False
+
+    try:
+        # 1. Recover consent
+        if diagnosis.consent_required:
+            terms_selector = (
+                'input[type="checkbox"][name*="term" i], '
+                'input[type="checkbox"][name*="agree" i], '
+                'input[type="checkbox"][id*="term" i], '
+                'input[type="checkbox"][id*="agree" i], '
+                'input[type="checkbox"][aria-label*="term" i], '
+                'input[type="checkbox"][aria-label*="agree" i], '
+                'input[type="checkbox"][required]'
+            )
+            cbs = await page.locator(terms_selector).all()
+            for cb in cbs:
+                try:
+                    if await cb.is_visible(timeout=300) and not await cb.is_checked():
+                        await cb.check()
+                        recovered_any = True
+                except Exception:
+                    pass
+
+        # 2. Recover missing required fields
+        for field_info in diagnosis.unfilled_required_fields:
+            fname = field_info.get("name", "").lower()
+            flabel = field_info.get("label", "").lower()
+            # Confirm password
+            if "confirm" in fname or "confirm" in flabel or "repeat" in fname or "confirmation" in fname:
+                try:
+                    loc = page.locator(f'input[name="{field_info.get("name")}"]').first
+                    if await loc.is_visible(timeout=500):
+                        await loc.fill(password)
+                        recovered_any = True
+                except Exception:
+                    pass
+            # Split name (first name / last name)
+            elif "first" in fname or "first" in flabel:
+                try:
+                    loc = page.locator(f'input[name="{field_info.get("name")}"]').first
+                    if await loc.is_visible(timeout=500):
+                        await loc.fill("Kova")
+                        recovered_any = True
+                except Exception:
+                    pass
+            elif "last" in fname or "last" in flabel:
+                try:
+                    loc = page.locator(f'input[name="{field_info.get("name")}"]').first
+                    if await loc.is_visible(timeout=500):
+                        await loc.fill("Tester")
+                        recovered_any = True
+                except Exception:
+                    pass
+            # Phone number
+            elif "phone" in fname or "phone" in flabel or "mobile" in fname:
+                try:
+                    loc = page.locator(f'input[name="{field_info.get("name")}"]').first
+                    if await loc.is_visible(timeout=500):
+                        await loc.fill("+2348012345678")
+                        recovered_any = True
+                except Exception:
+                    pass
+
+        if not recovered_any:
+            return False, diagnosis.detail
+
+        # Click submit button again
+        submit_btn = await find_submit_button(page)
+        if submit_btn:
+            await submit_btn.click(timeout=3000)
+            await asyncio.sleep(2.0)
+            # Check if navigated away
+            curr_url = getattr(page, "url", "").lower()
+            if not is_auth_url(curr_url):
+                return True, f"Registration recovery succeeded; navigated to {curr_url}."
+
+        # Re-diagnose
+        new_diag = await diagnose_auth_failure(page, is_signup=True, initial_url=diagnosis.evidence.get("initial_url", ""), credential=credential)
+        if new_diag.category == AuthFailureCategory.ACCOUNT_ALREADY_CREATED:
+            return True, new_diag.detail
+        return False, new_diag.detail
+
+    except Exception as e:
+        logger.warning("attempt_registration_recovery exception: %s", e)
+        return False, f"Recovery attempt failed: {e}"
