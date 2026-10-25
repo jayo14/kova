@@ -395,7 +395,26 @@ const eventMessageMap: Record<
     };
   },
   "agent.recovery_proposed": (p) => {
-    const detail = typeof p.detail === "string" ? sanitizeText(p.detail) : "Trying alternative strategy";
+    const detail = typeof p.detail === "string" ? sanitizeText(p.detail) : "Investigating and adapting strategy";
+    const errorCode = typeof p.error_code === "string" ? p.error_code : "";
+    if (errorCode === "CLIENT_VALIDATION_ERROR") {
+      return {
+        label: `Validation error surfaced: ${detail}`,
+        icon: "fact_check",
+      };
+    }
+    if (errorCode === "PAGE_ALERT") {
+      return {
+        label: `Application alert surfaced: ${detail}`,
+        icon: "warning",
+      };
+    }
+    if (errorCode === "AUTH_BARRIER") {
+      return {
+        label: `Authentication barrier detected: ${detail}`,
+        icon: "lock",
+      };
+    }
     return {
       label: `Recovery: ${detail}`,
       icon: "replay",
