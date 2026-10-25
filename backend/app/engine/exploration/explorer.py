@@ -1772,9 +1772,10 @@ class ExplorationEngine:
                         return detected;
                     }
                 """)
-                for r in dom_roles:
-                    if r["id"] not in roles_by_id:
-                        roles_by_id[r["id"]] = r
+                if isinstance(dom_roles, list):
+                    for r in dom_roles:
+                        if isinstance(r, dict) and r.get("id") and r["id"] not in roles_by_id:
+                            roles_by_id[r["id"]] = r
             except Exception as e:
                 logger.debug("DOM role inspection encountered: %s", e)
 
@@ -1790,10 +1791,16 @@ class ExplorationEngine:
             ['driver', 'Driver', 'Driver dispatch, rides, and route tracking', 'directions_car'],
             ['rider', 'Rider / Passenger', 'Passenger ride booking and trip history', 'hail'],
             ['partner', 'Partner', 'Partner integration and agency dashboard', 'handshake'],
+            ['teacher', 'Teacher', 'Educator workspace with assignment and student tracking', 'school'],
         ]
+        role_indicators = ("dashboard", "portal", "panel", "workspace", "login", "sign in", "account", "hub", "console", "view")
         for el in obs_elements:
             txt = (el.get("name") or "").strip().lower()
+            if not txt:
+                continue
             for r_id, r_label, r_desc, r_icon in role_matches:
+                has_role_keyword = bool(re.search(rf"\b{r_id}\b", txt))
+                has_role_context = any(ind in txt for ind in role_indicators) or (txt == r_id)
                 if (
                     txt == f"sign in as {r_id}"
                     or txt == f"login as {r_id}"
@@ -1801,14 +1808,29 @@ class ExplorationEngine:
                     or txt == f"{r_id} login"
                     or txt == f"{r_id} portal"
                     or txt == f"{r_id} sign in"
+                    or (has_role_keyword and has_role_context)
                 ):
                     if r_id not in roles_by_id:
                         roles_by_id[r_id] = {
                             "id": r_id,
-                            "label": f"{r_label} Portal",
+                            "label": f"{r_label} Portal" if "portal" not in r_label.lower() and "portal" not in txt else r_label,
                             "description": r_desc,
                             "icon": r_icon,
                             "source": "portal_button",
+                        }
+
+        # Check observation text if fewer than 2 roles detected so far
+        obs_text = ((observation or {}).get("text") or "").lower()
+        if len(roles_by_id) < 2 and obs_text:
+            if any(cue in obs_text for cue in ["choose your role", "select your role", "switch role", "switch workspace"]):
+                for r_id, r_label, r_desc, r_icon in role_matches:
+                    if re.search(rf"\b{r_id}\b", obs_text) and r_id not in roles_by_id:
+                        roles_by_id[r_id] = {
+                            "id": r_id,
+                            "label": r_label,
+                            "description": r_desc,
+                            "icon": r_icon,
+                            "source": "text_mention",
                         }
 
         # 2. Inspect discovered links for multiple candidate application namespaces (/admin, /app, etc.)
@@ -3181,12 +3203,18 @@ class ExplorationEngine:
 
         steps = [
             {"type": "navigate", "url": base_url},
-            {"type": "wait", "value": "500"},
             {"type": "click", "target": target_selector},
-            {"type": "wait", "value": "800"},
         ]
 
         is_matching = bool(matching_el)
+        target_pattern = re.sub(r'[^a-zA-Z0-9]+', '.*', el_name.lower()) if el_name else ".*"
+        success_condition = {
+            "url_changed_to": f".*{target_pattern}.*",
+            "element_count": {
+                "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button",
+                "min": 1,
+            },
+        }
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
             name=goal,
@@ -3201,12 +3229,7 @@ class ExplorationEngine:
                 "Verify the application state changes in response",
             ],
             steps=steps,
-            successCondition={
-                "element_count": {
-                    "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button",
-                    "min": 1,
-                }
-            },
+            successCondition=success_condition,
             confidence=0.75 if is_matching else 0.3,
             recommended=is_matching,
             route_analysis={
