@@ -32,6 +32,7 @@ import {
 } from "@/lib/api/exploration";
 import { createMission } from "@/lib/api/missions";
 import { createExecution, runBatchExecutions } from "@/lib/api/executions";
+import { createRun } from "@/lib/api/runs";
 import { createProject, getProjects } from "@/lib/api/projects";
 import { useExploreMachine } from "./explore-state-machine";
 import type { AuthChoice } from "@/components/agent/auth-choice-dialog";
@@ -544,11 +545,26 @@ export function ExplorePage() {
         }
 
         if (executions.length > 0) {
-          // If parallel and multiple executions, trigger batch runner coordination
-          if (parallel && executions.length > 1) {
-            runBatchExecutions(executions, true).catch(() => {});
+          try {
+            // First-class run orchestration with bounded concurrency & unified visibility
+            const run = await createRun({
+              projectId,
+              executionIds: executions,
+              parallel,
+              concurrencyLimit: 2,
+            });
+            if (run?.id) {
+              router.push(`/executions?runId=${run.id}`);
+              return;
+            }
+          } catch (runErr) {
+            console.warn("Run creation failed, falling back to batch execution:", runErr);
+            if (parallel && executions.length > 1) {
+              runBatchExecutions(executions, true).catch(() => {});
+            }
           }
-          // Redirect to the first execution immediately so user sees live runner
+
+          // Fallback to first execution if run endpoint was unavailable
           router.push(`/executions/${executions[0]}`);
           return;
         }

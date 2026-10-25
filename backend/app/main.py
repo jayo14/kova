@@ -21,6 +21,7 @@ from app.api.routes import (
     metrics,
     organizations,
     projects,
+    runs,
     usage,
     viewport,
 )
@@ -261,6 +262,7 @@ app.include_router(executions.evidence_router, prefix="/api/v1")
 app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(integrations.project_integrations_router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
+app.include_router(runs.router, prefix="/api/v1")
 app.include_router(usage.router, prefix="/api/v1")
 app.include_router(exploration.router, prefix="/api/v1")
 app.include_router(metrics.router)

@@ -213,6 +213,18 @@ def repair_journey(
 
     # 3. Repair vague success condition dict
     if isinstance(mission.successCondition, dict):
+        if "url_changed_to" in mission.successCondition:
+            cfg = mission.successCondition["url_changed_to"]
+            if isinstance(cfg, dict) and "to" not in cfg:
+                del mission.successCondition["url_changed_to"]
+                if not mission.successCondition:
+                    mission.successCondition = {
+                        "element_count": {
+                            "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button, input",
+                            "min": 1,
+                        }
+                    }
+
         keys = list(mission.successCondition.keys())
         if keys == ["element_count"]:
             sel = mission.successCondition["element_count"].get("selector", "")

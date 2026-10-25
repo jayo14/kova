@@ -186,6 +186,7 @@ export function subscribeToExecution(
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let currentData = "";
 
       while (isSubscribed) {
         const { value, done } = await reader.read();
@@ -194,8 +195,6 @@ export function subscribeToExecution(
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split(/\r\n|\r|\n/);
         buffer = lines.pop() ?? "";
-
-        let currentData = "";
 
         for (const line of lines) {
           if (line.startsWith("data:")) {
