@@ -324,6 +324,7 @@ async def stream_execution_events(
         ping_counter = 0
 
         try:
+            yield ": connected\n\n"
             while True:
                 if await request.is_disconnected():
                     break

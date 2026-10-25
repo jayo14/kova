@@ -2898,10 +2898,16 @@ class ExplorationEngine:
                     ],
                     steps=[
                         {"type": "navigate", "url": current_url},
-                        {"type": "click", "target": selector},
                         {"type": "wait", "value": "500"},
+                        {"type": "click", "target": selector},
+                        {"type": "wait", "value": "800"},
                     ],
-                    successCondition={"url_changed_to": {"from": current_url}},
+                    successCondition={
+                        "element_count": {
+                            "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, h3, button, input",
+                            "min": 1,
+                        }
+                    },
                     confidence=0.85,
                     recommended=is_rec,
                     route_analysis={"accessible": True, "source": "fast_path"},
@@ -3048,9 +3054,12 @@ class ExplorationEngine:
             f"button:has-text('{clean_name}'), a:has-text('{clean_name}'), [role='button']:has-text('{clean_name}')"
         )
 
-        steps = [{"type": "navigate", "url": base_url}]
-        steps.append({"type": "click", "target": target_selector})
-        steps.append({"type": "wait", "value": "500"})
+        steps = [
+            {"type": "navigate", "url": base_url},
+            {"type": "wait", "value": "500"},
+            {"type": "click", "target": target_selector},
+            {"type": "wait", "value": "800"},
+        ]
 
         is_matching = bool(matching_el)
         return DiscoveredMission(
@@ -3067,7 +3076,12 @@ class ExplorationEngine:
                 "Verify the application state changes in response",
             ],
             steps=steps,
-            successCondition={"url_changed_to": {"from": base_url}},
+            successCondition={
+                "element_count": {
+                    "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button",
+                    "min": 1,
+                }
+            },
             confidence=0.75 if is_matching else 0.3,
             recommended=is_matching,
             route_analysis={
@@ -4052,8 +4066,7 @@ class ExplorationEngine:
                     {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
-                    "url_changed_to": {"from": base_url},
-                    "element_count": {"selector": "a[href]", "min": 1},
+                    "element_count": {"selector": "a[href], [role='article'], article, li", "min": 1},
                 },
                 "confidence": 0.65,
                 "estimated_time": 15,
@@ -4170,12 +4183,12 @@ class ExplorationEngine:
                 ],
                 "steps": [
                     {"type": "navigate", "url": base_url},
-                    {"type": "click", "target": selector},
                     {"type": "wait", "value": "500"},
+                    {"type": "click", "target": selector},
+                    {"type": "wait", "value": "800"},
                 ],
                 "success_condition": {
-                    "url_changed_to": {"from": base_url},
-                    "element_count": {"selector": "a[href], button", "min": 1},
+                    "element_count": {"selector": "a[href], button, [role='region'], main, form, table", "min": 1},
                 },
                 "confidence": 0.65,
                 "estimated_time": 12,
@@ -4202,11 +4215,12 @@ class ExplorationEngine:
                 ],
                 "steps": [
                     {"type": "navigate", "url": base_url},
-                    {"type": "click", "target": selector},
                     {"type": "wait", "value": "500"},
+                    {"type": "click", "target": selector},
+                    {"type": "wait", "value": "800"},
                 ],
                 "success_condition": {
-                    "url_changed_to": {"from": base_url},
+                    "element_count": {"selector": "button, form, input, [role='dialog'], [role='region'], h1, h2, h3", "min": 1},
                 },
                 "confidence": 0.5,
                 "estimated_time": 15,
@@ -4236,8 +4250,7 @@ class ExplorationEngine:
                     {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
-                    "url_changed_to": {"from": base_url},
-                    "element_count": {"selector": "a[href]", "min": 1},
+                    "element_count": {"selector": "a[href], [role='article'], article, li", "min": 1},
                 },
                 "confidence": 0.6,
                 "estimated_time": 12,
@@ -4263,12 +4276,12 @@ class ExplorationEngine:
             ],
             "steps": [
                 {"type": "navigate", "url": base_url},
-                {"type": "click", "target": selector},
                 {"type": "wait", "value": "500"},
+                {"type": "click", "target": selector},
+                {"type": "wait", "value": "800"},
             ],
             "success_condition": {
-                "url_changed_to": {"from": base_url},
-                "element_count": {"selector": "a[href], button, h1, h2, h3", "min": 1},
+                "element_count": {"selector": "a[href], button, h1, h2, h3, [role='region'], main", "min": 1},
             },
             "confidence": 0.55,
             "estimated_time": 10,

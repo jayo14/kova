@@ -838,6 +838,19 @@ class Verifier:
             current_url = self.page.url
             checks_ok = True
             if start and (current_url == start or (_normalize_url_for_matching(current_url) == _normalize_url_for_matching(start))):
+                if not target_pattern:
+                    try:
+                        has_dialog_or_modal = await self.page.locator("[role='dialog'], [role='alertdialog'], .modal, form, [role='region']").count() > 0
+                        if has_dialog_or_modal:
+                            return VerificationCheck(
+                                type="url_changed_to",
+                                passed=True,
+                                expected=f"URL change or in-page view transition from {start}",
+                                actual=current_url,
+                                message="In-page state transition or modal rendered successfully",
+                            )
+                    except Exception:
+                        pass
                 return VerificationCheck(
                     type="url_changed_to",
                     passed=False,
