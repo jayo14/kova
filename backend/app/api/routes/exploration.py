@@ -355,6 +355,9 @@ async def stream_exploration_events(
         ping_counter = 0
 
         try:
+            # Send initial connected heartbeat to immediately flush response headers past buffering proxies
+            yield ": connected\n\n"
+
             while True:
                 if await request.is_disconnected():
                     break
@@ -423,13 +426,13 @@ async def stream_exploration_events(
                 if should_terminate:
                     break
 
-                # Heartbeat every ~15 seconds
+                # Heartbeat every ~15 seconds (60 * 0.25s)
                 ping_counter += 1
-                if ping_counter >= 30:
+                if ping_counter >= 60:
                     ping_counter = 0
                     yield ": ping\n\n"
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.25)
 
         except Exception as e:
             logger.error("SSE generator error for session %s: %s", session_id, e)
