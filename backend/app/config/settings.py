@@ -48,6 +48,8 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        # Always guarantee core and production preview frontends
+        origins.extend(["https://kova-x.vercel.app", "https://kova.app", "https://www.kova.app"])
         if not self.is_production:
             origins.extend(["http://localhost:3000", "http://127.0.0.1:3000"])
         return list(dict.fromkeys(origins))

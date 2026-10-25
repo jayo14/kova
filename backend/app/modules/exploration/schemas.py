@@ -113,13 +113,13 @@ class ExplorationRead(BaseModel):
     goal: str | None = None
     status: str
     selected_role: str | None = None
-    discoveries: list[dict] = Field(default_factory=list)
-    candidate_missions: list[dict] = Field(default_factory=list)
+    discoveries: list[dict] | None = Field(default_factory=list)
+    candidate_missions: list[dict] | None = Field(default_factory=list)
     question: dict | None = None
     credential_request: dict | None = None
     error_message: str | None = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
