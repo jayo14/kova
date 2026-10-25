@@ -105,6 +105,10 @@ def classify_failure(error_code: str | None, status: str | None = None) -> str |
         return "browser_infrastructure"
     if code in {"FLOW_NOT_RUNNABLE", "FLOW_EMPTY_NO_AGENT"}:
         return "flow_configuration"
+    if code in {"AI_PROVIDER_MISCONFIGURED"}:
+        return "ai_provider_misconfigured"
+    if code in {"AI_PLANNING_FAILED"}:
+        return "ai_planning"
     if code in {"DISPATCH_ERROR"}:
         return "dispatch_infrastructure"
     if code in {"ORG_AT_CAPACITY"}:
@@ -128,7 +132,9 @@ def diagnose_failure(error_code: str | None, error_message: str | None) -> dict 
         "network_or_application_server": "Inspect the recorded request or navigation outcome; this alone does not establish an application defect.",
         "evidence_storage": "Check private evidence storage availability; missing evidence is not itself proof that the application behavior failed.",
         "browser_infrastructure": "Check worker health and browser startup, action, or shutdown logs.",
-        "flow_configuration": "This flow has no executable steps and no autonomous agent path. Add steps in the flow editor, or set AGENT_EXECUTION_ENABLED=true (agent loop) or configure AI planning (AI_API_KEY + AI_MODEL) so Kova can derive actions from the objective.",
+        "flow_configuration": "This flow has no executable steps and no autonomous agent path. Add steps in the flow editor, or set AGENT_EXECUTION_ENABLED=true so Kova drives the browser from the objective, or configure any AI provider for dynamic planning (for example GEMINI_API_KEY or OPENROUTER_API_KEY, or the generic AI_API_KEY + AI_MODEL pair).",
+        "ai_provider_misconfigured": "The configured AI provider rejected the request (invalid key, wrong model name, or missing provider credentials). Verify the provider key and model in the deployment environment; a single provider key is sufficient.",
+        "ai_planning": "Kova reached the AI planner but it could not produce a usable journey. Retry the execution; if it persists, inspect worker logs for the planner response and confirm the provider is reachable from the worker.",
         "dispatch_infrastructure": "Kova failed to start the execution worker path. Check worker logs and Celery broker connectivity.",
         "quota_exceeded": "The organization is at its concurrent execution limit. Wait for running executions to finish or raise the org plan limit.",
         "internal_kova": "Inspect authorized worker diagnostics around this execution.",
