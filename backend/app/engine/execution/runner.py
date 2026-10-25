@@ -187,8 +187,10 @@ class FlowRunner:
         limits = getattr(project_obj, "execution_limits", None) or {}
         max_duration = limits.get("max_duration_seconds") if isinstance(limits, dict) else getattr(limits, "max_duration_seconds", None)
 
+        from app.engine.ai.settings import has_autonomous_execution_capability
+        has_auto = has_autonomous_execution_capability()
         is_agent_run = bool(
-            settings.AGENT_EXECUTION_ENABLED
+            has_auto
             and (objective or (target_flow and getattr(target_flow, "objective", None)))
             and not flow_steps
             and not (target_flow and getattr(target_flow, "steps", None))

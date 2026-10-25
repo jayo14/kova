@@ -19,6 +19,7 @@ class AISettings(BaseSettings):
     AI_PROVIDER: str = "failover"
     AI_MODEL: str = ""
     AI_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""       # alias/compat if AI_API_KEY is unset
     AI_BASE_URL: str = ""          # e.g. https://api.openai.com/v1 or a local gateway
     AI_TEMPERATURE: float = 0.2
     AI_TIMEOUT_SECONDS: float = 60.0
@@ -102,9 +103,10 @@ class AISettings(BaseSettings):
             }
         if name_clean in ("openai_compatible", "custom", "openai", "fallback"):
             models = [m.strip() for m in self.AI_MODEL.split(",") if m.strip()]
+            effective_key = self.AI_API_KEY or self.OPENAI_API_KEY
             return {
                 "name": "openai_compatible",
-                "api_key": self.AI_API_KEY,
+                "api_key": effective_key,
                 "models": models,
                 "model": models[0] if models else "",
                 "base_url": self.AI_BASE_URL or "https://api.openai.com/v1",
@@ -112,20 +114,32 @@ class AISettings(BaseSettings):
         return None
 
     @property
+    def effective_ai_key(self) -> str:
+        return self.AI_API_KEY or self.OPENAI_API_KEY
+
+    @property
     def ai_enabled(self) -> bool:
-        if self.AI_PROVIDER in ("", "none"):
+        if self.AI_PROVIDER in ("", "none", "disabled"):
             return False
         if self.AI_PROVIDER == "failover":
             for prov in self.failover_providers:
                 creds = self.get_provider_credentials(prov)
                 if creds and creds["api_key"] and creds["model"]:
                     return True
-            return bool(self.AI_API_KEY and self.AI_MODEL)
+            return bool(self.effective_ai_key and (self.AI_MODEL or "gpt-4o-mini"))
 
         creds = self.get_provider_credentials(self.AI_PROVIDER)
         if creds:
             return bool(creds["api_key"] and creds["model"])
-        return bool(self.AI_API_KEY and self.AI_MODEL)
+        return bool(self.effective_ai_key and (self.AI_MODEL or "gpt-4o-mini"))
+
+
+def has_autonomous_execution_capability() -> bool:
+    """Returns True only when an authoritative, usable reasoning path exists."""
+    from app.config.settings import settings
+    if ai_settings.AI_PROVIDER in ("", "none", "disabled"):
+        return False
+    return bool(settings.AGENT_EXECUTION_ENABLED or ai_settings.ai_enabled)
 
 
 ai_settings = AISettings()
