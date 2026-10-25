@@ -1,10 +1,15 @@
-from typing import Any
+from __future__ import annotations
+
 import uuid
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.flows.repository import FlowRepository
 from app.modules.flows.schemas import FlowCreate, FlowUpdate
+
+if TYPE_CHECKING:
+    from app.modules.flows.generator import GenerationRequest, GenerationResult
 
 
 class FlowService:

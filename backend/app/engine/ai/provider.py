@@ -7,11 +7,13 @@ object conforming to a given Pydantic schema and raises `AIProviderError` on
 any failure (invalid JSON, schema mismatch, network, timeout).
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import re
 from abc import ABC, abstractmethod
-from typing import TypeVar
+from typing import Any, TypeVar
 
 import httpx
 from pydantic import BaseModel, ValidationError

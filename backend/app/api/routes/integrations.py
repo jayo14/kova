@@ -31,13 +31,13 @@ project_integrations_router = APIRouter(tags=["project-integrations"])
 async def _run_orchestrator_task(event_id: uuid.UUID, pr_num: int | None, db_session_factory):
     """Background execution task for webhook event."""
     from app.infrastructure.database.session import async_session_factory
+    from app.modules.integrations.models import IntegrationEvent
 
     async with async_session_factory() as session:
         repo = IntegrationRepository(session)
         event = await session.get(IntegrationEvent, event_id) if hasattr(session, "get") else None
         if not event:
             from sqlalchemy import select
-            from app.modules.integrations.models import IntegrationEvent
             res = await session.execute(select(IntegrationEvent).where(IntegrationEvent.id == event_id))
             event = res.scalar_one_or_none()
         if event:
