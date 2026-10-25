@@ -52,6 +52,9 @@ export function MissionCard({
   onPromote,
   isPromoting = false,
 }: MissionCardProps) {
+  const expectedOutcome: string | undefined = mission.expectedOutcome || mission.expected_outcome;
+  const rankingRationale: string | undefined = mission.rankingRationale || mission.ranking_rationale;
+
   return (
     <div
       className={cn(
@@ -129,23 +132,23 @@ export function MissionCard({
             )}
 
             {/* Concrete Expected Outcome */}
-            {(mission.expectedOutcome || (mission as unknown as Record<string, unknown>).expected_outcome) && (
+            {expectedOutcome && (
               <div className="mb-2.5 rounded-lg bg-secondary/40 px-3 py-1.5 text-[11px] text-foreground/90 flex items-start gap-2 border border-border/40">
                 <MaterialIcon name="verified" size={14} className="text-primary mt-0.5 shrink-0" />
                 <span>
                   <strong className="font-semibold text-foreground/80">Expected Outcome:</strong>{" "}
-                  {mission.expectedOutcome || String((mission as unknown as Record<string, unknown>).expected_outcome)}
+                  {expectedOutcome}
                 </span>
               </div>
             )}
 
             {/* Recommendation Rationale */}
-            {mission.recommended && (mission.rankingRationale || (mission as unknown as Record<string, unknown>).ranking_rationale) && (
+            {mission.recommended && rankingRationale && (
               <div className="mb-2.5 rounded-lg bg-primary/5 px-3 py-1.5 text-[11px] text-primary/90 flex items-start gap-2 border border-primary/20">
                 <MaterialIcon name="auto_awesome" size={14} className="text-primary mt-0.5 shrink-0" />
                 <span>
                   <strong className="font-semibold text-primary">Recommendation Rationale:</strong>{" "}
-                  {mission.rankingRationale || String((mission as unknown as Record<string, unknown>).ranking_rationale)}
+                  {rankingRationale}
                 </span>
               </div>
             )}
