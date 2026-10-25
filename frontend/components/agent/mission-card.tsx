@@ -21,7 +21,18 @@ function formatSuccessCondition(raw: Record<string, unknown>): string {
   if (keys(raw).includes("url_changed_from")) return "URL changed from login page";
   if (keys(raw).includes("element_visible")) return "Element visible on page";
   if (keys(raw).includes("element_absent")) return "Element no longer visible";
-  if (keys(raw).includes("element_count")) return "Expected results present";
+  if (keys(raw).includes("element_count")) {
+    const ec = raw.element_count as Record<string, unknown> | undefined;
+    if (ec && typeof ec.selector === "string") {
+      const sel = ec.selector.toLowerCase();
+      if (sel.includes("report")) return "Report document rendered";
+      if (sel.includes("feedback") || sel.includes("score")) return "Evaluation feedback rendered";
+      if (sel.includes("alert-success") || sel.includes("status")) return "Submission confirmed";
+      if (sel.includes("h1") || sel.includes("h2")) return "Destination content rendered";
+      return "Result entries rendered";
+    }
+    return "Result entries rendered";
+  }
   if (keys(raw).includes("text_visible")) return `Shows "${String(raw.text_visible)}"`;
   if (keys(raw).includes("url_matches")) return "Lands on expected page";
   const k = keys(raw);
@@ -114,6 +125,28 @@ export function MissionCard({
                     <span>{step}</span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Concrete Expected Outcome */}
+            {(mission.expectedOutcome || (mission as unknown as Record<string, unknown>).expected_outcome) && (
+              <div className="mb-2.5 rounded-lg bg-secondary/40 px-3 py-1.5 text-[11px] text-foreground/90 flex items-start gap-2 border border-border/40">
+                <MaterialIcon name="verified" size={14} className="text-primary mt-0.5 shrink-0" />
+                <span>
+                  <strong className="font-semibold text-foreground/80">Expected Outcome:</strong>{" "}
+                  {mission.expectedOutcome || String((mission as unknown as Record<string, unknown>).expected_outcome)}
+                </span>
+              </div>
+            )}
+
+            {/* Recommendation Rationale */}
+            {mission.recommended && (mission.rankingRationale || (mission as unknown as Record<string, unknown>).ranking_rationale) && (
+              <div className="mb-2.5 rounded-lg bg-primary/5 px-3 py-1.5 text-[11px] text-primary/90 flex items-start gap-2 border border-primary/20">
+                <MaterialIcon name="auto_awesome" size={14} className="text-primary mt-0.5 shrink-0" />
+                <span>
+                  <strong className="font-semibold text-primary">Recommendation Rationale:</strong>{" "}
+                  {mission.rankingRationale || String((mission as unknown as Record<string, unknown>).ranking_rationale)}
+                </span>
               </div>
             )}
 

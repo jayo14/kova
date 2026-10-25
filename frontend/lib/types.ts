@@ -86,6 +86,15 @@ export interface SuggestedMission {
   discoveryEvidence?: Array<Record<string, unknown>>;
   flowId?: string;
   promoted?: boolean;
+  userGoal?: string;
+  expectedOutcome?: string;
+  expected_outcome?: string;
+  user_goal?: string;
+  rankingRationale?: string;
+  ranking_rationale?: string;
+  classification?: "functional" | "workflow" | "auth" | "navigation";
+  isCore?: boolean;
+  is_core?: boolean;
 }
 
 export interface CredentialRequest {
