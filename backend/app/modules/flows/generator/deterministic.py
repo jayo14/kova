@@ -157,7 +157,6 @@ class DeterministicFlowGenerator:
             c_name_norm = c.name.lower().replace("_", " ")
             if (
                 c_name_norm in goal_lower
-                or any(word in goal_lower for word in c_name_norm.split() if len(word) > 3)
                 or (c.kind == "auth" and any(k in goal_lower for k in ("sign in", "login", "log in", "sign up", "signup", "auth")))
             ):
                 matching_caps.append(c)
