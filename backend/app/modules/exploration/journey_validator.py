@@ -27,6 +27,7 @@ VAGUE_OUTCOME_PATTERNS = [
     re.compile(r"^\s*verify\s+page\s+loaded\s*$", re.I),
     re.compile(r"^\s*verify\s+navigation\s*$", re.I),
     re.compile(r"^\s*lands\s+on\s+expected\s+page\s*$", re.I),
+    re.compile(r"^\s*page\s+responds\s*$", re.I),
 ]
 
 VALID_STEP_TYPES = {
@@ -65,11 +66,19 @@ def is_navigation_only_workflow(mission: DiscoveredMission) -> bool:
     ]
     if len(non_nav_steps) == 0:
         return True
-    # If it's only a click on an <a> navigation link
+    # If it's only a single click on a navigation link or button without functional input
     if len(non_nav_steps) == 1:
         step = non_nav_steps[0]
-        target = str(step.get("target") or "")
-        if target.startswith("a:") or target.startswith("a[") or "nav" in target.lower():
+        step_type = step.get("type")
+        target = str(step.get("target") or "").lower()
+        if step_type == "click" and (
+            target.startswith("a:")
+            or target.startswith("a[")
+            or "nav" in target
+            or "link" in target
+            or "menu" in target
+            or any(w in (mission.name + " " + (mission.user_goal or "")).lower() for w in ["navigate", "open", "visit", "browse", "view"])
+        ):
             return True
     return False
 
@@ -288,6 +297,7 @@ def deduplicate_and_rank_journeys(
     missions: list[DiscoveredMission],
     capabilities: list[DiscoveredCapability] | None = None,
     max_results: int = 6,
+    goal: str | None = None,
 ) -> list[DiscoveredMission]:
     """Validate, repair, deduplicate, score, and rank candidate journeys.
     
@@ -323,8 +333,16 @@ def deduplicate_and_rank_journeys(
 
     # Score each validated journey
     scored: list[tuple[float, DiscoveredMission]] = []
+    goal_norm = goal.strip().lower() if goal else ""
     for m in validated:
         s = score_journey(m, capabilities)
+        if goal_norm and (
+            goal_norm in m.name.lower()
+            or goal_norm in (m.title or "").lower()
+            or goal_norm in (m.user_goal or "").lower()
+            or any(word in (m.name + " " + (m.title or "")).lower() for word in goal_norm.split() if len(word) > 3)
+        ):
+            s += 1.0  # Significant priority boost for explicit user goal
         scored.append((s, m))
 
     # Sort descending by score
@@ -336,14 +354,35 @@ def deduplicate_and_rank_journeys(
     for m in results:
         m.recommended = False
 
-    primary_candidate = next(
-        (m for m in results if m.classification == "functional" and m.category not in ("auth", "navigation")),
-        results[0]
-    )
+    if goal_norm:
+        exact_match = next(
+            (m for m in results if m.name.lower() == goal_norm or (m.title or "").lower() == goal_norm),
+            None,
+        )
+        if exact_match:
+            primary_candidate = exact_match
+        else:
+            primary_candidate = next(
+                (
+                    m for m in results
+                    if goal_norm in m.name.lower()
+                    or goal_norm in (m.title or "").lower()
+                    or any(w in m.name.lower() for w in goal_norm.split() if len(w) > 3)
+                ),
+                results[0]
+            )
+    else:
+        primary_candidate = next(
+            (m for m in results if m.classification == "functional" and m.category not in ("auth", "navigation")),
+            results[0]
+        )
     primary_candidate.recommended = True
     primary_candidate.ranking_rationale = (
         f"Selected as highest-value journey: tests core capability '{primary_candidate.name}' "
         f"with verifiable outcome: '{primary_candidate.expected_outcome}'"
     )
+    if primary_candidate in results:
+        results.remove(primary_candidate)
+        results.insert(0, primary_candidate)
 
     return results[:max_results]

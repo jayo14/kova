@@ -1653,6 +1653,39 @@ class ExplorationEngine:
             except Exception as e:
                 logger.debug("DOM role inspection encountered: %s", e)
 
+        # Fallback inspection from observation elements if page is None or for offline observations
+        obs_elements = (observation or {}).get("elements", [])
+        role_matches = [
+            ['admin', 'Administrator', 'Administrative tools and configuration', 'admin_panel_settings'],
+            ['instructor', 'Instructor / Teacher', 'Curriculum management and course delivery', 'school'],
+            ['lecturer', 'Lecturer', 'Curriculum management and lecture delivery', 'school'],
+            ['student', 'Student', 'Learning modules, coursework, and assignments', 'menu_book'],
+            ['seller', 'Seller', 'Storefront, inventory, and order fulfillment', 'storefront'],
+            ['buyer', 'Customer', 'Product discovery, cart, and checkout', 'shopping_bag'],
+            ['driver', 'Driver', 'Driver dispatch, rides, and route tracking', 'directions_car'],
+            ['rider', 'Rider / Passenger', 'Passenger ride booking and trip history', 'hail'],
+            ['partner', 'Partner', 'Partner integration and agency dashboard', 'handshake'],
+        ]
+        for el in obs_elements:
+            txt = (el.get("name") or "").strip().lower()
+            for r_id, r_label, r_desc, r_icon in role_matches:
+                if (
+                    txt == f"sign in as {r_id}"
+                    or txt == f"login as {r_id}"
+                    or txt == f"log in as {r_id}"
+                    or txt == f"{r_id} login"
+                    or txt == f"{r_id} portal"
+                    or txt == f"{r_id} sign in"
+                ):
+                    if r_id not in roles_by_id:
+                        roles_by_id[r_id] = {
+                            "id": r_id,
+                            "label": f"{r_label} Portal",
+                            "description": r_desc,
+                            "icon": r_icon,
+                            "source": "portal_button",
+                        }
+
         # 2. Inspect discovered links for multiple candidate application namespaces (/admin, /app, etc.)
         try:
             current_url = getattr(page, "url", self.url) if page else self.url
@@ -2184,7 +2217,10 @@ class ExplorationEngine:
         missions: list[DiscoveredMission] = []
 
         # Phase 1: Route analysis
-        route_map = await self._analyze_routes(page, current_url, selected_role=selected_role)
+        try:
+            route_map = await self._analyze_routes(page, current_url, selected_role=selected_role)
+        except TypeError:
+            route_map = await self._analyze_routes(page, current_url)
         accessible_routes = [r for r in route_map if r["accessible"]]
         auth_routes = [r for r in route_map if r["category"] == "auth"]
         form_routes = [
