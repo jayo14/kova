@@ -9,6 +9,89 @@ interface ExecutionResultProps {
   className?: string;
 }
 
+interface ResultVariant {
+  containerClass: string;
+  iconBoxClass: string;
+  icon: string;
+  iconClass?: string;
+  title: string;
+  titleClass: string;
+  descriptionClass: string;
+  description: string | ((execution: ExecutionDetail) => string);
+}
+
+const RESULT_VARIANTS: Record<string, ResultVariant> = {
+  completed: {
+    containerClass: "border border-emerald-500/20 bg-emerald-500/5",
+    iconBoxClass: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    icon: "check_circle",
+    title: "Mission completed",
+    titleClass: "text-emerald-700 dark:text-emerald-400",
+    descriptionClass: "text-foreground/80",
+    description: "Kova accomplished the mission and verified application state.",
+  },
+  failed: {
+    containerClass: "border border-destructive/20 bg-destructive/5",
+    iconBoxClass: "bg-destructive/10 text-destructive",
+    icon: "error",
+    title: "Execution failed",
+    titleClass: "text-destructive",
+    descriptionClass: "text-foreground/80",
+    description: (execution) => execution.error || "Kova couldn't complete this mission.",
+  },
+  error: {
+    containerClass: "border border-orange-500/20 bg-orange-500/5",
+    iconBoxClass: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+    icon: "warning",
+    iconClass: "text-orange-600",
+    title: "Execution could not be completed reliably",
+    titleClass: "text-orange-700 dark:text-orange-400",
+    descriptionClass: "text-foreground/80",
+    description: (execution) =>
+      execution.error || "A browser, worker, or internal error stopped reliable verification.",
+  },
+  blocked: {
+    containerClass: "border border-amber-500/20 bg-amber-500/5",
+    iconBoxClass: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    icon: "lock",
+    title: "Execution blocked",
+    titleClass: "text-amber-700 dark:text-amber-400",
+    descriptionClass: "text-foreground/80",
+    description: (execution) =>
+      execution.error ||
+      "Execution was blocked because a required prerequisite, role, or environment condition could not be satisfied.",
+  },
+  unverified: {
+    containerClass: "border border-orange-500/20 bg-orange-500/5",
+    iconBoxClass: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+    icon: "help",
+    title: "Execution completed without verification",
+    titleClass: "text-orange-700 dark:text-orange-400",
+    descriptionClass: "text-foreground/80",
+    description: (execution) =>
+      execution.error ||
+      "The actions were performed, but available evidence was insufficient to verify the intended business outcomes.",
+  },
+  timeout: {
+    containerClass: "border border-destructive/20 bg-destructive/5",
+    iconBoxClass: "bg-destructive/10 text-destructive",
+    icon: "timer_off",
+    title: "Execution timed out",
+    titleClass: "text-destructive",
+    descriptionClass: "text-foreground/80",
+    description: "Kova couldn't complete the mission within the allowed time.",
+  },
+  cancelled: {
+    containerClass: "border border-border/80 bg-secondary/20",
+    iconBoxClass: "bg-secondary text-muted-foreground",
+    icon: "cancel",
+    title: "Execution cancelled",
+    titleClass: "text-foreground",
+    descriptionClass: "text-muted-foreground",
+    description: "Kova stopped this execution.",
+  },
+};
+
 function calculateDuration(startedAt?: string | null, completedAt?: string | null): string | null {
   if (!startedAt || !completedAt) return null;
   try {
@@ -27,247 +110,55 @@ export function ExecutionResult({
   className,
 }: ExecutionResultProps) {
   const duration = calculateDuration(execution.startedAt, execution.completedAt);
+  const variant = RESULT_VARIANTS[execution.status];
 
-  if (execution.status === "completed") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-              <MaterialIcon name="check_circle" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-emerald-700 dark:text-emerald-400">
-                Mission completed
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                Kova accomplished the mission and verified application state.
-              </p>
-            </div>
+  if (!variant) return null;
+
+  const description =
+    typeof variant.description === "function"
+      ? variant.description(execution)
+      : variant.description;
+
+  return (
+    <section
+      aria-label="Execution result"
+      className={cn(
+        "rounded-2xl p-5 shadow-xs space-y-4",
+        variant.containerClass,
+        className
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
+          <div
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+              variant.iconBoxClass
+            )}
+          >
+            <MaterialIcon name={variant.icon} size={20} className={variant.iconClass} />
           </div>
-
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
+          <div>
+            <h3 className={cn("text-body font-semibold", variant.titleClass)}>
+              {variant.title}
+            </h3>
+            <p
+              className={cn(
+                "text-body-sm mt-0.5 leading-relaxed",
+                variant.descriptionClass
+              )}
+            >
+              {description}
+            </p>
+          </div>
         </div>
 
-      </section>
-    );
-  }
-
-  if (execution.status === "failed") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-destructive/20 bg-destructive/5 p-5 shadow-xs space-y-4",
-          className
+        {duration && (
+          <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
+            {duration}
+          </span>
         )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-              <MaterialIcon name="error" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-destructive">
-                Execution failed
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                {execution.error || "Kova couldn't complete this mission."}
-              </p>
-            </div>
-          </div>
-
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-
-      </section>
-    );
-  }
-
-  if (execution.status === "error") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-orange-500/20 bg-orange-500/5 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400">
-              <MaterialIcon name="warning" size={20} className="text-orange-600" />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-orange-700 dark:text-orange-400">
-                Execution could not be completed reliably
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                {execution.error || "A browser, worker, or internal error stopped reliable verification."}
-              </p>
-            </div>
-          </div>
-
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-
-      </section>
-    );
-  }
-
-  if (execution.status === "blocked") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-amber-500/20 bg-amber-500/5 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 text-amber-600 dark:text-amber-400">
-              <MaterialIcon name="lock" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-amber-700 dark:text-amber-400">
-                Execution blocked
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                {execution.error || "Execution was blocked because a required prerequisite, role, or environment condition could not be satisfied."}
-              </p>
-            </div>
-          </div>
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-      </section>
-    );
-  }
-
-  if (execution.status === "unverified") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-orange-500/20 bg-orange-500/5 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400">
-              <MaterialIcon name="help" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-orange-700 dark:text-orange-400">
-                Execution completed without verification
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                {execution.error || "The actions were performed, but available evidence was insufficient to verify the intended business outcomes."}
-              </p>
-            </div>
-          </div>
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-      </section>
-    );
-  }
-
-  if (execution.status === "timeout") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-destructive/20 bg-destructive/5 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
-              <MaterialIcon name="timer_off" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-destructive">
-                Execution timed out
-              </h3>
-              <p className="text-body-sm text-foreground/80 mt-0.5 leading-relaxed">
-                Kova couldn&apos;t complete the mission within the allowed time.
-              </p>
-            </div>
-          </div>
-
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-
-      </section>
-    );
-  }
-
-  if (execution.status === "cancelled") {
-    return (
-      <section
-        aria-label="Execution result"
-        className={cn(
-          "rounded-2xl border border-border/80 bg-secondary/20 p-5 shadow-xs space-y-4",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-secondary text-muted-foreground">
-              <MaterialIcon name="cancel" size={20} />
-            </div>
-            <div>
-              <h3 className="text-body font-semibold text-foreground">
-                Execution cancelled
-              </h3>
-              <p className="text-body-sm text-muted-foreground mt-0.5 leading-relaxed">
-                Kova stopped this execution.
-              </p>
-            </div>
-          </div>
-
-          {duration && (
-            <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-              {duration}
-            </span>
-          )}
-        </div>
-
-      </section>
-    );
-  }
-
-  return null;
+      </div>
+    </section>
+  );
 }
