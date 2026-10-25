@@ -88,8 +88,20 @@ class ErrorCode:
     NETWORK_ERROR = "NETWORK_ERROR"
     APPLICATION_ERROR = "APPLICATION_ERROR"
     FLOW_NOT_RUNNABLE = "FLOW_NOT_RUNNABLE"
+    AI_PLANNING_FAILED = "AI_PLANNING_FAILED"
+    AI_PROVIDER_MISCONFIGURED = "AI_PROVIDER_MISCONFIGURED"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
+
+
+EMPTY_FLOW_NO_AUTONOMOUS_PATH_MSG = (
+    "Flow has no steps and no autonomous execution path is available. "
+    "Add steps in the flow editor, or enable agent execution "
+    "(AGENT_EXECUTION_ENABLED) so Kova drives the browser from the objective, "
+    "or configure an AI provider for dynamic planning "
+    "(any provider key such as GEMINI_API_KEY or OPENROUTER_API_KEY, "
+    "or the generic AI_API_KEY + AI_MODEL pair)."
+)
 
 
 class ExecutionError(Exception):
@@ -705,9 +717,7 @@ class FlowRunner:
             if not has_autonomous_path:
                 ctx.transition(ExecutionState.FAILED)
                 ctx.record_event(EventTypes.EXECUTION_FAILED, {
-                    "error": "Flow has no steps and no autonomous execution path is available. "
-                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
-                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error": EMPTY_FLOW_NO_AUTONOMOUS_PATH_MSG,
                     "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
                     "failure_category": "flow_configuration",
                 })
@@ -715,9 +725,7 @@ class FlowRunner:
                 return {
                     "success": False,
                     "execution_id": str(execution_id),
-                    "error": "Flow has no steps and no autonomous execution path is available. "
-                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
-                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                    "error": EMPTY_FLOW_NO_AUTONOMOUS_PATH_MSG,
                     "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
                     "failure_category": "flow_configuration",
                     "state": ExecutionState.FAILED.value,
@@ -991,6 +999,7 @@ class FlowRunner:
                     project=project,
                 )
 
+            planning_failure: dict | None = None
             if not flow_steps and objective:
                 from app.engine.ai.settings import ai_settings
                 if ai_settings.ai_enabled:
@@ -1081,27 +1090,56 @@ class FlowRunner:
                                     success_condition = plan.success_condition
                                 logger.info("Planned %d dynamic steps (%d rejected) for objective '%s'", len(flow_steps), len(rejected_steps), objective)
                     except Exception as plan_err:
+                        from app.engine.ai.provider import AIProviderError
                         logger.warning("Dynamic journey planning failed: %s", plan_err)
+                        if isinstance(plan_err, AIProviderError):
+                            misconfigured = (
+                                plan_err.status_code in (401, 403)
+                                or "requires model(s)" in str(plan_err)
+                            )
+                            planning_failure = {
+                                "error": (
+                                    f"AI planning could not run because provider "
+                                    f"'{plan_err.provider or 'configured'}' is not configured correctly: "
+                                    f"{plan_err}"
+                                ),
+                                "error_code": (
+                                    ErrorCode.AI_PROVIDER_MISCONFIGURED
+                                    if misconfigured
+                                    else ErrorCode.AI_PLANNING_FAILED
+                                ),
+                                "failure_category": (
+                                    "ai_provider_misconfigured"
+                                    if misconfigured
+                                    else "ai_planning"
+                                ),
+                            }
+                        else:
+                            planning_failure = {
+                                "error": (
+                                    "AI planning was attempted but produced no usable steps: "
+                                    f"{plan_err}"
+                                ),
+                                "error_code": ErrorCode.AI_PLANNING_FAILED,
+                                "failure_category": "ai_planning",
+                            }
 
             if not flow_steps:
                 # Defensive fallback (normally caught by the pre-launch check above).
-                ctx.transition(ExecutionState.FAILED)
-                ctx.record_event(EventTypes.EXECUTION_FAILED, {
-                    "error": "Flow has no steps and no autonomous execution path is available. "
-                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
-                             "or AI planning (AI_API_KEY + AI_MODEL).",
+                failure = planning_failure or {
+                    "error": EMPTY_FLOW_NO_AUTONOMOUS_PATH_MSG,
                     "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
                     "failure_category": "flow_configuration",
+                }
+                ctx.transition(ExecutionState.FAILED)
+                ctx.record_event(EventTypes.EXECUTION_FAILED, {
+                    **failure,
                 })
                 await self._emit_events(ctx, event_recorder)
                 return {
                     "success": False,
                     "execution_id": str(execution_id),
-                    "error": "Flow has no steps and no autonomous execution path is available. "
-                             "Add steps, or enable agent execution (AGENT_EXECUTION_ENABLED) "
-                             "or AI planning (AI_API_KEY + AI_MODEL).",
-                    "error_code": ErrorCode.FLOW_NOT_RUNNABLE,
-                    "failure_category": "flow_configuration",
+                    **failure,
                     "state": ExecutionState.FAILED.value,
                     "current_state": ctx.current_state,
                     "events": ctx.events,
