@@ -1,9 +1,9 @@
 "use client";
 
-import Link from "next/link";
 import type { ExecutionDetail } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { isActiveStatus } from "@/lib/executions/status";
+import { Breadcrumbs } from "@/components/shared/breadcrumbs";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { ModeBadge } from "@/components/shared/mode-badge";
 import { StatusBadge } from "@/components/shared/status-badge";
@@ -50,19 +50,7 @@ export function ExecutionHeader({
   return (
     <div className="mb-6 space-y-3">
       {/* Breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
-        <Link
-          href={backHref}
-          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-        >
-          <MaterialIcon name="arrow_back" size={16} />
-          <span>Flow</span>
-        </Link>
-        <span className="text-border">/</span>
-        <span className="text-foreground font-medium truncate max-w-[200px] sm:max-w-xs">
-          Proof Run
-        </span>
-      </nav>
+      <Breadcrumbs parentHref={backHref} parentLabel="Flow" currentLabel="Proof Run" />
 
       {/* Title & Actions Bar */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
