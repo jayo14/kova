@@ -20,6 +20,7 @@ import {
   submitCredential,
   submitExistingCredential,
   getCurrentSessionId,
+  setCurrentSessionId,
   getCurrentProjectId,
   answerQuestion,
   cancelExploration,
@@ -86,6 +87,16 @@ export function ExplorePage() {
   const abortRef = useRef<AbortController | null>(null);
   const startedUrlRef = useRef<string | null>(null);
   const startedSessionIdRef = useRef<string | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(initialSessionId || null);
+  const activeSessionIdRef = useRef<string | null>(initialSessionId || null);
+  activeSessionIdRef.current = activeSessionId;
+
+  // Sync active session ID to API module and sessionStorage
+  useEffect(() => {
+    if (activeSessionId) {
+      setCurrentSessionId(activeSessionId);
+    }
+  }, [activeSessionId]);
 
   const handleEvent = useCallback(
     (event: ExplorationEvent) => {
@@ -149,49 +160,56 @@ export function ExplorePage() {
   const handleEventRef = useRef(handleEvent);
   handleEventRef.current = handleEvent;
 
-  // Auto-start or recover exploration session
+  // 1. Session recovery effect (when opening a page that already has a sessionId in the URL)
   useEffect(() => {
-    if (initialSessionId) {
-      if (startedSessionIdRef.current === initialSessionId) return;
-      startedSessionIdRef.current = initialSessionId;
-      startedUrlRef.current = initialSessionId;
+    if (!initialSessionId) return;
+    if (startedSessionIdRef.current === initialSessionId) return;
+    startedSessionIdRef.current = initialSessionId;
+    startedUrlRef.current = initialSessionId;
+    setActiveSessionId(initialSessionId);
+    setCurrentSessionId(initialSessionId);
 
-      const controller = new AbortController();
-      abortRef.current = controller;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
-      // 1. Initial immediate state sync
-      syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev)).catch((err) => {
-        console.error("Failed to sync session:", err);
-      });
+    // Initial immediate state sync
+    syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev)).catch((err) => {
+      console.error("Failed to sync session:", err);
+    });
 
-      // 2. Stream real-time events via SSE so page updates live without refreshing
-      streamExplorationEvents(initialSessionId, (ev) => handleEventRef.current(ev), controller.signal).catch(() => {});
+    // Stream real-time events via SSE so page updates live without refreshing
+    streamExplorationEvents(initialSessionId, (ev) => handleEventRef.current(ev), controller.signal).catch(() => {});
 
-      // 3. Fallback active polling interval in case SSE is buffered or proxy disconnects
-      const pollTimer = setInterval(async () => {
-        if (controller.signal.aborted) {
-          clearInterval(pollTimer);
-          return;
-        }
-        try {
-          const sess = await getExplorationSession(initialSessionId);
-          await syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev));
-          const normalizedState = normalizeExploreStatus(sess.status);
-          if (["ready", "failed", "cancelled", "auth_required", "asking"].includes(normalizedState)) {
-            clearInterval(pollTimer);
-          }
-        } catch {
-          // ignore transient network errors during active exploration
-        }
-      }, 3000);
-
-      return () => {
-        controller.abort();
+    // Fallback active polling interval in case SSE is buffered or proxy disconnects
+    const pollTimer = setInterval(async () => {
+      if (controller.signal.aborted) {
         clearInterval(pollTimer);
-      };
-    }
+        return;
+      }
+      try {
+        const sess = await getExplorationSession(initialSessionId);
+        await syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev));
+        const normalizedState = normalizeExploreStatus(sess.status);
+        if (["ready", "failed", "cancelled", "auth_required", "asking"].includes(normalizedState)) {
+          clearInterval(pollTimer);
+        }
+      } catch {
+        // ignore transient network errors during active exploration
+      }
+    }, 3000);
 
+    return () => {
+      controller.abort();
+      clearInterval(pollTimer);
+    };
+  }, [initialSessionId]);
+
+  // 2. Auto-start exploration effect (when visiting with url but no initialSessionId)
+  useEffect(() => {
+    // If a session ID was already in searchParams or already started, don't start a duplicate
+    if (searchParams.get("sessionId")) return;
     if (!initialUrl) return;
+
     const cleanInitialUrl = /^https?:\/\//i.test(initialUrl.trim())
       ? initialUrl.trim()
       : /^(?:localhost|127\.0\.0\.1)/i.test(initialUrl.trim())
@@ -212,6 +230,8 @@ export function ExplorePage() {
     )
       .then((sessionId) => {
         startedSessionIdRef.current = sessionId;
+        setActiveSessionId(sessionId);
+        setCurrentSessionId(sessionId);
         if (typeof window !== "undefined" && window.location) {
           const nextParams = new URLSearchParams(window.location.search);
           nextParams.set("sessionId", sessionId);
@@ -227,7 +247,7 @@ export function ExplorePage() {
     return () => {
       controller.abort();
     };
-  }, [initialUrl, initialIntent, initialSessionId]);
+  }, [initialUrl, initialIntent]);
 
   const handleSubmit = (intent: KovaIntent) => {
     let submittedUrl = (intent.url || intent.raw || "").trim();
@@ -259,6 +279,9 @@ export function ExplorePage() {
     const controller = new AbortController();
     abortRef.current = controller;
     startedUrlRef.current = submittedUrl;
+    startedSessionIdRef.current = null;
+    setActiveSessionId(null);
+    setCurrentSessionId(null);
 
     start(submittedUrl, goal);
 
@@ -267,23 +290,41 @@ export function ExplorePage() {
       goal,
       (ev) => handleEventRef.current(ev),
       controller.signal
-    ).catch((err) => {
-      if (err?.name !== "AbortError") {
-        console.error("Exploration error:", err);
-      }
-    });
+    )
+      .then((sessionId) => {
+        startedSessionIdRef.current = sessionId;
+        setActiveSessionId(sessionId);
+        setCurrentSessionId(sessionId);
+        if (typeof window !== "undefined" && window.location) {
+          const nextParams = new URLSearchParams(window.location.search);
+          nextParams.set("sessionId", sessionId);
+          window.history.replaceState(null, "", `?${nextParams.toString()}`);
+        }
+      })
+      .catch((err) => {
+        if (err?.name !== "AbortError") {
+          console.error("Exploration error:", err);
+        }
+      });
   };
 
   const handleCredentialSubmit = async (email: string, password: string) => {
     setCredentialLoading(true);
     setCredentialError(null);
 
+    const effectiveSessionId =
+      activeSessionIdRef.current ||
+      getCurrentSessionId() ||
+      startedSessionIdRef.current ||
+      initialSessionId ||
+      undefined;
+
     try {
       const controller = new AbortController();
       abortRef.current = controller;
       // submitCredential no longer throws on auth failure —
       // errors arrive via events (auth.failed → error event)
-      await submitCredential(email, password, handleEvent, controller.signal);
+      await submitCredential(email, password, handleEvent, controller.signal, undefined, effectiveSessionId);
     } catch (err) {
       // Only catch actual infrastructure errors (network, server down)
       const message = err instanceof Error ? err.message : "Could not reach the server.";
@@ -298,6 +339,13 @@ export function ExplorePage() {
     choice: AuthChoice,
     details?: { email?: string; password?: string; credentialId?: string }
   ) => {
+    const effectiveSessionId =
+      activeSessionIdRef.current ||
+      getCurrentSessionId() ||
+      startedSessionIdRef.current ||
+      initialSessionId ||
+      undefined;
+
     if (choice === "use_existing" && details?.credentialId) {
       setAuthMode("use_existing");
       setCredentialLoading(true);
@@ -310,7 +358,9 @@ export function ExplorePage() {
         await submitExistingCredential(
           details.credentialId,
           handleEvent,
-          controller.signal
+          controller.signal,
+          undefined,
+          effectiveSessionId
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Could not sign in with stored credential.";
@@ -341,7 +391,9 @@ export function ExplorePage() {
           details?.email,
           details?.password,
           handleEvent,
-          controller.signal
+          controller.signal,
+          undefined,
+          effectiveSessionId
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : "Could not create account.";
@@ -356,6 +408,13 @@ export function ExplorePage() {
   const handleAnswerQuestion = async (selectedOptionId: string) => {
     if (!state.question) return;
 
+    const effectiveSessionId =
+      activeSessionIdRef.current ||
+      getCurrentSessionId() ||
+      startedSessionIdRef.current ||
+      initialSessionId ||
+      undefined;
+
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -363,14 +422,22 @@ export function ExplorePage() {
       state.question.id,
       selectedOptionId,
       handleEvent,
-      controller.signal
+      controller.signal,
+      undefined,
+      effectiveSessionId
     );
   };
 
   const handleStop = () => {
     abortRef.current?.abort();
     cancel();
-    cancelExploration(handleEvent);
+    const effectiveSessionId =
+      activeSessionIdRef.current ||
+      getCurrentSessionId() ||
+      startedSessionIdRef.current ||
+      initialSessionId ||
+      undefined;
+    cancelExploration(handleEvent, undefined, effectiveSessionId);
   };
 
   const handleUrlChange = useCallback((url: string, path: string) => {
@@ -659,7 +726,7 @@ export function ExplorePage() {
               onUrlChange={handleUrlChange}
               onThumbnailClick={handleThumbnailClick}
               projectId={resolvedProjectId || getCurrentProjectId()}
-              sessionId={getCurrentSessionId() || initialSessionId || undefined}
+              sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
               className="h-full"
             />
           </div>
@@ -717,7 +784,7 @@ export function ExplorePage() {
               missions={state.missions}
               recommendation={state.recommendationNote}
               projectName={cleanProjectName}
-              sessionId={getCurrentSessionId() || initialSessionId || undefined}
+              sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
               projectId={resolvedProjectId || getCurrentProjectId() || undefined}
               onRun={handleRunMissions}
               onOpenProject={handleOpenProject}

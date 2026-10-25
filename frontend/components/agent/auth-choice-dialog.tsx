@@ -84,7 +84,8 @@ export function AuthChoiceDialog({
               if (pName && hostNorm && (pName.includes(hostNorm) || hostNorm.includes(pName))) return true;
               return false;
             });
-            creds = matched.length > 0 ? matched : all;
+            // Strictly match credentials for this project or host; NEVER bleed credentials from unrelated projects
+            creds = matched;
           } catch {
             // ignore
           }
@@ -192,12 +193,12 @@ export function AuthChoiceDialog({
                 <span className="text-body-sm font-semibold text-foreground">
                   Authentication Required
                 </span>
-                <span className="rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] text-amber-600 font-medium">
-                  Protected View
+                <span className="rounded-full bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-medium">
+                  Hermetic Sandbox
                 </span>
               </div>
-              <p className="text-[11px] text-muted-foreground">
-                Target: <span className="font-medium text-foreground">{hostname}</span>
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                <span>Target site: <strong className="font-mono text-foreground">{hostname}</strong></span>
               </p>
             </div>
           </div>

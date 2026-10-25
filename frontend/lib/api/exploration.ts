@@ -270,6 +270,7 @@ export async function streamExplorationEvents(
   signal?: AbortSignal,
   token?: string
 ): Promise<void> {
+  setCurrentSessionId(sessionId);
   if (activeStreamSessionId === sessionId) {
     return;
   }
@@ -541,11 +542,15 @@ export async function syncSessionState(
   token?: string
 ) {
   try {
+    setCurrentSessionId(sessionId);
     let authToken = token;
     if (!authToken && typeof window !== "undefined") {
       authToken = (await getBrowserSessionToken()) ?? undefined;
     }
     const session = await getExplorationSession(sessionId, authToken);
+    if (session.project_id) {
+      setCurrentProjectId(session.project_id);
+    }
     const normalizedState = normalizeExploreStatus(session.status);
 
     // Emit payload data BEFORE state change so state machine has data when transitioning
@@ -584,11 +589,57 @@ let currentSessionId: string | null = null;
 let currentProjectId: string | null = null;
 
 export function getCurrentSessionId(): string | null {
-  return currentSessionId;
+  if (currentSessionId) return currentSessionId;
+  if (typeof window !== "undefined") {
+    try {
+      const stored = window.sessionStorage.getItem("kova_active_exploration_session");
+      if (stored) {
+        currentSessionId = stored;
+        return stored;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+export function setCurrentSessionId(id: string | null): void {
+  currentSessionId = id;
+  if (typeof window !== "undefined") {
+    try {
+      if (id) {
+        window.sessionStorage.setItem("kova_active_exploration_session", id);
+      } else {
+        window.sessionStorage.removeItem("kova_active_exploration_session");
+      }
+    } catch {}
+  }
 }
 
 export function getCurrentProjectId(): string | null {
-  return currentProjectId;
+  if (currentProjectId) return currentProjectId;
+  if (typeof window !== "undefined") {
+    try {
+      const stored = window.sessionStorage.getItem("kova_active_exploration_project");
+      if (stored) {
+        currentProjectId = stored;
+        return stored;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+export function setCurrentProjectId(id: string | null): void {
+  currentProjectId = id;
+  if (typeof window !== "undefined") {
+    try {
+      if (id) {
+        window.sessionStorage.setItem("kova_active_exploration_project", id);
+      } else {
+        window.sessionStorage.removeItem("kova_active_exploration_project");
+      }
+    } catch {}
+  }
 }
 
 export async function startExploration(
@@ -604,20 +655,21 @@ export async function startExploration(
 
   try {
     const session = await createExplorationSession(cleanUrl, intent, token);
-    currentSessionId = session.id;
+    setCurrentSessionId(session.id);
     if (session.project_id) {
-      currentProjectId = session.project_id;
+      setCurrentProjectId(session.project_id);
     }
 
     // Safety net: periodically sync session state — runs independently of SSE
     let emptyReadyPollCount = 0;
     const pollInterval = setInterval(async () => {
-      if (!currentSessionId) {
+      const targetId = getCurrentSessionId();
+      if (!targetId) {
         clearInterval(pollInterval);
         return;
       }
       try {
-        const latest = await getExplorationSession(currentSessionId, token);
+        const latest = await getExplorationSession(targetId, token);
         const normalizedState = normalizeExploreStatus(latest.status);
 
         // Emit data events for any missed state BEFORE state_change
@@ -707,21 +759,24 @@ export async function submitCredential(
   password: string,
   onEvent: (event: ExplorationEvent) => void,
   signal?: AbortSignal,
-  token?: string
+  token?: string,
+  sessionId?: string | null
 ): Promise<void> {
-  if (!currentSessionId) {
+  const targetSessionId = sessionId || getCurrentSessionId();
+  if (!targetSessionId) {
     throw new Error("No active exploration session");
   }
+  setCurrentSessionId(targetSessionId);
 
   onEvent({ type: "state_change", state: "authenticating" });
 
   try {
-    const updated = await submitExplorationCredentials(currentSessionId, email, password, false, token);
+    const updated = await submitExplorationCredentials(targetSessionId, email, password, false, token);
     if (updated?.status) {
       onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
     }
-    if (activeStreamSessionId !== currentSessionId) {
-      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    if (activeStreamSessionId !== targetSessionId) {
+      streamExplorationEvents(targetSessionId, onEvent, signal, token).catch(() => {});
     }
   } catch (err) {
     // If the POST itself fails (network, server), report it
@@ -735,17 +790,20 @@ export async function submitExistingCredential(
   credentialId: string,
   onEvent: (event: ExplorationEvent) => void,
   signal?: AbortSignal,
-  token?: string
+  token?: string,
+  sessionId?: string | null
 ): Promise<void> {
-  if (!currentSessionId) {
+  const targetSessionId = sessionId || getCurrentSessionId();
+  if (!targetSessionId) {
     throw new Error("No active exploration session");
   }
+  setCurrentSessionId(targetSessionId);
 
   onEvent({ type: "state_change", state: "authenticating" });
 
   try {
     const updated = await submitExplorationCredentials(
-      currentSessionId,
+      targetSessionId,
       { credentialId },
       undefined,
       false,
@@ -754,8 +812,8 @@ export async function submitExistingCredential(
     if (updated?.status) {
       onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
     }
-    if (activeStreamSessionId !== currentSessionId) {
-      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    if (activeStreamSessionId !== targetSessionId) {
+      streamExplorationEvents(targetSessionId, onEvent, signal, token).catch(() => {});
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not sign in with stored credential.";
@@ -770,18 +828,21 @@ export async function answerQuestion(
   answer: string,
   onEvent: (event: ExplorationEvent) => void,
   signal?: AbortSignal,
-  token?: string
+  token?: string,
+  sessionId?: string | null
 ): Promise<void> {
-  if (!currentSessionId) {
+  const targetSessionId = sessionId || getCurrentSessionId();
+  if (!targetSessionId) {
     throw new Error("No active exploration session");
   }
+  setCurrentSessionId(targetSessionId);
 
   onEvent({ type: "state_change", state: "discovering" });
 
   try {
-    await submitExplorationAnswer(currentSessionId, questionId, answer, token);
-    if (activeStreamSessionId !== currentSessionId) {
-      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    await submitExplorationAnswer(targetSessionId, questionId, answer, token);
+    if (activeStreamSessionId !== targetSessionId) {
+      streamExplorationEvents(targetSessionId, onEvent, signal, token).catch(() => {});
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to submit answer";
@@ -791,17 +852,24 @@ export async function answerQuestion(
 }
 
 export async function cancelExploration(
-  onEvent: (event: ExplorationEvent) => void,
-  token?: string
+  onEvent?: (event: ExplorationEvent) => void,
+  token?: string,
+  sessionId?: string | null
 ): Promise<void> {
-  if (currentSessionId) {
+  const targetSessionId = sessionId || getCurrentSessionId();
+  if (targetSessionId) {
     try {
-      await cancelExplorationSession(currentSessionId, token);
+      await cancelExplorationSession(targetSessionId, token);
     } catch {
       // Best-effort cancel
     }
+    if (currentSessionId === targetSessionId) {
+      setCurrentSessionId(null);
+    }
   }
-  onEvent({ type: "state_change", state: "cancelled" });
+  if (onEvent) {
+    onEvent({ type: "state_change", state: "cancelled" });
+  }
 }
 
 export async function createAccount(
@@ -809,21 +877,24 @@ export async function createAccount(
   password: string | undefined,
   onEvent: (event: ExplorationEvent) => void,
   signal?: AbortSignal,
-  token?: string
+  token?: string,
+  sessionId?: string | null
 ): Promise<void> {
-  if (!currentSessionId) {
+  const targetSessionId = sessionId || getCurrentSessionId();
+  if (!targetSessionId) {
     throw new Error("No active exploration session");
   }
+  setCurrentSessionId(targetSessionId);
 
   onEvent({ type: "state_change", state: "authenticating" });
 
   try {
-    const updated = await createExplorationAccount(currentSessionId, email, password, token);
+    const updated = await createExplorationAccount(targetSessionId, email, password, token);
     if (updated?.status) {
       onEvent({ type: "state_change", state: normalizeExploreStatus(updated.status) });
     }
-    if (activeStreamSessionId !== currentSessionId) {
-      streamExplorationEvents(currentSessionId, onEvent, signal, token).catch(() => {});
+    if (activeStreamSessionId !== targetSessionId) {
+      streamExplorationEvents(targetSessionId, onEvent, signal, token).catch(() => {});
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not create account on the server.";
