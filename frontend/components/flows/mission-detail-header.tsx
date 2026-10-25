@@ -7,6 +7,7 @@ import type { Mission } from "@/lib/types";
 import { runMission, deleteMission, updateMission } from "@/lib/api/missions";
 import { getErrorMessage } from "@/lib/api/errors";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { Breadcrumbs } from "@/components/shared/breadcrumbs";
 import { ModeBadge } from "@/components/shared/mode-badge";
 import { Button } from "@/components/ui/button";
 import { AdjustMissionDialog } from "./adjust-mission-dialog";
@@ -93,19 +94,7 @@ export function MissionDetailHeader({
   return (
     <div className="mb-8 space-y-4">
       {/* Breadcrumb / Back Link */}
-      <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
-        <Link
-          href="/flows"
-          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-        >
-          <MaterialIcon name="arrow_back" size={16} />
-          <span>Flows</span>
-        </Link>
-        <span className="text-border">/</span>
-        <span className="text-foreground font-medium truncate max-w-[200px] sm:max-w-xs">
-          {mission.name}
-        </span>
-      </nav>
+      <Breadcrumbs parentHref="/flows" parentLabel="Flows" currentLabel={mission.name} />
 
       {error && (
         <div

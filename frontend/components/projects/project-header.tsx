@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { Breadcrumbs } from "@/components/shared/breadcrumbs";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Button, buttonVariants } from "@/components/ui/button";
 import type { Project } from "@/lib/types";
@@ -33,22 +34,7 @@ export function ProjectHeader({
 
   return (
     <div className="mb-8">
-      <nav
-        aria-label="Breadcrumb"
-        className="mb-4 flex items-center gap-1.5 text-body-sm text-muted-foreground"
-      >
-        <Link
-          href="/projects"
-          className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-        >
-          <MaterialIcon name="arrow_back" size={16} />
-          <span>Products</span>
-        </Link>
-        <span className="text-border">/</span>
-        <span className="text-foreground font-medium truncate max-w-[200px] sm:max-w-xs">
-          {currentProject.name}
-        </span>
-      </nav>
+        <Breadcrumbs parentHref="/projects" parentLabel="Products" currentLabel={currentProject.name} className="mb-4" />
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-4 min-w-0">
