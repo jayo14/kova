@@ -150,3 +150,37 @@ async def test_test_credentials_ref_must_belong_to_user():
         )
         with pytest.raises(ValueError, match="test_credentials_ref must reference a credential owned by the user"):
             await service._validate_create(data, user_id=user_a)
+
+
+def test_project_model_and_schema_logo_url():
+    from app.modules.projects.models import Project
+    from app.modules.projects.schemas import ProjectRead
+    from datetime import datetime, timezone
+
+    # 1. Fallback logo computed from base_url
+    p = Project(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        name="Quiza Ai",
+        base_url="https://quiza-ai.vercel.app",
+        env_config={},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    assert p.logo_url == "https://www.google.com/s2/favicons?domain=quiza-ai.vercel.app&sz=128"
+    read_dto = ProjectRead.model_validate(p)
+    assert read_dto.logo_url == "https://www.google.com/s2/favicons?domain=quiza-ai.vercel.app&sz=128"
+
+    # 2. Custom extracted logo from analysis in env_config
+    p_with_logo = Project(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        name="Quiza Ai",
+        base_url="https://quiza-ai.vercel.app",
+        env_config={"logo_url": "https://quiza-ai.vercel.app/brand-logo.svg"},
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    assert p_with_logo.logo_url == "https://quiza-ai.vercel.app/brand-logo.svg"
+    read_with_logo = ProjectRead.model_validate(p_with_logo)
+    assert read_with_logo.logo_url == "https://quiza-ai.vercel.app/brand-logo.svg"

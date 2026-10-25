@@ -7,10 +7,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class EnvironmentConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
     target: Literal["development", "staging", "production"] = "staging"
     base_url_override: str | None = None
     allowed_hosts: list[str] | None = None
     blocked_hosts: list[str] | None = None
+    logo_url: str | None = None
+    favicon_url: str | None = None
 
 
 class ExecutionLimits(BaseModel):
@@ -49,6 +52,7 @@ class ProjectCreate(BaseModel):
     safety_restrictions: SafetyRestrictions = Field(default_factory=SafetyRestrictions)
     browser_settings: BrowserSettings = Field(default_factory=BrowserSettings)
     test_credentials_ref: uuid.UUID | None = None
+    logo_url: str | None = None
 
     @field_validator("base_url", mode="before")
     @classmethod
@@ -101,6 +105,7 @@ class ProjectRead(BaseModel):
     safety_restrictions: SafetyRestrictions = Field(default_factory=SafetyRestrictions)
     browser_settings: BrowserSettings = Field(default_factory=BrowserSettings)
     test_credentials_ref: uuid.UUID | None = None
+    logo_url: str | None = None
 
     @field_validator("env_config", mode="before")
     @classmethod

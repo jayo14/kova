@@ -39,13 +39,24 @@ class ProjectService:
 
     async def create_project(self, data: ProjectCreate, user_id: uuid.UUID):
         await self._validate_create(data, user_id)
+        env_dict = data.env_config.model_dump() if data.env_config else {}
+        if not env_dict.get("logo_url") and data.base_url:
+            import re
+            from urllib.parse import urlparse
+            try:
+                clean_host = re.sub(r"^www\d*\.", "", (urlparse(data.base_url).hostname or "").lower())
+                if clean_host:
+                    env_dict["logo_url"] = f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128"
+            except Exception:
+                pass
+
         return await self.repo.create(
             user_id=user_id,
             name=data.name,
             base_url=data.base_url,
             description=data.description,
             product_goal=data.product_goal,
-            env_config=data.env_config.model_dump() if data.env_config else {},
+            env_config=env_dict,
             execution_limits=data.execution_limits.model_dump() if data.execution_limits else {},
             safety_restrictions=data.safety_restrictions.model_dump() if data.safety_restrictions else {},
             browser_settings=data.browser_settings.model_dump() if data.browser_settings else {},

@@ -130,12 +130,15 @@ class ExplorationService:
         if not matched_project:
             project_name = extract_project_name(hostname)
             base_url = f"{parsed.scheme or 'https'}://{hostname}"
+            clean_host = re.sub(r"^www\d*\.", "", (hostname or "").lower())
+            default_favicon = f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128" if clean_host else None
 
             matched_project = await self.project_repo.create(
                 user_id=user_id,
                 name=project_name,
                 base_url=base_url,
                 description=f"Automated project for {base_url}",
+                env_config={"logo_url": default_favicon, "favicon_url": default_favicon} if default_favicon else {},
             )
 
         # 2. Create exploration session
@@ -591,10 +594,25 @@ class ExplorationService:
                                 await repo.update_status(
                                     session_id=session_id,
                                     credential_request=raw_auth,
-                                )
+                                    )
                                 await db.commit()
                             except Exception as e:
                                 logger.warning("Failed to persist credential request for session %s: %s", session_id, e)
+                        elif event_type == "brand.discovered" and isinstance(payload, dict):
+                            if resolved_project_id:
+                                try:
+                                    proj_to_update = await self.project_repo.get_by_id(resolved_project_id)
+                                    if proj_to_update:
+                                        cur_env = dict(proj_to_update.env_config or {})
+                                        new_logo = payload.get("logo_url")
+                                        if new_logo and cur_env.get("logo_url") != new_logo:
+                                            cur_env["logo_url"] = new_logo
+                                            if payload.get("favicon_url"):
+                                                cur_env["favicon_url"] = payload.get("favicon_url")
+                                            proj_to_update.env_config = cur_env
+                                            await db.commit()
+                                except Exception as be:
+                                    logger.debug("Could not update project brand on event: %s", be)
                     except Exception as ex:
                         logger.warning("Failed to record event %s: %s", event_type, ex)
                         try:
@@ -705,6 +723,20 @@ class ExplorationService:
                             await event_emitter("product_graph.updated", {"project_id": str(resolved_project_id)})
                     except Exception as pg_e:
                         logger.warning("Could not persist discovery to Product Graph: %s", pg_e)
+
+                    brand_data = result.get("brand_metadata")
+                    if brand_data:
+                        try:
+                            proj_final = await self.project_repo.get_by_id(resolved_project_id)
+                            if proj_final:
+                                final_env = dict(proj_final.env_config or {})
+                                if brand_data.get("logo_url"):
+                                    final_env["logo_url"] = brand_data["logo_url"]
+                                if brand_data.get("favicon_url"):
+                                    final_env["favicon_url"] = brand_data["favicon_url"]
+                                proj_final.env_config = final_env
+                        except Exception as b_err:
+                            logger.debug("Could not save final brand metadata: %s", b_err)
 
                 await db.commit()
 
