@@ -1463,8 +1463,15 @@ async def diagnose_auth_failure(
 
     unfilled = dom_data.get("unfilledRequired") or []
     if unfilled:
-        missing_labels = [f.get("label") or f.get("name") for f in unfilled if f.get("name") or f.get("label")]
-        unfilled_names = [f.get("name", "").lower() for f in unfilled]
+        missing_labels = [
+            f if isinstance(f, str) else (f.get("label") or f.get("name") or "")
+            for f in unfilled
+            if (isinstance(f, str) and f) or (isinstance(f, dict) and (f.get("name") or f.get("label")))
+        ]
+        unfilled_names = [
+            f.lower() if isinstance(f, str) else f.get("name", "").lower()
+            for f in unfilled
+        ]
         is_custom = any(k not in ("email", "password", "name", "username") for k in unfilled_names)
         category = AuthFailureCategory.CUSTOM_FIELDS_REQUIRED if is_custom else AuthFailureCategory.CLIENT_VALIDATION
         can_auto_recover = any(
@@ -1475,7 +1482,7 @@ async def diagnose_auth_failure(
             category=category,
             detail=f"Registration form has required fields not filled: {', '.join(missing_labels)}.",
             missing_fields=missing_labels,
-            unfilled_required_fields=unfilled,
+            unfilled_required_fields=unfilled if isinstance(unfilled, list) else [],
             can_retry_autonomously=can_auto_recover,
             recommended_recovery_action="fill_missing_fields" if can_auto_recover else "continue_public_exploration",
             evidence=evidence,
