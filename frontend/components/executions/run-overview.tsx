@@ -13,6 +13,7 @@ import {
 import { getExecution, getExecutionEvents } from "@/lib/api/executions";
 import { mapExecutionEvents } from "@/lib/executions/event-mapper";
 import { ExecutionDetailPage } from "./execution-detail-page";
+import { RunHeader } from "./run-header";
 import type { ExecutionDetail, ActivityItem, ExecutionEvent } from "@/lib/types";
 
 interface RunOverviewProps {
@@ -173,61 +174,18 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
     );
   }
 
-  const isTerminal = ["PASSED", "FAILED", "CANCELLED"].includes(run.status);
   const isRunning = run.status === "RUNNING";
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       {/* Top Navigation & Status Bar */}
       <div className="flex flex-col gap-4 bg-card/60 backdrop-blur-sm border border-border/60 rounded-xl p-5 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="space-y-1">
-            <div className="flex items-center gap-2">
-              <Link
-                href="/executions"
-                className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <MaterialIcon name="arrow_back" className="w-3.5 h-3.5" />
-                All Runs
-              </Link>
-              <span className="text-muted-foreground/40">•</span>
-              <span className="text-xs font-mono text-muted-foreground">Run #{run.id.slice(0, 8)}</span>
-            </div>
-            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground flex items-center gap-2.5">
-              <span>Validation Run Overview</span>
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${
-                  run.status === "PASSED"
-                    ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
-                    : run.status === "FAILED"
-                    ? "bg-destructive/10 text-destructive border-destructive/20"
-                    : run.status === "CANCELLED"
-                    ? "bg-muted text-muted-foreground border-border"
-                    : "bg-blue-500/10 text-blue-600 border-blue-500/20"
-                }`}
-              >
-                {isRunning && <MaterialIcon name="sync" className="w-3.5 h-3.5 animate-spin" />}
-                {run.status === "PASSED" && <MaterialIcon name="check_circle" className="w-3.5 h-3.5 text-emerald-600" />}
-                {run.status === "FAILED" && <MaterialIcon name="error" className="w-3.5 h-3.5 text-destructive" />}
-                {run.status}
-              </span>
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-2.5">
-            {isRunning && (
-              <button
-                type="button"
-                onClick={handleCancelRun}
-                disabled={isCancelling}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-destructive hover:bg-destructive/10 border border-destructive/30 transition-colors disabled:opacity-50"
-              >
-                <MaterialIcon name="stop" className="w-4 h-4" />
-                {isCancelling ? "Cancelling..." : "Cancel Run"}
-              </button>
-            )}
-          </div>
-        </div>
+        <RunHeader
+          runId={run.id}
+          status={run.status}
+          isCancelling={isCancelling}
+          onCancel={handleCancelRun}
+        />
 
         {/* Progress Bar & Counters */}
         <div className="space-y-2 pt-2 border-t border-border/40">
