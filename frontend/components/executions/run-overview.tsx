@@ -12,6 +12,7 @@ import {
 import { getExecution, getExecutionEvents } from "@/lib/api/executions";
 import { mapExecutionEvents } from "@/lib/executions/event-mapper";
 import { ExecutionDetailPage } from "./execution-detail-page";
+import { ExecutionCancelDialog } from "./execution-cancel-dialog";
 import { JourneyList } from "./journey-list";
 import { RunHeader } from "./run-header";
 import { RunSummaryStats } from "./run-summary-stats";
@@ -36,6 +37,7 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
   const [loadingActive, setLoadingActive] = useState(false);
 
   const [isCancelling, startCancelTransition] = useTransition();
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
 
   // Load run state on mount or runId change
   useEffect(() => {
@@ -183,7 +185,7 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
           runId={run.id}
           status={run.status}
           isCancelling={isCancelling}
-          onCancel={handleCancelRun}
+          onCancel={() => setCancelDialogOpen(true)}
         />
 
         <RunSummaryStats
@@ -221,6 +223,18 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
           )}
         </div>
       </div>
+
+      <ExecutionCancelDialog
+        open={cancelDialogOpen}
+        onOpenChange={setCancelDialogOpen}
+        title="Stop this run?"
+        description={`Kova will stop the remaining missions in run #${run.id.slice(0, 8)}.`}
+        onConfirm={() => {
+          setCancelDialogOpen(false);
+          handleCancelRun();
+        }}
+        loading={isCancelling}
+      />
     </div>
   );
 }

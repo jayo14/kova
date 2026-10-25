@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   Dialog,
   DialogContent,
@@ -14,7 +15,9 @@ import { MaterialIcon } from "@/components/shared/material-icon";
 interface ExecutionCancelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  missionName: string;
+  missionName?: string;
+  title?: string;
+  description?: ReactNode;
   onConfirm: () => void;
   loading?: boolean;
 }
@@ -23,6 +26,8 @@ export function ExecutionCancelDialog({
   open,
   onOpenChange,
   missionName,
+  title,
+  description,
   onConfirm,
   loading = false,
 }: ExecutionCancelDialogProps) {
@@ -30,9 +35,13 @@ export function ExecutionCancelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>Stop this execution?</DialogTitle>
+          <DialogTitle>{title ?? "Stop this execution?"}</DialogTitle>
           <DialogDescription className="text-body-sm text-muted-foreground pt-1">
-            Kova will stop working on &ldquo;{missionName}&rdquo;.
+            {description ?? (
+              <>
+                Kova will stop working on &ldquo;{missionName ?? "this execution"}&rdquo;.
+              </>
+            )}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-2 pt-2">
