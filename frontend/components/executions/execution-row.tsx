@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ExecutionDetail } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/components/shared/status-badge";
 
 interface ExecutionRowProps {
   execution: ExecutionDetail;
@@ -46,21 +46,7 @@ export function ExecutionRow({ execution }: ExecutionRowProps) {
       </div>
 
       <div className="flex items-center gap-3 shrink-0">
-        <span
-          className={cn(
-            "inline-flex items-center gap-1.5 text-caption font-medium px-2.5 py-1 rounded-md",
-            statusConfig.badgeClass
-          )}
-        >
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              statusConfig.dotClass,
-              statusConfig.isAnimated && "animate-pulse"
-            )}
-          />
-          <span>{statusConfig.label}</span>
-        </span>
+        <StatusBadge config={statusConfig} className="px-2.5 py-1 rounded-md" />
 
         <span suppressHydrationWarning className="text-caption text-muted-foreground hidden sm:inline min-w-[65px] text-right">
           {relativeTime(execution.createdAt)}

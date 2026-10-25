@@ -6,8 +6,8 @@ import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { isActiveStatus } from "@/lib/executions/status";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { ModeBadge } from "@/components/shared/mode-badge";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { StreamConnectionStatus } from "@/lib/realtime/types";
 
 interface ExecutionHeaderProps {
@@ -86,21 +86,7 @@ export function ExecutionHeader({
             <span aria-hidden="true">·</span>
 
             {/* Execution Status Badge */}
-            <span
-              className={cn(
-                "inline-flex items-center gap-1.5 text-caption font-medium px-2 py-0.5 rounded-md",
-                statusConfig.badgeClass
-              )}
-            >
-              <span
-                className={cn(
-                  "h-1.5 w-1.5 rounded-full",
-                  statusConfig.dotClass,
-                  statusConfig.isAnimated && "animate-pulse"
-                )}
-              />
-              <span>{statusConfig.label}</span>
-            </span>
+            <StatusBadge config={statusConfig} className="px-2 py-0.5 rounded-md" />
 
             {/* Validation Mode Badge */}
             <ModeBadge mode={execution.mode} />

@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import type { MissionExecution } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { StatusBadge } from "@/components/shared/status-badge";
 import { Button } from "@/components/ui/button";
 import { runMission } from "@/lib/api/missions";
 import { cn } from "@/lib/utils";
@@ -131,21 +132,7 @@ export function MissionExecutionHistory({
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 text-caption font-medium px-2 py-0.5 rounded-md",
-                    latestStatus.badgeClass
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "h-1.5 w-1.5 rounded-full",
-                      latestStatus.dotClass,
-                      latestStatus.isAnimated && "animate-pulse"
-                    )}
-                  />
-                  <span>{latestStatus.label}</span>
-                </span>
+                <StatusBadge config={latestStatus} className="px-2 py-0.5 rounded-md" />
                 <span className="text-caption text-muted-foreground">
                   {formatExactDate(latest.createdAt)}
                 </span>

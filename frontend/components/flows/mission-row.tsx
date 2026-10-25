@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Mission, MissionExecution } from "@/lib/types";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { cn } from "@/lib/utils";
+import { StatusBadge } from "@/components/shared/status-badge";
 
 interface MissionRowProps {
   mission: Mission;
@@ -81,21 +81,9 @@ export function MissionRow({
 
       <div className="flex items-center gap-3 shrink-0">
         {statusConfig && lastExecution ? (
-          <span
-            className={cn(
-              "hidden sm:inline-flex items-center gap-1.5 text-caption font-medium px-2 py-0.5 rounded-md",
-              statusConfig.badgeClass
-            )}
-          >
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                statusConfig.dotClass,
-                statusConfig.isAnimated && "animate-pulse"
-              )}
-            />
-            <span>{statusConfig.label}</span>
-            <span suppressHydrationWarning className="text-muted-foreground/60 font-normal">
+          <span className="hidden sm:inline-flex items-center gap-1.5">
+            <StatusBadge config={statusConfig} className="px-2 py-0.5 rounded-md" />
+            <span suppressHydrationWarning className="text-caption text-muted-foreground/60 font-normal">
               · {relativeTime(lastExecution.createdAt)}
             </span>
           </span>
