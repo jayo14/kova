@@ -507,3 +507,157 @@ async def cancel_run(
     await db.commit()
 
     return await get_run(run_id=run_id, user=user, db=db)
+
+
+class RunControlResponse(BaseModel):
+    run_id: str
+    state: str
+    executions: dict[str, Any]
+
+
+@router.get("/{run_id}/control", response_model=RunControlResponse)
+async def get_run_control(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve aggregate control state for all executions in a run."""
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid run ID")
+
+    run_stmt = select(ValidationRun).where(ValidationRun.id == run_uuid)
+    run_res = await db.execute(run_stmt)
+    run = run_res.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    await _verify_project_access(db, run.project_id, user.id)
+
+    from app.engine.execution.control import ControlState, get_control_record
+
+    exec_controls: dict[str, Any] = {}
+    states: list[ControlState] = []
+
+    for eid_str in run.execution_ids or []:
+        rec = await get_control_record(eid_str)
+        exec_controls[eid_str] = rec.to_dict()
+        states.append(rec.state if isinstance(rec.state, ControlState) else ControlState(rec.state))
+
+    # Determine aggregate state
+    if any(s == ControlState.HUMAN_CONTROL for s in states):
+        aggregate_state = "HUMAN_CONTROL"
+    elif any(s == ControlState.PAUSE_REQUESTED for s in states):
+        aggregate_state = "PAUSE_REQUESTED"
+    elif states and all(s in (ControlState.PAUSED, ControlState.COMPLETED, ControlState.FAILED, ControlState.CANCELLED) for s in states) and any(s == ControlState.PAUSED for s in states):
+        aggregate_state = "PAUSED"
+    elif any(s == ControlState.RUNNING for s in states):
+        aggregate_state = "RUNNING"
+    elif any(s == ControlState.RESUME_REQUESTED for s in states):
+        aggregate_state = "RESUME_REQUESTED"
+    else:
+        aggregate_state = run.status or "IDLE"
+
+    return RunControlResponse(
+        run_id=run_id,
+        state=aggregate_state,
+        executions=exec_controls,
+    )
+
+
+@router.post("/{run_id}/pause", response_model=RunControlResponse)
+async def pause_run(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Pause all active executions in the run at their next action boundary."""
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid run ID")
+
+    run_stmt = select(ValidationRun).where(ValidationRun.id == run_uuid)
+    run_res = await db.execute(run_stmt)
+    run = run_res.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    await _verify_project_access(db, run.project_id, user.id)
+
+    if run.status in ("PASSED", "FAILED", "CANCELLED"):
+        raise HTTPException(status_code=409, detail=f"Cannot pause run in terminal state ({run.status})")
+
+    from app.engine.execution.control import request_pause
+    exec_repo = ExecutionRepository(db)
+    exec_controls: dict[str, Any] = {}
+
+    for eid_str in run.execution_ids or []:
+        try:
+            ex = await exec_repo.get_by_id(uuid.UUID(eid_str))
+            if ex and ex.status not in (
+                ExecutionStatus.COMPLETED.value,
+                ExecutionStatus.FAILED.value,
+                ExecutionStatus.CANCELLED.value,
+                ExecutionStatus.ERROR.value,
+            ):
+                rec = await request_pause(eid_str, reason="Run paused by user")
+                exec_controls[eid_str] = rec.to_dict()
+        except Exception as e:
+            logger.warning("Failed to pause execution %s in run %s: %s", eid_str, run_id, e)
+
+    return RunControlResponse(
+        run_id=run_id,
+        state="PAUSE_REQUESTED",
+        executions=exec_controls,
+    )
+
+
+@router.post("/{run_id}/resume", response_model=RunControlResponse)
+async def resume_run(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Resume all paused executions in the run back to agent control."""
+    try:
+        run_uuid = uuid.UUID(run_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid run ID")
+
+    run_stmt = select(ValidationRun).where(ValidationRun.id == run_uuid)
+    run_res = await db.execute(run_stmt)
+    run = run_res.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    await _verify_project_access(db, run.project_id, user.id)
+
+    if run.status in ("PASSED", "FAILED", "CANCELLED"):
+        raise HTTPException(status_code=409, detail=f"Cannot resume run in terminal state ({run.status})")
+
+    from app.engine.execution.control import request_resume
+    exec_repo = ExecutionRepository(db)
+    exec_controls: dict[str, Any] = {}
+
+    for eid_str in run.execution_ids or []:
+        try:
+            ex = await exec_repo.get_by_id(uuid.UUID(eid_str))
+            if ex and ex.status not in (
+                ExecutionStatus.COMPLETED.value,
+                ExecutionStatus.FAILED.value,
+                ExecutionStatus.CANCELLED.value,
+                ExecutionStatus.ERROR.value,
+            ):
+                rec = await request_resume(eid_str)
+                exec_controls[eid_str] = rec.to_dict()
+        except Exception as e:
+            logger.warning("Failed to resume execution %s in run %s: %s", eid_str, run_id, e)
+
+    return RunControlResponse(
+        run_id=run_id,
+        state="RESUME_REQUESTED",
+        executions=exec_controls,
+    )
+
