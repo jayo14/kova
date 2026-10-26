@@ -132,6 +132,7 @@ _redis: aioredis.Redis | None = None
 _redis_loop: asyncio.AbstractEventLoop | None = None
 _redis_checked: bool = False
 _redis_available: bool = False
+_last_redis_check: float = 0.0
 
 
 def _get_control_lock(execution_id: str) -> asyncio.Lock:
@@ -142,7 +143,7 @@ def _get_control_lock(execution_id: str) -> asyncio.Lock:
 
 async def _get_redis() -> aioredis.Redis | None:
     """Return a fast, verified Redis client or None if Redis is not running."""
-    global _redis, _redis_loop, _redis_checked, _redis_available
+    global _redis, _redis_loop, _redis_checked, _redis_available, _last_redis_check
     loop = asyncio.get_running_loop()
 
     if _redis is not None and _redis_loop is not None and _redis_loop is not loop:
@@ -157,19 +158,21 @@ async def _get_redis() -> aioredis.Redis | None:
     if _redis is not None and _redis_available:
         return _redis
 
-    if _redis_checked and not _redis_available:
+    now = time.time()
+    if _redis_checked and not _redis_available and (now - _last_redis_check < 2.0):
         return None
 
+    _last_redis_check = now
     try:
         kwargs: dict[str, Any] = {
             "decode_responses": True,
-            "socket_connect_timeout": 0.2,
-            "socket_timeout": 0.2,
+            "socket_connect_timeout": 3.0,
+            "socket_timeout": 3.0,
         }
         if settings.REDIS_URL.startswith("rediss://"):
             kwargs["ssl_cert_reqs"] = "none"
         client = aioredis.from_url(settings.REDIS_URL, **kwargs)
-        await asyncio.wait_for(client.ping(), timeout=0.2)
+        await asyncio.wait_for(client.ping(), timeout=3.0)
         _redis = client
         _redis_loop = loop
         _redis_checked = True
@@ -180,6 +183,8 @@ async def _get_redis() -> aioredis.Redis | None:
         _redis_checked = True
         _redis_available = False
         return None
+
+
 
 
 def _state_key(execution_id: str) -> str:

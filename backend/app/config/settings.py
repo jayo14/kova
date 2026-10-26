@@ -121,7 +121,8 @@ class Settings(BaseSettings):
         return self.OIDC_ISSUER_URL
     TEMPMAIL_SERVICE_URL: str = ""   # e.g. http://localhost:8200 (fixture mail service)
     TEMPMAIL_API_KEY: str = ""
-    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://127.0.0.1:6379/0"
+
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 

@@ -28,7 +28,11 @@ _bin_redis: aioredis.Redis | None = None
 _text_loop: asyncio.AbstractEventLoop | None = None
 _bin_loop: asyncio.AbstractEventLoop | None = None
 
+_memory_frame_subscribers: dict[str, set[asyncio.Queue[tuple[bytes, str]]]] = {}
+_memory_state_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
+
 FRAME_PREFIX = b"kova:viewport:frame"
+
 STATE_PREFIX = b"kova:viewport:state"
 
 # Cap frame size to ~512KB — larger screenshots are a bug or attack
@@ -103,6 +107,13 @@ async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "obs
     """
     if not frame_bytes or len(frame_bytes) > MAX_FRAME_BYTES:
         return
+
+    # Fan out immediately to local in-memory subscribers
+    queues = list(_memory_frame_subscribers.get(execution_id, set()))
+    for q in queues:
+        if q.qsize() < 10:
+            q.put_nowait((frame_bytes, state or "observing"))
+
     try:
         r = await _bin_client()
         tag = (state or "observing").encode("ascii", errors="replace")[:32]
@@ -138,11 +149,19 @@ async def publish_state(
     if loading is not None:
         payload["loading"] = loading
     payload.update(extra)
+
+    # Fan out immediately to local in-memory subscribers
+    s_queues = list(_memory_state_subscribers.get(execution_id, set()))
+    for sq in s_queues:
+        if sq.qsize() < 20:
+            sq.put_nowait(payload)
+
     try:
         r = await _text_client()
         await r.publish(state_channel(execution_id), json.dumps(payload))
     except Exception as e:
         logger.debug("State publish failed for %s: %s", execution_id, e)
+
 
 
 async def subscribe_frames(execution_id: str) -> AsyncIterator[tuple[bytes, str]]:
@@ -198,5 +217,7 @@ async def subscribe_states(execution_id: str) -> AsyncIterator[dict]:
 
 
 async def cleanup_stream(execution_id: str) -> None:
-    """No persistent keys — channels vanish with subscribers. Hook for symmetry."""
-    return None
+    """Clear memory queues and associated stream resources."""
+    _memory_frame_subscribers.pop(execution_id, None)
+    _memory_state_subscribers.pop(execution_id, None)
+
