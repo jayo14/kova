@@ -403,3 +403,87 @@ async def test_generate_flows_api_endpoint_permissions(db_session, seed_product_
 
         app.dependency_overrides.clear()
 
+
+
+@pytest.mark.asyncio
+async def test_capability_without_grounded_page_is_not_fabricated():
+    from types import SimpleNamespace
+
+    generator = DeterministicFlowGenerator(AsyncMock())
+    cap = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="refund_orders",
+        source_files=[],
+        produces_state=[{"key": "refunded", "value": True}],
+    )
+    page = SimpleNamespace(id=uuid.uuid4(), url_pattern="/dashboard", source_files=[])
+
+    flow = await generator._generate_flow_for_capability(
+        cap=cap,
+        all_pages=[page],
+        all_actions=[],
+        all_capabilities=[cap],
+        persona=None,
+        goal=None,
+    )
+
+    assert flow is None
+
+
+@pytest.mark.asyncio
+async def test_generate_deduplicates_capability_targeted_goal_flow():
+    from types import SimpleNamespace
+
+    project_id = uuid.uuid4()
+    page = SimpleNamespace(
+        id=uuid.uuid4(),
+        url_pattern="/refund",
+        source_files=[],
+        requires_auth=False,
+    )
+    action = SimpleNamespace(
+        id=uuid.uuid4(),
+        page_id=page.id,
+        name="Submit refund",
+        selector="#refund",
+        action_type="click",
+        mutates=["refunded"],
+        expected_effect=[{"key": "refunded", "value": True}],
+    )
+    cap = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="refunds",
+        kind="primary",
+        source_files=[],
+        produces_state=[{"key": "refunded", "value": True}],
+        requires_state=[],
+        requires_capabilities=[],
+        description="Refunds",
+    )
+    goal = SimpleNamespace(
+        id=uuid.uuid4(),
+        name="Refund an order",
+        persona_id=None,
+        success_criteria=[{"key": "refunded", "value": True}],
+    )
+
+    repo = AsyncMock()
+    repo.list_pages_by_project.return_value = [page]
+    repo.list_actions_by_project.return_value = [action]
+    repo.list_capabilities_by_project.return_value = [cap]
+    repo.list_personas_by_project.return_value = []
+    repo.get_goal.return_value = goal
+
+    generator = DeterministicFlowGenerator(AsyncMock())
+    generator.repo = repo
+    flows, unresolved = await generator.generate(
+        GenerationRequest(
+            project_id=project_id,
+            goal_id=goal.id,
+            target_capability=cap.name,
+        )
+    )
+
+    assert unresolved == []
+    assert len(flows) == 1
+    assert flows[0].goal_id == goal.id
