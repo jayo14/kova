@@ -56,7 +56,11 @@ class EvidenceService:
         safe_metadata = sanitize_payload(metadata or {})
         safe_network_log = sanitize_payload(network_log) if network_log is not None else None
         safe_description = sanitize_text(description) if description is not None else None
-        safe_title = sanitize_text(title)
+        safe_title = sanitize_text(title, limit=500)
+        safe_dom = sanitize_text(dom_snapshot, limit=20000) if dom_snapshot else None
+        safe_a11y = sanitize_text(a11y_tree, limit=10000) if a11y_tree else None
+        safe_locator = sanitize_text(element_locator, limit=500) if element_locator else None
+        safe_note = sanitize_text(note, limit=1000) if note else None
 
         return await self.repo.create(
             execution_id=execution_id,
@@ -69,14 +73,14 @@ class EvidenceService:
             storage_key=storage_key,
             mime_type=mime_type,
             metadata=safe_metadata if isinstance(safe_metadata, dict) else {},
-            dom_snapshot=dom_snapshot,
-            a11y_tree=a11y_tree,
+            dom_snapshot=safe_dom,
+            a11y_tree=safe_a11y,
             network_log=safe_network_log,
             video_url=video_url,
             trace_url=trace_url,
-            element_locator=element_locator,
+            element_locator=safe_locator,
             timestamp_range=timestamp_range,
-            note=note,
+            note=safe_note,
         )
 
     async def capture_screenshot(
@@ -127,14 +131,14 @@ class EvidenceService:
                 storage_key=None,
                 mime_type=mime_type,
                 metadata=sanitize_payload({"size_bytes": len(screenshot_bytes), **(extra_data or {})}),
-                dom_snapshot=dom_snapshot,
-                a11y_tree=a11y_tree,
-                network_log=network_log,
+                dom_snapshot=sanitize_text(dom_snapshot, limit=20000) if dom_snapshot else None,
+                a11y_tree=sanitize_text(a11y_tree, limit=10000) if a11y_tree else None,
+                network_log=sanitize_payload(network_log) if network_log is not None else None,
                 video_url=video_url,
                 trace_url=trace_url,
-                element_locator=element_locator,
+                element_locator=sanitize_text(element_locator, limit=500) if element_locator else None,
                 timestamp_range=timestamp_range,
-                note=note,
+                note=sanitize_text(note, limit=1000) if note else None,
             )
 
             # 2. Upload to storage in background with retries and exponential backoff
@@ -263,14 +267,14 @@ class EvidenceService:
                 storage_key=storage_key,
                 mime_type=mime_type,
                 metadata=sanitize_payload({"checks": checks or [], **(extra_data or {})}),
-                dom_snapshot=dom_snapshot,
-                a11y_tree=a11y_tree,
-                network_log=network_log,
+                dom_snapshot=sanitize_text(dom_snapshot, limit=20000) if dom_snapshot else None,
+                a11y_tree=sanitize_text(a11y_tree, limit=10000) if a11y_tree else None,
+                network_log=sanitize_payload(network_log) if network_log is not None else None,
                 video_url=video_url,
                 trace_url=trace_url,
-                element_locator=element_locator,
+                element_locator=sanitize_text(element_locator, limit=500) if element_locator else None,
                 timestamp_range=timestamp_range,
-                note=note,
+                note=sanitize_text(note, limit=1000) if note else None,
             )
 
             await self.event_service.record_event(

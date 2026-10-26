@@ -10,15 +10,51 @@ import uuid
 
 
 def sanitize_text(value: object, *, limit: int = 1000) -> str:
-    """Remove common secret-bearing values before persisting/rendering diagnostics."""
+    """Remove common secret-bearing values and compound credentials before persisting/rendering diagnostics."""
     text = str(value or "")
-    text = re.sub(r"(?i)(password|passwd|token|secret|authorization|cookie|api[_-]?key)(\s*[:=]\s*)([^\s,;]+)", r"\1\2[REDACTED]", text)
-    text = re.sub(r"(?i)bearer\s+[a-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
-    text = re.sub(r"https?://[^\s\"']+", lambda match: _safe_url(match.group(0)), text)
+    # 1. Authorization header format
+    text = re.sub(r"(?i)\bauthorization\s*:\s*(?:bearer|basic|token)?\s*[^\s,;\"}\]]+", "Authorization: [REDACTED]", text)
+    # 2. Bearer / Basic / Token auth values
+    text = re.sub(r"(?i)\b(bearer|basic)\s+[a-z0-9._~+/=-]+", r"\1 [REDACTED]", text)
+    # 3. Standalone JWT tokens
+    text = re.sub(r"\beyJ[a-zA-Z0-9_-]{8,}\.eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]+", "[JWT REDACTED]", text)
+    # 4. JSON key-value pairs in text / DOM snapshots (handles unescaped and escaped quotes)
+    text = re.sub(
+        r'(?i)\\*[\"\']([a-zA-Z0-9_-]*(?:password|passwd|token|secret|apiKey|api_key|session|clientSecret|privateKey|accessToken|refreshToken)[a-zA-Z0-9_-]*)\\*[\"\']\s*[:=]\s*\\*[\"\']([^\"\'\\\\]+)\\*[\"\']',
+        r'\"\1\": \"[REDACTED]\"',
+        text,
+    )
+    # 5. Key-value pairs in text (query strings, config, cookies)
+    text = re.sub(
+        r"(?i)(password|passwd|token|secret|cookie|set-cookie|api[_-]?key|session[_-]?id|session|jwt|client[_-]?secret|private[_-]?key)(\s*[:=]\s*)([^\s,;\"}\]]+)",
+        r"\1\2[REDACTED]",
+        text,
+    )
+    # 6. URLs with credentials and query parameters (HTTP, DB, Redis, AMQP)
+    text = re.sub(r"(?:https?|postgres(?:ql)?|mysql|redis|amqp)://[^\s\"\'\)]+", lambda match: _safe_url(match.group(0)), text)
     return text[:limit]
 
 
-_SENSITIVE_PATTERNS = ("password", "passwd", "token", "secret", "authorization", "cookie", "api_key", "access_key", "credential", "auth_token")
+_SENSITIVE_PATTERNS = (
+    "password",
+    "passwd",
+    "token",
+    "secret",
+    "authorization",
+    "cookie",
+    "api_key",
+    "access_key",
+    "credential",
+    "auth_token",
+    "session",
+    "session_id",
+    "jwt",
+    "private_key",
+    "client_secret",
+    "id_token",
+    "refresh_token",
+    "access_token",
+)
 
 
 def _is_sensitive_key(key: str) -> bool:
