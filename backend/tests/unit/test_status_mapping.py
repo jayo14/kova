@@ -188,3 +188,21 @@ async def test_mark_unverified_persists_reason_and_category():
     assert status == ExecutionStatus.UNVERIFIED
     assert update_status.call_args.kwargs["error_code"] == "UNVERIFIED"
     assert update_status.call_args.kwargs["failure_category"] == "ai_proposal_rejected"
+
+
+@pytest.mark.asyncio
+async def test_execute_timeout_persists_terminal_status():
+    from unittest.mock import AsyncMock, patch
+    from app.engine.execution.runner import FlowRunner
+
+    runner = FlowRunner()
+    exec_id = uuid.uuid4()
+    with patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)), patch.object(
+        runner, "_persist_terminal_failure", AsyncMock()
+    ) as persist:
+        result = await runner.execute(exec_id, timeout_seconds=5)
+
+    assert result["state"] == "FAILED"
+    persist.assert_awaited_once()
+    assert persist.await_args.args[0] == exec_id
+    assert persist.await_args.args[1] == "EXECUTION_TIMEOUT"

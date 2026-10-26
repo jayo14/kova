@@ -299,6 +299,11 @@ class FlowRunner:
             return result
         except asyncio.TimeoutError:
             logger.warning("Execution %s timed out after %ds", execution_id, effective_timeout)
+            await self._persist_terminal_failure(
+                execution_id,
+                ErrorCode.EXECUTION_TIMEOUT,
+                f"Execution timed out after {effective_timeout}s",
+            )
             return {
                 "success": False,
                 "execution_id": str(execution_id),
