@@ -38,6 +38,42 @@ STATE_PREFIX = b"kova:viewport:state"
 # Cap frame size to ~512KB — larger screenshots are a bug or attack
 MAX_FRAME_BYTES = 512 * 1024
 
+_SENSITIVE_QUERY_KEYS = {
+    "token",
+    "secret",
+    "code",
+    "key",
+    "api_key",
+    "auth",
+    "password",
+    "access_token",
+    "refresh_token",
+    "id_token",
+}
+
+
+def sanitize_url(raw_url: str) -> str:
+    """Mask sensitive query parameters (token, secret, code, key, auth, password)."""
+    if not raw_url:
+        return ""
+    try:
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+        parsed = urlparse(raw_url)
+        if not parsed.query:
+            return raw_url
+        sanitized_params = []
+        for k, v in parse_qsl(parsed.query, keep_blank_values=True):
+            k_lower = k.lower()
+            if k_lower in _SENSITIVE_QUERY_KEYS or any(s in k_lower for s in ("token", "secret", "password")):
+                sanitized_params.append((k, "[hidden]"))
+            else:
+                sanitized_params.append((k, v))
+        return urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(sanitized_params), parsed.fragment)
+        )
+    except Exception:
+        return raw_url
+
 
 def frame_channel(execution_id: str) -> str:
     return f"kova:viewport:frame:{execution_id}"
@@ -154,7 +190,7 @@ async def publish_state(
     """Publish a browser/state update. Small, explicit, ephemeral."""
     payload: dict[str, Any] = {"type": "state", "state": state}
     if url:
-        payload["url"] = url
+        payload["url"] = sanitize_url(url)
     if title:
         payload["title"] = title
     if control:
