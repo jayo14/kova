@@ -2589,6 +2589,7 @@ class FlowRunner:
             texts.append(str(target.get("text", "") or ""))
             texts.append(str(target.get("css", "") or ""))
             texts.append(str(target.get("name", "") or ""))
+            texts.append(str(target.get("selector", "") or ""))
         elif isinstance(target, str):
             texts.append(target)
         combined = (step_type + " " + " ".join(texts)).lower()
