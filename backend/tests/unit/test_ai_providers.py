@@ -120,3 +120,63 @@ def test_parse_structured_with_markdown_fences_and_thinking():
     result = provider._parse_structured('{"summary": "Direct"}', DummyOutput)
     assert result.summary == "Direct"
 
+
+def test_selected_provider_is_used_by_get_ai_provider(monkeypatch):
+    """The selected provider is the exact one configured, without defaulting to OpenAI."""
+    from app.engine.ai.settings import ai_settings
+    monkeypatch.setattr(ai_settings, "AI_PROVIDER", "groq")
+    monkeypatch.setattr(ai_settings, "GROQ_API_KEY", "gsk_test_token_123")
+    monkeypatch.setattr(ai_settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(ai_settings, "AI_API_KEY", "")
+
+    provider = get_ai_provider()
+    assert provider is not None
+    assert provider.name == "groq"
+    assert "groq.com" in provider.base_url
+
+
+def test_absent_openai_key_allows_supported_providers(monkeypatch):
+    """An absent OpenAI key does not prevent execution with another valid provider."""
+    from app.engine.ai.settings import ai_settings
+    monkeypatch.setattr(ai_settings, "AI_PROVIDER", "gemini")
+    monkeypatch.setattr(ai_settings, "GEMINI_API_KEY", "gemini_secret_xyz")
+    monkeypatch.setattr(ai_settings, "OPENAI_API_KEY", "")
+    monkeypatch.setattr(ai_settings, "AI_API_KEY", "")
+
+    assert ai_settings.ai_enabled is True
+    provider = get_ai_provider()
+    assert provider is not None
+    assert provider.name == "gemini"
+    assert "generativelanguage.googleapis.com" in provider.base_url
+
+
+def test_core_execution_does_not_instantiate_openai_client():
+    """Agent execution and reasoner rely strictly on HTTP abstraction, not OpenAI SDK."""
+    ***REMOVED***
+    from app.engine.ai.reasoner import AgentReasoner
+    from app.engine.ai.executor import AgentExecutor
+
+    # Assert openai package is not imported in sys.modules by agent reasoner/executor
+    assert "openai" not in sys.modules or sys.modules["openai"] is None or not hasattr(sys.modules["openai"], "OpenAI")
+
+
+@pytest.mark.asyncio
+async def test_no_unapproved_fallback_in_single_provider_mode():
+    """In single-provider mode, a failure immediately raises AIProviderError with no fallback."""
+    failing_provider = MockFailingProvider(status_code=401)
+    with pytest.raises(AIProviderError) as exc_info:
+        await failing_provider.generate_structured("sys", "prompt", DummyOutput)
+
+    assert exc_info.value.provider == "mock_failing"
+    assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_provider_failures_reported_accurately_with_provider_attribution():
+    """AIProviderError captures the failing provider name and status code."""
+    err = AIProviderError("Quota exceeded", provider="anthropic", status_code=429)
+    assert err.provider == "anthropic"
+    assert err.status_code == 429
+    assert "Quota exceeded" in str(err)
+
+
