@@ -73,8 +73,8 @@ RECORDS: list[dict[str, Any]] = list(DEFAULT_RECORDS)
 
 def reset_state():
     """Reset state for deterministic tests."""
-    global RECORDS, SESSIONS, USERS
-    USERS = {
+    USERS.clear()
+    USERS.update({
         "testuser@kova.local": {
             "email": "testuser@kova.local",
             "name": "Test User",
@@ -87,9 +87,10 @@ def reset_state():
             "password": "AdminPassword123!",
             "role": "admin",
         },
-    }
+    })
     SESSIONS.clear()
-    RECORDS = list(DEFAULT_RECORDS)
+    RECORDS.clear()
+    RECORDS.extend(DEFAULT_RECORDS)
 
 
 def get_current_user(request: Request) -> dict[str, Any] | None:
