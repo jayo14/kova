@@ -244,6 +244,28 @@ def repair_journey(
             }
         }
 
+    # Ground success conditions in discovered workflow types
+    name_lower = (mission.name + " " + (mission.objective or "")).lower()
+    if any(k in name_lower for k in ("login", "sign in", "signin", "auth")):
+        mission.successCondition = {"auth_verified": {"auth_path": "/login"}}
+    elif any(k in name_lower for k in ("search", "filter", "find records")):
+        if not isinstance(mission.successCondition, dict) or "search_results" not in mission.successCondition:
+            mission.successCondition = {
+                "search_results": {
+                    "query": "",
+                    "expected_matches": [],
+                    "selector": "table, [role='table'], #records-table, .results",
+                }
+            }
+    elif any(k in name_lower for k in ("create", "add record", "new record", "save record", "post")):
+        if not isinstance(mission.successCondition, dict) or ("record_persisted" not in mission.successCondition and "text_visible" not in mission.successCondition):
+            mission.successCondition = {
+                "record_persisted": {
+                    "expected_text": mission.name,
+                    "reload": True,
+                }
+            }
+
     # 4. User Goal grounding
     if not mission.user_goal:
         mission.user_goal = mission.objective
@@ -285,7 +307,7 @@ def score_journey(
     # Dimension 3: Assertion quality (0.20)
     if isinstance(mission.successCondition, dict):
         keys = set(mission.successCondition.keys())
-        if "record_persisted" in keys or "text_visible" in keys or "auth_verified" in keys:
+        if "record_persisted" in keys or "search_results" in keys or "validation_error" in keys or "text_visible" in keys or "auth_verified" in keys:
             score += 0.20
         elif "element_visible" in keys:
             score += 0.15
@@ -303,6 +325,24 @@ def score_journey(
         score += 0.05
 
     return round(score, 3)
+
+
+def normalize_journey_intent(name: str, route_path: str = "") -> str:
+    """Normalize workflow intent string to detect semantic duplicate missions."""
+    n = name.strip().lower()
+    n = re.sub(r"\b(new|create|add|generate|post)\b", "create", n)
+    n = re.sub(r"\b(sign\s*in|log\s*in|signin|login|auth)\b", "login", n)
+    n = re.sub(r"\b(sign\s*up|signup|register|registration)\b", "register", n)
+    n = re.sub(r"\b(find|search|filter|browse)\b", "search", n)
+    n = re.sub(r"\b(view|list|show)\b", "view", n)
+    n = re.sub(r"[^a-z0-9 ]+", " ", n)
+    # Deduplicate adjacent identical words (e.g. 'create create' -> 'create')
+    words = [w for w in n.split() if w]
+    deduped_words: list[str] = []
+    for w in words:
+        if not deduped_words or deduped_words[-1] != w:
+            deduped_words.append(w)
+    return f"{route_path}:{' '.join(deduped_words)}"
 
 
 def deduplicate_and_rank_journeys(
@@ -333,8 +373,10 @@ def deduplicate_and_rank_journeys(
             logger.info("Excluding invalid journey '%s': %s", m.name, [d.message for d in val.defects])
             continue
 
-        # Deduplication key based on normalized intent and targets
-        key = f"{m.classification}:{m.category}:{m.name.strip().lower()}"
+        # Deduplication key based on normalized intent, category, and target path
+        route_path = (m.route_analysis or {}).get("path", "")
+        intent_norm = normalize_journey_intent(m.name, route_path)
+        key = f"{m.classification}:{m.category}:{intent_norm}"
         if key in seen_keys:
             continue
         seen_keys.add(key)
