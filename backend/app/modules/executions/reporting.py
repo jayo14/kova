@@ -18,7 +18,12 @@ def sanitize_text(value: object, *, limit: int = 1000) -> str:
     return text[:limit]
 
 
-_SENSITIVE_KEYS = {"password", "passwd", "token", "secret", "authorization", "cookie", "api_key", "access_key", "credential"}
+_SENSITIVE_PATTERNS = ("password", "passwd", "token", "secret", "authorization", "cookie", "api_key", "access_key", "credential", "auth_token")
+
+
+def _is_sensitive_key(key: str) -> bool:
+    norm = str(key).lower().replace("-", "_")
+    return any(p in norm for p in _SENSITIVE_PATTERNS)
 
 
 def sanitize_payload(payload: object) -> object:
@@ -51,7 +56,7 @@ def sanitize_payload(payload: object) -> object:
             pass
     if isinstance(payload, dict):
         return {
-            str(key): "[REDACTED]" if str(key).lower().replace("-", "_") in _SENSITIVE_KEYS
+            str(key): "[REDACTED]" if _is_sensitive_key(str(key))
             else sanitize_payload(value)
             for key, value in payload.items()
         }
