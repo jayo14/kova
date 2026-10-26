@@ -216,6 +216,10 @@ export function LiveViewport({
             }
             if (msg.cursor) setCursor(msg.cursor);
             else if (msg.state !== "paused" && msg.state !== "user_control") setCursor(null);
+          } else if (msg.type === "frame") {
+            if (msg.state && controlState !== "human" && state !== "paused" && state !== "user_control") {
+              setState(msg.state as ViewportState);
+            }
           } else if (msg.type === "takeover_request") {
             setShowTakeoverDialog(true);
           }
