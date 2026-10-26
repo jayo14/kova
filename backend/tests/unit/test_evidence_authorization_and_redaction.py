@@ -142,3 +142,40 @@ async def test_cross_project_evidence_authorization():
         with pytest.raises(HTTPException) as exc_info:
             await _verify_execution_ownership(mock_db, exec_id, user_b)
         assert exc_info.value.status_code == 404
+
+
+def test_evidence_upload_rejects_path_traversal_identifiers():
+    from app.engine.browser.evidence_storage import EvidenceStorage
+
+    store = EvidenceStorage()
+    with pytest.raises(ValueError):
+        store.upload(
+            execution_id="../../other",
+            evidence_id="shot",
+            data=b"x",
+        )
+
+
+def test_signed_url_rejects_keys_outside_execution_scope():
+    from types import SimpleNamespace
+    from app.engine.browser import evidence_storage as module
+
+    store = module.EvidenceStorage()
+    s3 = MagicMock()
+    store._s3_client = s3
+    fake_settings = SimpleNamespace(
+        RUMPTYCLOUD_S3_ENDPOINT="https://s3.example",
+        RUMPTYCLOUD_ACCESS_KEY_ID="key",
+        RUMPTYCLOUD_BUCKET_NAME=None,
+        storage_bucket=lambda name: f"kova-{name}",
+    )
+    exec_id = uuid.uuid4()
+
+    with patch.object(module, "settings", fake_settings):
+        assert store.create_signed_url(f"executions/{uuid.uuid4()}/evidence/shot.png", str(exec_id)) is None
+        assert store.create_signed_url(f"executions/{exec_id}/../../other/shot.png", str(exec_id)) is None
+        s3.generate_presigned_url.assert_not_called()
+
+        s3.generate_presigned_url.return_value = "https://signed.example/shot"
+        url = store.create_signed_url(f"executions/{exec_id}/evidence/shot.png", str(exec_id))
+        assert url == "https://signed.example/shot"
