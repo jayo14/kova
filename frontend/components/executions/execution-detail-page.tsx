@@ -19,6 +19,7 @@ import { ExecutionCancelDialog } from "./execution-cancel-dialog";
 import { EvidenceList } from "./evidence-list";
 import { EvidenceViewer } from "./evidence-viewer";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { terminalStatuses } from "@/lib/types";
 import { normalizeExecutionStatus } from "@/lib/executions/status";
 
@@ -264,8 +265,10 @@ export function ExecutionDetailPage({
     return () => { cancelled = true; };
   }, [execution.id, execution.status]);
 
+  const isTerminal = terminalStatuses.includes(execution.status);
+
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-6">
+    <div className="w-full space-y-5">
       {/* Header with Live Indicator */}
       <ExecutionHeader
         execution={reportExecution}
@@ -289,6 +292,9 @@ export function ExecutionDetailPage({
         </div>
       )}
 
+      {/* Verdict — plain-language outcome stated once, near the top */}
+      <ExecutionResult execution={reportExecution} report={report} />
+
       {/* Dominant Browser Workspace Viewport */}
       <ExecutionBrowser
         url={liveUrl}
@@ -301,9 +307,30 @@ export function ExecutionDetailPage({
         stepScreenshots={stepScreenshots}
       />
 
-      {/* 2-Column Section: Activity Stream + Result + Evidence */}
-      <div className="grid gap-6 lg:grid-cols-3 pt-2">
-        <div className="lg:col-span-2 space-y-4">
+      {/* Detail Tabs: Timeline · Evidence · Report */}
+      <Tabs defaultValue="timeline">
+        <TabsList
+          variant="line"
+          className="w-full justify-start border-b border-border pb-1 rounded-none"
+        >
+          <TabsTrigger value="timeline" className="px-3">
+            Timeline
+          </TabsTrigger>
+          {isTerminal && (
+            <TabsTrigger value="evidence" className="px-3">
+              Evidence
+            </TabsTrigger>
+          )}
+          {isTerminal && (
+            <TabsTrigger value="report" className="px-3">
+              Report
+            </TabsTrigger>
+          )}
+        </TabsList>
+
+        {/* Timeline Tab: safety alerts + activity stream + agent outcome */}
+        <TabsContent value="timeline" className="mt-4 space-y-4">
+
           {(() => {
             const destructiveEvent = events.find((e) => e.eventType === "safety.destructive_action_blocked");
             const isDestructiveBlocked = Boolean(
@@ -393,9 +420,7 @@ export function ExecutionDetailPage({
           })()}
 
           <ExecutionActivity activities={activities} />
-        </div>
 
-        <div className="space-y-4">
           {(() => {
             const outcomeEvent = events.find((e) => e.eventType === "agent.loop_outcome");
             if (!outcomeEvent) return null;
@@ -419,11 +444,11 @@ export function ExecutionDetailPage({
               </div>
             );
           })()}
+        </TabsContent>
 
-          <ExecutionResult execution={reportExecution} />
-
-          {/* Evidence Section */}
-          {terminalStatuses.includes(execution.status) ? (
+        {/* Evidence Tab */}
+        <TabsContent value="evidence" className="mt-4">
+          {isTerminal ? (
             <div className="rounded-xl border border-border bg-card/50 p-4">
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
@@ -449,10 +474,11 @@ export function ExecutionDetailPage({
               )}
             </div>
           ) : null}
-        </div>
-      </div>
+        </TabsContent>
 
-      {terminalStatuses.includes(execution.status) && (
+        {/* Report Tab */}
+        <TabsContent value="report" className="mt-4">
+          {isTerminal && (
         <section aria-label="Execution report" className="rounded-xl border border-border bg-card/50 p-4 sm:p-6 space-y-4">
           <div>
             <h2 className="text-heading font-semibold">Execution report</h2>
@@ -532,7 +558,9 @@ export function ExecutionDetailPage({
             </span>
           </div>
         </section>
-      )}
+          )}
+        </TabsContent>
+      </Tabs>
 
       {/* Cancel confirmation dialog */}
       <ExecutionCancelDialog
