@@ -11,12 +11,6 @@ interface EvidenceListProps {
   traceSignature?: string | null;
 }
 
-const typeIcons: Record<string, string> = {
-  SCREENSHOT: "photo_library",
-  VERIFICATION: "verified",
-  ARTIFACT: "description",
-};
-
 const typeLabels: Record<string, string> = {
   SCREENSHOT: "Screenshot",
   VERIFICATION: "Verification",
@@ -134,7 +128,7 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
         );
       })()}
 
-      {stepGroups.map((group, groupIdx) => (
+      {stepGroups.map((group) => (
         <div key={group.stepId} className="relative pl-6 border-l-2 border-border/60 ml-3 space-y-3">
           {/* Timeline bullet */}
           <div className="absolute -left-[9px] top-1 h-4 w-4 rounded-full border-2 border-border bg-background flex items-center justify-center">
@@ -156,10 +150,6 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
             const afterItem = group.items.find((i) => i.kind === "after" || i.title.toLowerCase().includes("after"));
             const assertionItem = group.items.find((i) => i.kind === "assertion" || i.type === "VERIFICATION");
             const failureItem = group.items.find((i) => i.kind === "failure" || i.status === "FAILED");
-            const networkErrors = group.items.filter((i) => {
-              const meta = i.metadata || {};
-              return Boolean(meta.error || (Array.isArray(i.networkLog) && i.networkLog.length > 0));
-            });
 
             if (!beforeItem && !afterItem && !assertionItem && !failureItem) return null;
 
