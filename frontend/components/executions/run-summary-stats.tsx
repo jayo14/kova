@@ -14,7 +14,7 @@ export function RunSummaryStats({
 }: RunSummaryStatsProps) {
   const isRunning = normalizeRunStatus(status) === "RUNNING";
   const runStatus = normalizeRunStatus(status);
-  const completed = summary.passed + summary.failed + summary.blocked;
+  const completed = summary.passed + summary.failed + summary.blocked + (summary.unverified || 0);
 
   return (
     <div className="space-y-2 pt-2 border-t border-border/40">
@@ -45,7 +45,7 @@ export function RunSummaryStats({
       </div>
 
       {/* Metric Badges */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-2">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 pt-2">
         <div className="p-2.5 rounded-lg bg-background/50 border border-border/40 text-center">
           <span className="block text-xs text-muted-foreground">Total Missions</span>
           <span className="text-base font-semibold text-foreground">{summary.total}</span>
@@ -62,9 +62,13 @@ export function RunSummaryStats({
           <span className="block text-xs text-destructive">Failed</span>
           <span className="text-base font-semibold text-destructive">{summary.failed}</span>
         </div>
-        <div className="p-2.5 rounded-lg bg-background/50 border border-border/40 text-center">
-          <span className="block text-xs text-muted-foreground">Queued</span>
-          <span className="text-base font-semibold text-muted-foreground">{summary.queued}</span>
+        <div className="p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-center">
+          <span className="block text-xs text-amber-600">Blocked</span>
+          <span className="text-base font-semibold text-amber-700">{summary.blocked}</span>
+        </div>
+        <div className="p-2.5 rounded-lg bg-purple-500/5 border border-purple-500/20 text-center">
+          <span className="block text-xs text-purple-600">Unverified</span>
+          <span className="text-base font-semibold text-purple-700">{summary.unverified ?? 0}</span>
         </div>
       </div>
     </div>

@@ -24,6 +24,7 @@ export interface RunSummary {
   passed: number;
   failed: number;
   blocked: number;
+  unverified?: number;
   durationMs?: number;
 }
 
