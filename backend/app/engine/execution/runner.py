@@ -711,11 +711,8 @@ class FlowRunner:
         # only to hit the post-navigation fallback with misleading events.
         early_obj = objective or (getattr(target_flow_obj, "objective", None) if target_flow_obj else None)
         if not flow_steps:
-            from app.config.settings import settings as _settings
-            from app.engine.ai.settings import ai_settings as _ai_settings
-            has_autonomous_path = bool(
-                early_obj and (_settings.AGENT_EXECUTION_ENABLED or _ai_settings.ai_enabled)
-            )
+            from app.engine.ai.settings import has_autonomous_execution_capability
+            has_autonomous_path = bool(early_obj and has_autonomous_execution_capability())
             if not has_autonomous_path:
                 ctx.transition(ExecutionState.FAILED)
                 ctx.record_event(EventTypes.EXECUTION_FAILED, {

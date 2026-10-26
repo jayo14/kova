@@ -178,3 +178,43 @@ async def test_planning_provider_auth_failure_classified_as_misconfigured(monkey
     assert result["error_code"] == "AI_PROVIDER_MISCONFIGURED"
     assert result["failure_category"] == "ai_provider_misconfigured"
     assert "gemini" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_empty_flow_with_disabled_ai_provider_fails_fast_before_browser(monkeypatch):
+    """When AI provider is disabled, empty flow fails fast even if AGENT_EXECUTION_ENABLED is True."""
+    from app.config.settings import settings
+    from app.engine.ai.settings import ai_settings
+    from app.engine.browser import session as browser_session_mod
+
+    monkeypatch.setattr(settings, "AGENT_EXECUTION_ENABLED", True)
+    monkeypatch.setattr(ai_settings, "AI_PROVIDER", "disabled")
+
+    browser_instantiated = []
+
+    class _BrowserSpy:
+        def __init__(self, *args, **kwargs):
+            browser_instantiated.append(True)
+
+    monkeypatch.setattr(browser_session_mod, "BrowserSession", _BrowserSpy)
+    monkeypatch.setattr("app.engine.execution.runner.BrowserSession", _BrowserSpy)
+
+    event_types = []
+
+    async def recorder(execution_id, event_type, payload):
+        event_types.append(event_type)
+
+    result = await FlowRunner().execute(
+        execution_id=uuid.uuid4(),
+        flow_steps=[],
+        target_url="https://app.test/",
+        objective="log in and test dashboard",
+        event_recorder=recorder,
+    )
+
+    assert result["success"] is False
+    assert result["error_code"] == "FLOW_NOT_RUNNABLE"
+    assert result["failure_category"] == "flow_configuration"
+    assert browser_instantiated == []
+    assert "execution.failed" in event_types
+
