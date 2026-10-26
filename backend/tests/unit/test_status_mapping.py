@@ -86,3 +86,64 @@ def test_event_type_human_controlled_exists():
     assert EventTypes.EXECUTION_PAUSED == "execution.paused"
     assert EventTypes.EXECUTION_RESUMED == "execution.resumed"
     assert EventTypes.CONTROL_CHANGED == "control.changed"
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_failed_terminal_status_without_worker():
+    from unittest.mock import AsyncMock, patch
+    from app.engine.execution.runner import FlowRunner
+    from app.modules.executions.models import ExecutionStatus
+
+    exec_id = uuid.uuid4()
+    update_status = AsyncMock()
+
+    class _Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+    with patch(
+        "app.infrastructure.database.session.async_session_factory", return_value=_Session()
+    ), patch(
+        "app.modules.executions.repository.ExecutionRepository.update_status", update_status
+    ):
+        await FlowRunner()._persist_terminal_failure(exec_id, "ACTION_FAILED", "click failed")
+
+    args, kwargs = update_status.call_args
+    assert args[0] == exec_id
+    assert args[1] == ExecutionStatus.FAILED
+    assert kwargs["error_code"] == "ACTION_FAILED"
+    assert kwargs["failure_category"] == "browser_infrastructure"
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_timeout_as_timeout_status():
+    from unittest.mock import AsyncMock, patch
+    from app.engine.execution.runner import FlowRunner
+    from app.modules.executions.models import ExecutionStatus
+
+    update_status = AsyncMock()
+
+    class _Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+    with patch(
+        "app.infrastructure.database.session.async_session_factory", return_value=_Session()
+    ), patch(
+        "app.modules.executions.repository.ExecutionRepository.update_status", update_status
+    ):
+        await FlowRunner()._persist_terminal_failure(uuid.uuid4(), "EXECUTION_TIMEOUT", "slow")
+
+    assert update_status.call_args[0][1] == ExecutionStatus.TIMEOUT
