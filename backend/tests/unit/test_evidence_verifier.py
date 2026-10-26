@@ -183,3 +183,87 @@ async def test_app_error_detected():
     res = await verifier.verify({"app_error_absent": True})
     assert res.passed is False
     assert "500 banner detected" in res.checks[0].message
+
+
+@pytest.mark.asyncio
+async def test_auth_verified_with_positive_logout_signal():
+    mock_page = AsyncMock()
+    mock_page.url = "https://example.com/dashboard"
+
+    def locator_side_effect(selector):
+        loc = AsyncMock()
+        if "input[type='password']" in selector:
+            loc.count.return_value = 0
+            loc.first.count.return_value = 0
+        elif "a[href*='logout']" in selector:
+            loc.count.return_value = 1
+            loc.first.count.return_value = 1
+            loc.first.is_visible.return_value = True
+        else:
+            loc.count.return_value = 0
+            loc.first.count.return_value = 0
+            loc.first.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    mock_body = AsyncMock()
+    mock_body.inner_text.return_value = "Welcome back, testuser! Here is your dashboard."
+    mock_page.query_selector.return_value = mock_body
+
+    verifier = Verifier(mock_page)
+    res = await verifier.verify({"auth_verified": {"auth_path": "/login"}})
+
+    assert res.passed is True
+    assert res.outcome == "PASSED"
+    # Verify positive session indicator was detected
+    assert any(c.type == "auth_session_indicator" and c.passed for c in res.checks)
+
+
+@pytest.mark.asyncio
+async def test_auth_verified_fails_on_detected_error_message():
+    mock_page = AsyncMock()
+    mock_page.url = "https://example.com/login"
+
+    def locator_side_effect(selector):
+        loc = AsyncMock()
+        loc.count.return_value = 0
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    mock_body = AsyncMock()
+    mock_body.inner_text.return_value = "Invalid credentials. Please check your password."
+    mock_page.query_selector.return_value = mock_body
+
+    verifier = Verifier(mock_page)
+    res = await verifier.verify({"auth_verified": {"auth_path": "/login"}})
+
+    assert res.passed is False
+    assert any(c.type == "auth_error_detected" and not c.passed for c in res.checks)
+
+
+@pytest.mark.asyncio
+async def test_auth_verified_fails_when_login_links_still_visible():
+    mock_page = AsyncMock()
+    mock_page.url = "https://example.com/home"
+
+    def locator_side_effect(selector):
+        loc = AsyncMock()
+        if "login" in selector.lower() or "signin" in selector.lower():
+            loc.count.return_value = 1
+            loc.nth.return_value.is_visible.return_value = True
+        else:
+            loc.count.return_value = 0
+            loc.first.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    mock_body = AsyncMock()
+    mock_body.inner_text.return_value = "Public page with sign in link."
+    mock_page.query_selector.return_value = mock_body
+
+    verifier = Verifier(mock_page)
+    res = await verifier.verify({"auth_verified": {"auth_path": "/login"}})
+
+    assert res.passed is False
+    assert any(c.type == "auth_session_indicator" and not c.passed for c in res.checks)
+

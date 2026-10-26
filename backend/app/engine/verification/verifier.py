@@ -1037,7 +1037,11 @@ class Verifier:
         """
         try:
             locator = await self._resolve_target(target)
-            count = await locator.count()
+            if inspect.isawaitable(locator):
+                locator = await locator
+            count = locator.count() if hasattr(locator, "count") else 0
+            if inspect.isawaitable(count):
+                count = await count
             # Element should have 0 matches (absent)
             passed = count == 0
             return VerificationCheck(
@@ -1066,19 +1070,19 @@ class Verifier:
                 message="Could not determine element absence — check failed (fail-closed)",
             )
 
-    async def _check_auth_verified(self, config: dict) -> list[VerificationCheck]:
+    async def _check_auth_verified(self, config: dict | bool) -> list[VerificationCheck]:
         """Composite authentication verification.
 
-        Checks multiple signals to determine if authentication succeeded:
-        1. URL changed away from auth path
-        2. Password field is absent
-        3. A post-login indicator is present (optional)
-
-        Args:
-            config: Dict with:
-                - auth_path: The login/signup path to check URL changed from (e.g., "/login")
-                - indicator: Optional text/element that should be visible after login
+        Multi-signal verification that replaces naive heuristics:
+        1. URL changed away from auth path (if specified)
+        2. Password field is absent from the DOM
+        3. No authentication failure or error banners (e.g. 'invalid credentials', 'unauthorized')
+        4. Positive session evidence:
+           - User-provided post-login indicator, OR
+           - Positive session indicators (logout button/link, user profile greeting, user menu)
         """
+        if isinstance(config, bool):
+            config = {}
         checks = []
         auth_path = config.get("auth_path", "/login")
         indicator = config.get("indicator")
@@ -1091,13 +1095,93 @@ class Verifier:
         pwd_check = await self._check_element_absent("input[type='password']")
         checks.append(pwd_check)
 
-        # Check 3: Optional post-login indicator
+        # Check 3: Check for visible auth failure messages in page
+        body = await self.page.query_selector("body")
+        body_text = (await self._safe_inner_text(body)).lower() if body else ""
+        auth_error_patterns = [
+            "invalid email or password",
+            "invalid credentials",
+            "incorrect password",
+            "authentication failed",
+            "unauthorized",
+            "access denied",
+            "please sign in to continue",
+            "authentication required",
+        ]
+        detected_err = next((pat for pat in auth_error_patterns if pat in body_text), None)
+        if detected_err:
+            checks.append(VerificationCheck(
+                type="auth_error_detected",
+                passed=False,
+                expected="successful authenticated session",
+                actual=detected_err,
+                message=f"Authentication error message detected in page: '{detected_err}'",
+                details={"error": detected_err},
+            ))
+
+        # Check 4: Positive session evidence
         if indicator:
             if isinstance(indicator, str):
                 text_check = await self._check_text_visible(indicator)
             else:
                 text_check = await self._check_element_visible(indicator)
             checks.append(text_check)
+        else:
+            positive_signals = [
+                "a[href*='logout']",
+                "a[href*='signout']",
+                "button:has-text('Log Out')",
+                "button:has-text('Sign Out')",
+                "button:has-text('Logout')",
+                "#user-greeting",
+                "#user-name",
+                "[data-testid*='logout']",
+                "[data-testid*='user-menu']",
+                ".user-info",
+            ]
+            found_positive = False
+            for sel in positive_signals:
+                loc = await self._safe_loc(sel)
+                count = await self._safe_count(loc)
+                if count > 0 and await self._safe_is_visible(loc.first):
+                    found_positive = True
+                    checks.append(VerificationCheck(
+                        type="auth_session_indicator",
+                        passed=True,
+                        expected="positive session indicator",
+                        actual=sel,
+                        message=f"Authenticated session indicator verified via '{sel}'",
+                        details={"selector": sel},
+                    ))
+                    break
+
+            if not found_positive:
+                login_nav = await self._safe_loc("a[href*='login'], a[href*='signin'], button:has-text('Sign In')")
+                login_count = await self._safe_count(login_nav)
+                login_visible = False
+                if login_count > 0:
+                    for i in range(login_count):
+                        if await self._safe_is_visible(login_nav.nth(i)):
+                            login_visible = True
+                            break
+                if login_visible:
+                    checks.append(VerificationCheck(
+                        type="auth_session_indicator",
+                        passed=False,
+                        expected="authenticated session without login links",
+                        actual="login_links_visible",
+                        message="Login links are still visible and no session indicator (logout/profile) was observed",
+                        details={"login_links_visible": True},
+                    ))
+                else:
+                    checks.append(VerificationCheck(
+                        type="auth_session_indicator",
+                        passed=True,
+                        expected="session state without auth barrier",
+                        actual="unbarred",
+                        message="Page is unbarred and no login controls present",
+                        details={"inferred": True},
+                    ))
 
         return checks
 
@@ -1247,6 +1331,8 @@ class Verifier:
     async def _safe_is_visible(self, el: Any) -> bool:
         if el is None:
             return False
+        if inspect.isawaitable(el):
+            el = await el
         v = el.is_visible() if hasattr(el, "is_visible") else False
         if inspect.isawaitable(v):
             v = await v
@@ -1530,15 +1616,33 @@ class Verifier:
 
         if isinstance(target, str):
             target_str = target.strip()
-            if target_str.startswith("#") or target_str.startswith(".") or target_str.startswith("[") or "," in target_str:
-                return self.page.locator(target_str).first
+            if (
+                target_str.startswith("#")
+                or target_str.startswith(".")
+                or target_str.startswith("[")
+                or "[" in target_str
+                or ":" in target_str
+                or ">" in target_str
+                or "," in target_str
+                or " " in target_str
+                or target_str.startswith("input")
+                or target_str.startswith("button")
+                or target_str.startswith("a")
+            ):
+                loc = self.page.locator(target_str)
+                if inspect.isawaitable(loc):
+                    loc = await loc
+                return loc.first
             try:
                 return await self.resolver.resolve(target_str)
             except Exception:
                 try:
                     return await self.resolver.resolve_first_visible(target_str)
                 except Exception:
-                    return self.page.locator(target_str).first
+                    loc = self.page.locator(target_str)
+                    if inspect.isawaitable(loc):
+                        loc = await loc
+                    return loc.first
 
         if not isinstance(target, dict):
             raise VerificationError("Invalid target specification", "resolve")
