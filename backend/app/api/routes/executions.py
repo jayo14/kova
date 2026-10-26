@@ -28,7 +28,15 @@ from app.modules.executions.schemas import ExecutionCreate, ExecutionEventRead, 
 from app.modules.executions.service import ExecutionService
 from app.modules.executions.state_machine import InvalidTransitionError, TERMINAL_STATES
 
-from app.modules.executions.reporting import build_timeline, diagnose_failure, diagnose_verification, sanitize_payload, sanitize_text
+from app.modules.executions.reporting import (
+    build_timeline,
+    compute_verdict_breakdown,
+    derive_report_status,
+    diagnose_failure,
+    diagnose_verification,
+    sanitize_payload,
+    sanitize_text,
+)
 from app.modules.flows.models import Flow
 from app.modules.projects.models import Project
 from app.modules.projects.repository import ProjectRepository
@@ -1119,10 +1127,12 @@ async def get_execution_report(
             break
 
     persisted_status = execution.status.value if hasattr(execution.status, "value") else str(execution.status)
-    timeline = build_timeline(events, execution_status=persisted_status)
-    report_status = persisted_status
-    if persisted_status == ExecutionStatus.COMPLETED.value and not verification_dict["passed"]:
-        report_status = ExecutionStatus.UNVERIFIED.value
+    timeline = build_timeline(
+        events,
+        execution_status=persisted_status,
+        verification_passed=verification_dict.get("passed") is True,
+    )
+    report_status = derive_report_status(persisted_status, verification_dict)
     diagnostics = diagnose_failure(execution.error_code, execution.error_message)
     if diagnostics is None and not verification_dict.get("passed"):
         failed_checks = [check for check in verification_dict.get("checks", []) if check.get("passed") is False]
@@ -1230,25 +1240,9 @@ async def get_execution_report(
         return HTMLResponse(content=html_content)
 
     all_checks = verification_dict.get("checks", [])
-    checks_passed = sum(1 for c in all_checks if c.get("passed") is True)
-    checks_failed = sum(1 for c in all_checks if c.get("passed") is False and c.get("type") not in ("blocked", "unverified", "empty_condition", "unknown_condition", "auth_barrier"))
-    checks_blocked = sum(1 for c in all_checks if c.get("type") == "auth_barrier" or "blocked" in str(c.get("message", "")).lower())
-    checks_unverified = sum(1 for c in all_checks if c.get("type") in ("unknown_condition", "empty_condition", "malformed_condition", "vacuous_condition"))
-
-    for step in timeline:
-        st = step.get("status")
-        if st == "blocked":
-            checks_blocked += 1
-        elif st == "unverified":
-            checks_unverified += 1
-
-    total_evaluated = checks_passed + checks_failed + checks_blocked + checks_unverified
-    verdict_breakdown = {
-        "passed": checks_passed,
-        "failed": checks_failed,
-        "blocked": checks_blocked,
-        "unverified": checks_unverified,
-    }
+    verdict_breakdown, total_evaluated = compute_verdict_breakdown(all_checks, timeline)
+    declared_planned = len(flow.steps or []) if flow and isinstance(flow.steps, list) else 0
+    total_planned = max(declared_planned, total_evaluated)
 
     recovery_trail = []
     for ev in events:
@@ -1295,7 +1289,7 @@ async def get_execution_report(
         "verification": verification_dict,
         "verdict_breakdown": verdict_breakdown,
         "assertions_summary": {
-            "total_planned": max(total_evaluated, 1 if verification_dict.get("checks") else 0),
+            "total_planned": total_planned,
             "total_evaluated": total_evaluated,
             **verdict_breakdown,
         },
