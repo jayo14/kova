@@ -52,12 +52,19 @@ from app.engine.verification.verifier import Verifier
 from app.modules.executions.event_types import EventTypes
 from app.engine.execution.stream import publish_frame, publish_state
 from app.engine.execution.control import (
+    ControlState,
+    TERMINAL_CONTROL_STATES,
+    get_control_record,
     get_control_state,
+    confirm_paused,
+    confirm_resumed,
+    resolve_human_checkpoint,
     get_pending_input,
     check_pause,
     is_cancel_requested,
     cleanup_control,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -1961,7 +1968,36 @@ class FlowRunner:
         except Exception as reg_err:
             logger.debug("On-the-fly registration attempt failed: %s", reg_err)
 
+        # Check if page has bot protection/CAPTCHA challenge requiring human checkpoint
+        try:
+            from app.engine.browser.auth import diagnose_registration_failure, AuthFailureCategory
+            if hasattr(browser, "page") and browser.page:
+                diag = await diagnose_registration_failure(browser.page)
+                if diag.category == AuthFailureCategory.CAPTCHA_REQUIRED or diag.captcha_detected:
+                    logger.info("CAPTCHA/challenge detected on %s. Raising human checkpoint.", current_page_url)
+                    from app.engine.execution.control import raise_human_checkpoint
+                    await raise_human_checkpoint(
+                        execution_id=ctx.execution_id,
+                        checkpoint_type="captcha_required",
+                        description="Bot protection or CAPTCHA challenge detected. Please complete the verification in the live view.",
+                        details={"url": current_page_url},
+                    )
+                    ctx.record_event(EventTypes.HUMAN_CHECKPOINT_RAISED, {
+                        "checkpoint_type": "captcha_required",
+                        "url": current_page_url,
+                        "description": "Bot protection or CAPTCHA challenge detected.",
+                    })
+                    await self._emit_events(ctx, event_recorder)
+                    handled = await self._check_and_handle_pause(ctx, browser, ctx.execution_id, event_recorder)
+                    if handled:
+                        diag_after = await diagnose_registration_failure(browser.page)
+                        if not diag_after.captcha_detected:
+                            return True
+        except Exception as challenge_err:
+            logger.debug("Challenge detection failed: %s", challenge_err)
+
         return False
+
 
     async def _capture_live_snapshot(
         self,
@@ -2216,29 +2252,67 @@ class FlowRunner:
         execution_id: str,
         event_recorder: Callable | None,
     ) -> bool:
-        """Gate for human takeover.
+        """Gate for pause and human takeover.
 
-        While control is human: drain input → apply → publish frame → check
-        resume, every PAUSE_POLL_SECONDS. Never blocks without draining input.
-        Transitions: RUNNING → PAUSED → HUMAN_CONTROLLED → RESUMING → RUNNING.
+        - Respects cancellation with immediate priority.
+        - Synchronizes state with authoritative ControlRecord.
+        - Flushes pending telemetry/events before confirming pause.
+        - While in pause/takeover: continuously captures snapshots and processes authorized human input.
+        - On resume: re-observes browser state, reconciles auth and step conditions, and adapts dynamically.
         """
-        is_paused = await check_pause(execution_id)
+        rec = await get_control_record(execution_id)
+        is_paused = (
+            rec.state in (ControlState.PAUSE_REQUESTED, ControlState.PAUSED, ControlState.HUMAN_CONTROL)
+            or await check_pause(execution_id)
+        )
         if not is_paused:
             return False
 
-        logger.info("Execution %s pausing for user takeover", execution_id)
+        # Stop/cancellation always takes precedence over pause
+        if await is_cancel_requested(execution_id):
+            logger.info("Execution %s received cancellation request at pause gate", execution_id)
+            return False
+
+        # Flush pending telemetry before confirming paused state
+        await self._emit_events(ctx, event_recorder)
+
+        # Confirm paused in authoritative record
+        if rec.state == ControlState.PAUSE_REQUESTED:
+            rec = await confirm_paused(execution_id)
+
+        logger.info("Execution %s paused (state: %s, generation: %d)", execution_id, rec.state.value, rec.generation)
         ctx.transition(ExecutionState.PAUSED)
-        ctx.control_state = "human"
-        # Engine state machine may not expose HUMAN_CONTROLLED — record as event/state attr
+        ctx.control_state = "human" if rec.state == ControlState.HUMAN_CONTROL else "paused"
+
         try:
             from app.engine.execution.state import ExecutionState as ES
-            if hasattr(ES, "HUMAN_CONTROLLED"):
+            if hasattr(ES, "HUMAN_CONTROLLED") and rec.state == ControlState.HUMAN_CONTROL:
                 ctx.transition(ES.HUMAN_CONTROLLED)
         except Exception:
             pass
-        ctx.record_event(EventTypes.EXECUTION_PAUSED, {"reason": "user_takeover"})
-        ctx.record_event(EventTypes.EXECUTION_HUMAN_CONTROLLED, {"control": "human"})
-        await publish_state(execution_id, "paused", browser.page.url, "", control="human")
+
+        ctx.record_event(EventTypes.EXECUTION_PAUSED, {
+            "reason": "user_takeover" if rec.state == ControlState.HUMAN_CONTROL else "pause_requested",
+            "generation": rec.generation,
+            "owner": rec.owner,
+            "checkpoint": rec.checkpoint,
+        })
+        if rec.state == ControlState.HUMAN_CONTROL:
+            ctx.record_event(EventTypes.EXECUTION_HUMAN_CONTROLLED, {
+                "control": "human",
+                "lease_id": rec.lease_id,
+                "owner": rec.owner,
+            })
+
+        page_url = browser.page.url if getattr(browser, "page", None) else ""
+        await publish_state(
+            execution_id,
+            "paused" if rec.state != ControlState.HUMAN_CONTROL else "user_control",
+            page_url,
+            "",
+            control="human" if rec.state == ControlState.HUMAN_CONTROL else "paused",
+            checkpoint=rec.checkpoint,
+        )
         await self._emit_events(ctx, event_recorder)
 
         try:
@@ -2246,54 +2320,93 @@ class FlowRunner:
         except Exception:
             pass
 
-        # Poll loop: drain input, apply, frame, check resume — never block without input
+        # Poll loop: drain human inputs, stream frames, check authoritative resume
         loop = asyncio.get_event_loop()
         start = loop.time()
         resumed = False
         while True:
+            # Cancellation check takes absolute precedence
+            if await is_cancel_requested(execution_id):
+                logger.info("Execution %s cancelled while paused/under human control", execution_id)
+                resumed = False
+                break
+
             await self._process_user_input(browser, execution_id)
-            ctrl = await get_control_state(execution_id)
-            if ctrl == "agent":
+
+            rec = await get_control_record(execution_id)
+            if rec.state in (ControlState.RESUME_REQUESTED, ControlState.RUNNING):
                 resumed = True
                 break
+            if rec.state in TERMINAL_CONTROL_STATES:
+                resumed = False
+                break
+
             if loop.time() - start >= PAUSE_TIMEOUT_SECONDS:
                 logger.warning("Execution %s pause timed out after %ds", execution_id, PAUSE_TIMEOUT_SECONDS)
                 resumed = False
                 break
+
             try:
-                await self._capture_live_snapshot(browser, execution_id, state="paused")
+                state_tag = "user_control" if rec.state == ControlState.HUMAN_CONTROL else "paused"
+                await self._capture_live_snapshot(browser, execution_id, state=state_tag)
             except Exception:
                 pass
             await asyncio.sleep(PAUSE_POLL_SECONDS)
 
         if not resumed:
-            # Auto-resume on timeout so execution never sticks in PAUSED
-            from app.engine.execution.control import set_control_state
-            await set_control_state(execution_id, "agent")
+            if await is_cancel_requested(execution_id):
+                return True
+            # Auto-resume on timeout so runner doesn't deadlock
+            rec = await confirm_resumed(execution_id)
+        else:
+            rec = await confirm_resumed(execution_id)
 
-        logger.info("Execution %s resuming after user takeover", execution_id)
+        # Clear any resolved checkpoint
+        if rec.checkpoint:
+            await resolve_human_checkpoint(execution_id)
+
+        logger.info("Execution %s resuming; performing adaptive re-observation", execution_id)
         ctx.transition(ExecutionState.RESUMING)
         ctx.control_state = "agent"
-        ctx.record_event(EventTypes.EXECUTION_RESUMED, {})
-        await publish_state(execution_id, "resuming", browser.page.url, "", control="agent")
+        ctx.record_event(EventTypes.EXECUTION_RESUMED, {"generation": rec.generation})
+        page_url = browser.page.url if getattr(browser, "page", None) else ""
+        await publish_state(execution_id, "resuming", page_url, "", control="agent")
         await self._emit_events(ctx, event_recorder)
 
-        # Re-observe after takeover
+        # Adaptive re-observation after human handoff
         try:
             observation = await browser.observe()
             ctx.record_observation(observation)
+            current_url = getattr(browser.page, "url", "")
             ctx.record_event(EventTypes.AGENT_OBSERVED, {
                 "step": ctx.current_step_index,
                 "observation": observation,
+                "url": current_url,
                 "post_takeover": True,
             })
+
+            # Check if user signed in or changed authentication state during takeover
+            if hasattr(browser, "page") and browser.page:
+                try:
+                    from app.engine.browser.auth import is_auth_page
+                    on_auth = await is_auth_page(browser.page)
+                except Exception:
+                    on_auth = False
+                if not on_auth and any(tok in current_url for tok in ("/dashboard", "/account", "/home", "/profile", "/settings", "/items", "/records")):
+                    ctx.current_state["authenticated"] = True
+                    ctx.current_state["auth_restored"] = True
+                    logger.info("Post-takeover detected user authentication into %s", current_url)
+
+
             await self._emit_events(ctx, event_recorder)
         except Exception as e:
             logger.warning("Post-takeover observation failed: %s", e)
 
         ctx.transition(ExecutionState.RUNNING)
-        await publish_state(execution_id, "executing", browser.page.url, "", control="agent")
+        page_url = browser.page.url if getattr(browser, "page", None) else ""
+        await publish_state(execution_id, "executing", page_url, "", control="agent")
         return True
+
 
     # Actions whose failure may already have had side effects — never blindly
     # re-executed. A retried click on 'Delete' or a form submit can double-apply.
