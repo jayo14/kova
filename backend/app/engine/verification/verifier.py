@@ -32,6 +32,7 @@ The verifier rejects:
   ".container", ".content, .container" etc.) when used as the ONLY check
 """
 
+import inspect
 import logging
 import re
 from dataclasses import dataclass, field
@@ -62,6 +63,11 @@ KNOWN_CONDITION_KEYS = frozenset({
     "element_value",
     "page_loaded",
     "auth_verified",
+    "record_persisted",
+    "search_results",
+    "validation_error",
+    "app_error_absent",
+    "app_error_present",
 })
 
 # Structural containers that are valid diagnostics but cannot, alone, prove a
@@ -329,6 +335,7 @@ class VerificationCheck:
     actual: Any = None
     message: str = ""
     evidence_id: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         d = {
@@ -343,6 +350,8 @@ class VerificationCheck:
             d["message"] = self.message
         if self.evidence_id:
             d["evidence_id"] = self.evidence_id
+        if self.details:
+            d["details"] = self.details
         return d
 
 
@@ -547,6 +556,26 @@ class Verifier:
         if "auth_verified" in condition:
             auth_checks = await self._check_auth_verified(condition["auth_verified"])
             checks.extend(auth_checks)
+
+        if "record_persisted" in condition:
+            check = await self._check_record_persisted(condition["record_persisted"])
+            checks.append(check)
+
+        if "search_results" in condition:
+            check = await self._check_search_results(condition["search_results"])
+            checks.append(check)
+
+        if "validation_error" in condition:
+            check = await self._check_validation_error(condition["validation_error"])
+            checks.append(check)
+
+        if "app_error_absent" in condition:
+            check = await self._check_app_error_absent(condition["app_error_absent"])
+            checks.append(check)
+
+        if "app_error_present" in condition:
+            check = await self._check_app_error_present(condition["app_error_present"])
+            checks.append(check)
 
         # No known checks at all → fail-closed (unknown-only condition)
         if not checks:
@@ -1071,6 +1100,426 @@ class Verifier:
             checks.append(text_check)
 
         return checks
+
+    async def _check_record_persisted(self, config: dict | str) -> VerificationCheck:
+        """Check that a created or updated record is persisted in the UI/data store.
+
+        Supports cross-refresh verification via `reload=True`.
+        config: {
+            "selector": str | None,
+            "expected_fields": dict[str, str] | None,
+            "expected_text": str | list[str] | None,
+            "reload": bool = False,
+        }
+        """
+        if isinstance(config, str):
+            config = {"expected_text": config}
+        if not isinstance(config, dict):
+            return VerificationCheck(
+                type="record_persisted",
+                passed=False,
+                expected="dict with expected_fields or expected_text",
+                actual=repr(config)[:100],
+                message="record_persisted requires a specification dict or string",
+            )
+
+        should_reload = bool(config.get("reload", False))
+        if should_reload:
+            try:
+                await self.page.reload(wait_until="domcontentloaded")
+                await self.page.wait_for_timeout(300)
+            except Exception as e:
+                return VerificationCheck(
+                    type="record_persisted",
+                    passed=False,
+                    expected="page reloaded and record persisted",
+                    actual=f"reload_error: {e}",
+                    message=f"Failed to reload page for persistence verification: {e}",
+                )
+
+        selector = config.get("selector")
+        expected_fields = config.get("expected_fields") or {}
+        expected_texts = config.get("expected_text")
+        if isinstance(expected_texts, str):
+            expected_texts = [expected_texts]
+        elif expected_texts is None:
+            expected_texts = []
+
+        try:
+            if selector:
+                locator = self.page.locator(selector)
+                count = await locator.count()
+                if count == 0:
+                    return VerificationCheck(
+                        type="record_persisted",
+                        passed=False,
+                        expected=f"selector '{selector}' visible",
+                        actual="not_found",
+                        message=f"Target container for persisted record '{selector}' not found",
+                        details={"reloaded": should_reload, "selector": selector},
+                    )
+                content = await locator.first.inner_text()
+            else:
+                body = await self.page.query_selector("body")
+                content = (await body.inner_text()) if body else ""
+
+            content_lower = content.lower()
+            missing_fields = []
+            for fname, fval in expected_fields.items():
+                if str(fval).lower() not in content_lower:
+                    missing_fields.append(f"{fname}='{fval}'")
+
+            missing_texts = []
+            for t in expected_texts:
+                if str(t).lower() not in content_lower:
+                    missing_texts.append(str(t))
+
+            passed = len(missing_fields) == 0 and len(missing_texts) == 0
+            details = {
+                "reloaded": should_reload,
+                "verified_fields": expected_fields,
+                "verified_texts": expected_texts,
+                "missing_fields": missing_fields,
+                "missing_texts": missing_texts,
+                "excerpt": content[:300].strip(),
+            }
+
+            if not passed:
+                err_parts = []
+                if missing_fields:
+                    err_parts.append(f"missing fields: {', '.join(missing_fields)}")
+                if missing_texts:
+                    err_parts.append(f"missing text: {', '.join(missing_texts)}")
+                msg = f"Record persistence check failed ({'; '.join(err_parts)})"
+                if should_reload:
+                    msg += " across browser reload"
+                return VerificationCheck(
+                    type="record_persisted",
+                    passed=False,
+                    expected=config,
+                    actual={"missing_fields": missing_fields, "missing_texts": missing_texts},
+                    message=msg,
+                    details=details,
+                )
+
+            success_msg = "Record successfully verified as persisted"
+            if should_reload:
+                success_msg += " across browser reload"
+            return VerificationCheck(
+                type="record_persisted",
+                passed=True,
+                expected=config,
+                actual="persisted",
+                message=success_msg,
+                details=details,
+            )
+        except Exception as e:
+            return VerificationCheck(
+                type="record_persisted",
+                passed=False,
+                expected=config,
+                actual="error",
+                message=f"Persistence check encountered error: {e}",
+            )
+
+    async def _safe_loc(self, selector: str) -> Any:
+        loc = self.page.locator(selector)
+        if inspect.isawaitable(loc):
+            loc = await loc
+        return loc
+
+    async def _safe_count(self, loc: Any) -> int:
+        if loc is None:
+            return 0
+        c = loc.count() if hasattr(loc, "count") else 0
+        if inspect.isawaitable(c):
+            c = await c
+        return int(c)
+
+    async def _safe_inner_text(self, el: Any) -> str:
+        if el is None:
+            return ""
+        t = el.inner_text() if hasattr(el, "inner_text") else ""
+        if inspect.isawaitable(t):
+            t = await t
+        return str(t or "")
+
+    async def _safe_is_visible(self, el: Any) -> bool:
+        if el is None:
+            return False
+        v = el.is_visible() if hasattr(el, "is_visible") else False
+        if inspect.isawaitable(v):
+            v = await v
+        return bool(v)
+
+    async def _check_search_results(self, config: dict) -> VerificationCheck:
+        """Check that search/filter results include expected items and exclude non-matching items.
+
+        config: {
+            "query": str,
+            "expected_matches": list[str] | str,
+            "excluded_matches": list[str] | str | None,
+            "selector": str | None,
+        }
+        """
+        if not isinstance(config, dict):
+            return VerificationCheck(
+                type="search_results",
+                passed=False,
+                expected="dict with query, expected_matches, excluded_matches",
+                actual=repr(config)[:100],
+                message="search_results requires a specification dict",
+            )
+
+        query = config.get("query", "")
+        expected = config.get("expected_matches", [])
+        if isinstance(expected, str):
+            expected = [expected]
+        excluded = config.get("excluded_matches", [])
+        if isinstance(excluded, str):
+            excluded = [excluded]
+        elif excluded is None:
+            excluded = []
+        selector = config.get("selector")
+
+        try:
+            if selector:
+                loc = await self._safe_loc(selector)
+                count = await self._safe_count(loc)
+                if count == 0:
+                    return VerificationCheck(
+                        type="search_results",
+                        passed=False,
+                        expected=f"results container matching '{selector}'",
+                        actual="not_found",
+                        message=f"Search results container '{selector}' not found",
+                    )
+                content = await self._safe_inner_text(loc.first)
+            else:
+                candidates = ["#records-table", "table", "[role='table']", "#results", ".results", ".records-list", "body"]
+                content = ""
+                for cand in candidates:
+                    loc = await self._safe_loc(cand)
+                    count = await self._safe_count(loc)
+                    if count > 0:
+                        content = await self._safe_inner_text(loc.first)
+                        break
+
+            content_lower = content.lower()
+            missing_expected = [item for item in expected if str(item).lower() not in content_lower]
+            unexpected_present = [item for item in excluded if str(item).lower() in content_lower]
+
+            passed = len(missing_expected) == 0 and len(unexpected_present) == 0
+            details = {
+                "query": query,
+                "expected": expected,
+                "excluded": excluded,
+                "missing_expected": missing_expected,
+                "unexpected_present": unexpected_present,
+                "excerpt": content[:300].strip(),
+            }
+
+            if not passed:
+                reasons = []
+                if missing_expected:
+                    reasons.append(f"did not find expected items: {missing_expected}")
+                if unexpected_present:
+                    reasons.append(f"incorrectly included excluded items: {unexpected_present}")
+                return VerificationCheck(
+                    type="search_results",
+                    passed=False,
+                    expected={"expected": expected, "excluded": excluded},
+                    actual={"missing": missing_expected, "unexpected": unexpected_present},
+                    message=f"Search verification failed for query '{query}': {'; '.join(reasons)}",
+                    details=details,
+                )
+
+            return VerificationCheck(
+                type="search_results",
+                passed=True,
+                expected={"expected": expected, "excluded": excluded},
+                actual="results_match",
+                message=f"Search results for query '{query}' verified: {len(expected)} matches found and {len(excluded)} non-matching records correctly excluded",
+                details=details,
+            )
+        except Exception as e:
+            return VerificationCheck(
+                type="search_results",
+                passed=False,
+                expected=config,
+                actual="error",
+                message=f"Search verification error: {e}",
+            )
+
+    async def _check_validation_error(self, config: dict | str) -> VerificationCheck:
+        """Check that a validation error message or error banner is visible.
+
+        Validates expected validation rejections (negative test cases).
+        config: {
+            "message": str | None,
+            "field": str | None,
+            "selector": str | None,
+        } or plain string message.
+        """
+        if isinstance(config, str):
+            config = {"message": config}
+        if not isinstance(config, dict):
+            return VerificationCheck(
+                type="validation_error",
+                passed=False,
+                expected="validation error specification",
+                actual=repr(config)[:100],
+                message="validation_error requires dict or string message",
+            )
+
+        expected_msg = (config.get("message") or "").strip().lower()
+        field_name = config.get("field")
+        selector = config.get("selector")
+
+        try:
+            # Check 1: Custom selector if provided
+            if selector:
+                loc = await self._safe_loc(selector)
+                count = await self._safe_count(loc)
+                if count > 0 and await self._safe_is_visible(loc.first):
+                    text = await self._safe_inner_text(loc.first)
+                    if not expected_msg or expected_msg in text.lower():
+                        return VerificationCheck(
+                            type="validation_error",
+                            passed=True,
+                            expected=config,
+                            actual=text[:200].strip(),
+                            message=f"Validation error observed: {text[:150].strip()}",
+                            details={"text": text[:200].strip(), "selector": selector},
+                        )
+
+            # Check 2: Standard alert and error classes
+            standard_selectors = [
+                "[role='alert']",
+                ".alert-danger",
+                ".error-message",
+                ".form-error",
+                ".invalid-feedback",
+                "#record-error",
+                "#register-error",
+                "#login-error",
+            ]
+            for sel in standard_selectors:
+                loc = await self._safe_loc(sel)
+                count = await self._safe_count(loc)
+                for i in range(count):
+                    el = loc.nth(i)
+                    if await self._safe_is_visible(el):
+                        text = (await self._safe_inner_text(el)).strip()
+                        if not expected_msg or expected_msg in text.lower():
+                            return VerificationCheck(
+                                type="validation_error",
+                                passed=True,
+                                expected=config,
+                                actual=text[:200],
+                                message=f"Validation error observed: {text[:150]}",
+                                details={"text": text[:200], "selector": sel},
+                            )
+
+            # Check 3: Field-specific aria-invalid or invalid state
+            if field_name:
+                field_loc = await self._safe_loc(f"[name='{field_name}'], #{field_name}")
+                count = await self._safe_count(field_loc)
+                if count > 0:
+                    first_el = field_loc.first
+                    get_attr = first_el.get_attribute("aria-invalid") if hasattr(first_el, "get_attribute") else None
+                    if inspect.isawaitable(get_attr):
+                        get_attr = await get_attr
+                    if get_attr == "true":
+                        return VerificationCheck(
+                            type="validation_error",
+                            passed=True,
+                            expected=f"aria-invalid=true on field {field_name}",
+                            actual="aria-invalid=true",
+                            message=f"Field {field_name} marked invalid with aria-invalid='true'",
+                            details={"field": field_name},
+                        )
+
+            # Check 4: Text search if expected_msg provided
+            if expected_msg:
+                body = await self.page.query_selector("body")
+                body_text = (await self._safe_inner_text(body)).lower() if body else ""
+                if expected_msg in body_text:
+                    return VerificationCheck(
+                        type="validation_error",
+                        passed=True,
+                        expected=expected_msg,
+                        actual="visible_in_body",
+                        message=f"Validation error text '{expected_msg}' observed on page",
+                        details={"message": expected_msg},
+                    )
+
+            return VerificationCheck(
+                type="validation_error",
+                passed=False,
+                expected=config,
+                actual="no_validation_error_found",
+                message=f"Expected validation error '{expected_msg or field_name or selector}' was not observed",
+            )
+        except Exception as e:
+            return VerificationCheck(
+                type="validation_error",
+                passed=False,
+                expected=config,
+                actual="error",
+                message=f"Validation error check failed with exception: {e}",
+            )
+
+    async def _check_app_error_absent(self, config: Any = None) -> VerificationCheck:
+        """Check that no unhandled application error, 500 error, or crash screen is visible."""
+        try:
+            error_locators = [
+                "h1:has-text('500')",
+                "h1:has-text('Internal Server Error')",
+                "h1:has-text('Application Error')",
+                "h1:has-text('Server Error')",
+                "[role='alert']:has-text('Internal Server Error')",
+                "[role='alert']:has-text('500')",
+                ".error-page",
+                "#error-page",
+            ]
+            for sel in error_locators:
+                loc = await self._safe_loc(sel)
+                count = await self._safe_count(loc)
+                if count > 0 and await self._safe_is_visible(loc.first):
+                    err_txt = (await self._safe_inner_text(loc.first)).strip()
+                    return VerificationCheck(
+                        type="app_error_absent",
+                        passed=False,
+                        expected="no application crash or 500 banner",
+                        actual=err_txt[:200],
+                        message=f"Application error screen or 500 banner detected: {err_txt[:100]}",
+                    )
+            return VerificationCheck(
+                type="app_error_absent",
+                passed=True,
+                expected="no application crash or 500 banner",
+                actual="clean",
+                message="No application errors or 500 banners detected on page",
+            )
+        except Exception as e:
+            return VerificationCheck(
+                type="app_error_absent",
+                passed=False,
+                actual="error",
+                message=f"Failed checking application error state: {e}",
+            )
+
+    async def _check_app_error_present(self, config: Any = None) -> VerificationCheck:
+        """Check that an application error is present (for error boundary testing)."""
+        res = await self._check_app_error_absent(config)
+        return VerificationCheck(
+            type="app_error_present",
+            passed=not res.passed,
+            expected="application error or 500 banner present",
+            actual=res.actual,
+            message="Application error correctly observed" if not res.passed else "Expected application error was not observed",
+        )
 
     async def _resolve_target(self, target: Any):
         """Resolve a target specification to a Playwright Locator with resilient multi-strategy fallback.
