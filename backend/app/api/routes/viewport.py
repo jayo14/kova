@@ -21,11 +21,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
 from app.engine.execution.control import (
-    set_control_state,
+    ControlState,
+    acquire_human_takeover,
+    get_control_record,
     get_control_state,
     publish_command,
     queue_user_input,
+    release_human_control,
+    request_pause,
+    request_resume,
+    set_control_state,
+    validate_human_interaction,
 )
+
 from app.engine.execution.stream import publish_state, subscribe_frames, subscribe_states
 
 logger = logging.getLogger(__name__)
@@ -288,10 +296,18 @@ async def viewport_stream(
 
     pump_task = asyncio.create_task(_pump_loop(execution_id, websocket))
 
-    # Send current control state immediately
+    # Send current authoritative control state immediately
+    active_lease_id: str | None = None
     try:
-        current_control = await get_control_state(execution_id)
-        await websocket.send_json({"type": "control_changed", "control": current_control})
+        rec = await get_control_record(execution_id)
+        control_str = "human" if rec.state == ControlState.HUMAN_CONTROL else ("paused" if rec.state == ControlState.PAUSED else "agent")
+        await websocket.send_json({
+            "type": "control_changed",
+            "control": control_str,
+            "state": rec.state.value if hasattr(rec.state, "value") else str(rec.state),
+            "generation": rec.generation,
+            "checkpoint": rec.checkpoint,
+        })
     except Exception:
         pass
 
@@ -304,42 +320,89 @@ async def viewport_stream(
                 continue
 
             msg_type = msg.get("type")
-            current_state = await get_control_state(execution_id)
 
-            if msg_type == "takeover_accept" or msg_type == "takeover":
-                await set_control_state(execution_id, "human")
-                await publish_command(execution_id, "pause")
-                await websocket.send_json({"type": "state", "state": "user_control"})
-                await websocket.send_json({"type": "control_changed", "control": "human"})
-                logger.info("User takeover accepted for %s", execution_id)
+            if msg_type in ("takeover_accept", "takeover", "acquire_control"):
+                ok, lease_or_err, rec = await acquire_human_takeover(execution_id, client_id=str(user_id))
+                if ok:
+                    active_lease_id = lease_or_err
+                    await websocket.send_json({
+                        "type": "takeover_granted",
+                        "lease_id": active_lease_id,
+                        "generation": rec.generation,
+                        "control": "human",
+                        "state": "user_control",
+                    })
+                    await websocket.send_json({
+                        "type": "control_changed",
+                        "control": "human",
+                        "lease_id": active_lease_id,
+                        "generation": rec.generation,
+                    })
+                    logger.info("User takeover accepted for %s (lease: %s)", execution_id, active_lease_id)
+                else:
+                    await websocket.send_json({
+                        "type": "takeover_rejected",
+                        "reason": lease_or_err,
+                    })
+                    logger.warning("User takeover rejected for %s: %s", execution_id, lease_or_err)
 
             elif msg_type == "takeover_reject":
-                await set_control_state(execution_id, "agent")
-                await websocket.send_json({"type": "state", "state": "observing"})
                 await websocket.send_json({"type": "control_changed", "control": "agent"})
-                logger.info("User takeover rejected for %s", execution_id)
+                logger.info("User takeover rejected by client for %s", execution_id)
 
-            elif msg_type == "return_control":
-                await set_control_state(execution_id, "agent")
-                await publish_command(execution_id, "resume")
-                await websocket.send_json({"type": "state", "state": "resuming"})
-                await websocket.send_json({"type": "control_changed", "control": "agent"})
+            elif msg_type in ("return_control", "release_control"):
+                lease = msg.get("lease_id") or active_lease_id
+                ok, err, rec = await release_human_control(execution_id, client_id=str(user_id), lease_id=lease)
+                active_lease_id = None
+                await websocket.send_json({
+                    "type": "control_changed",
+                    "control": "agent",
+                    "state": "resuming",
+                    "generation": rec.generation,
+                })
                 logger.info("User returned control for %s", execution_id)
 
-            elif msg_type == "nav" and current_state in ("human", "paused"):
-                kind = msg.get("kind", "")
-                if kind == "back":
-                    await queue_user_input(execution_id, {"kind": "nav_back"})
-                elif kind == "forward":
-                    await queue_user_input(execution_id, {"kind": "nav_forward"})
-                elif kind == "reload":
-                    await queue_user_input(execution_id, {"kind": "nav_reload"})
+            elif msg_type == "pause":
+                rec = await request_pause(execution_id, reason="User requested pause via live view")
+                await websocket.send_json({
+                    "type": "control_changed",
+                    "control": "paused",
+                    "state": "paused",
+                    "generation": rec.generation,
+                })
 
-            elif msg_type == "input" and current_state in ("human", "paused"):
-                await queue_user_input(execution_id, msg)
+            elif msg_type == "resume":
+                rec = await request_resume(execution_id)
+                await websocket.send_json({
+                    "type": "control_changed",
+                    "control": "agent",
+                    "state": "resuming",
+                    "generation": rec.generation,
+                })
+
+            elif msg_type in ("nav", "input"):
+                lease = msg.get("lease_id") or active_lease_id
+                gen = msg.get("generation")
+                valid, err = await validate_human_interaction(
+                    execution_id,
+                    lease_id=lease,
+                    client_id=str(user_id),
+                    generation=gen,
+                )
+                if not valid:
+                    logger.debug("Rejected interaction on %s: %s", execution_id, err)
+                    await websocket.send_json({"type": "interaction_rejected", "reason": err})
+                else:
+                    if msg_type == "nav":
+                        kind = msg.get("kind", "")
+                        if kind in ("back", "forward", "reload"):
+                            await queue_user_input(execution_id, {"kind": f"nav_{kind}", "lease_id": lease})
+                    else:
+                        await queue_user_input(execution_id, msg)
 
             elif msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
+
 
     except WebSocketDisconnect:
         logger.info("Viewport disconnected for execution %s", execution_id)

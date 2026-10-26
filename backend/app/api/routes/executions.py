@@ -26,7 +26,8 @@ from app.modules.executions.event_service import EventService
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.schemas import ExecutionCreate, ExecutionEventRead, ExecutionRead
 from app.modules.executions.service import ExecutionService
-from app.modules.executions.state_machine import InvalidTransitionError
+from app.modules.executions.state_machine import InvalidTransitionError, TERMINAL_STATES
+
 from app.modules.executions.reporting import build_timeline, diagnose_failure, diagnose_verification, sanitize_payload, sanitize_text
 from app.modules.flows.models import Flow
 from app.modules.projects.models import Project
@@ -268,6 +269,194 @@ async def cancel_execution(
         status=ExecutionStatus.CANCELLED.value,
         message="Execution cancelled",
     )
+
+
+class ExecutionControlResponse(BaseModel):
+    execution_id: str
+    state: str
+    owner: str
+    lease_id: str | None = None
+    lease_expires_at: float | None = None
+    generation: int
+    checkpoint: dict | None = None
+    updated_at: float
+
+
+class ExecutionPauseRequest(BaseModel):
+    reason: str | None = None
+
+
+class ExecutionTakeoverRequest(BaseModel):
+    lease_duration_seconds: float = 300.0
+
+
+class ExecutionReleaseRequest(BaseModel):
+    lease_id: str | None = None
+
+
+class ExecutionInteractRequest(BaseModel):
+    type: str
+    kind: str | None = None
+    x: float | None = None
+    y: float | None = None
+    text: str | None = None
+    key: str | None = None
+    delta_x: float | None = None
+    delta_y: float | None = None
+    lease_id: str | None = None
+    generation: int | None = None
+
+
+@router.get("/{execution_id}/control", response_model=ExecutionControlResponse)
+async def get_execution_control(
+    execution_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Retrieve authoritative control record and human takeover state."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    from app.engine.execution.control import get_control_record
+    record = await get_control_record(execution_id)
+    return ExecutionControlResponse(**record.to_dict())
+
+
+@router.post("/{execution_id}/pause", response_model=ExecutionControlResponse)
+async def pause_execution_endpoint(
+    execution_id: str,
+    data: ExecutionPauseRequest | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Request immediate pause of execution at the next action boundary."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail=f"Cannot pause execution in terminal state: {execution.status}")
+
+    from app.engine.execution.control import request_pause
+    reason = data.reason if data and data.reason else "User requested pause"
+    record = await request_pause(execution_id, reason=reason)
+    return ExecutionControlResponse(**record.to_dict())
+
+
+@router.post("/{execution_id}/resume", response_model=ExecutionControlResponse)
+async def resume_execution_endpoint(
+    execution_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Resume execution back to agent control."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail=f"Cannot resume execution in terminal state: {execution.status}")
+
+    from app.engine.execution.control import request_resume
+    record = await request_resume(execution_id)
+    return ExecutionControlResponse(**record.to_dict())
+
+
+@router.post("/{execution_id}/takeover", response_model=ExecutionControlResponse)
+async def takeover_execution_endpoint(
+    execution_id: str,
+    data: ExecutionTakeoverRequest | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Acquire exclusive human control lease for the execution browser."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    if execution.status in TERMINAL_STATES:
+        raise HTTPException(status_code=409, detail=f"Cannot take control of terminal execution: {execution.status}")
+
+    from app.engine.execution.control import acquire_human_takeover
+    ttl = data.lease_duration_seconds if data else 300.0
+    ok, lease_or_err, record = await acquire_human_takeover(
+        execution_id,
+        client_id=str(user.id),
+        lease_duration_seconds=ttl,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=lease_or_err)
+    return ExecutionControlResponse(**record.to_dict())
+
+
+@router.post("/{execution_id}/release", response_model=ExecutionControlResponse)
+async def release_execution_control_endpoint(
+    execution_id: str,
+    data: ExecutionReleaseRequest | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Release human takeover lease and return browser control to agent."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    from app.engine.execution.control import release_human_control
+    lease_id = data.lease_id if data else None
+    ok, err, record = await release_human_control(
+        execution_id,
+        client_id=str(user.id),
+        lease_id=lease_id,
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail=err)
+    return ExecutionControlResponse(**record.to_dict())
+
+
+@router.post("/{execution_id}/interact")
+async def interact_execution_endpoint(
+    execution_id: str,
+    data: ExecutionInteractRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Deliver human interaction command (click, type, scroll, key, nav) during takeover."""
+    try:
+        execution = await _verify_execution_ownership(db, uuid.UUID(execution_id), user.id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid execution ID")
+    if execution is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+
+    from app.engine.execution.control import validate_human_interaction, queue_user_input
+    ok, err = await validate_human_interaction(
+        execution_id,
+        lease_id=data.lease_id,
+        client_id=str(user.id),
+        generation=data.generation,
+    )
+    if not ok:
+        raise HTTPException(status_code=409, detail=err or "Invalid human interaction")
+
+    await queue_user_input(execution_id, data.model_dump(exclude_none=True))
+    return {"status": "queued", "message": "Interaction queued"}
+
 
 
 @router.get("/{execution_id}/events", response_model=list[ExecutionEventRead])
