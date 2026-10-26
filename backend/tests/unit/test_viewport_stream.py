@@ -206,3 +206,14 @@ def test_channel_names_are_scoped():
     eid = "abc-123"
     assert frame_channel(eid) == f"kova:viewport:frame:{eid}"
     assert state_channel(eid) == f"kova:viewport:state:{eid}"
+
+
+def test_url_sensitive_params_redacted():
+    from app.engine.execution.stream import sanitize_url
+
+    url = "https://example.com/oauth/callback?code=supersecret&state=xyz&token=auth123&page=2"
+    sanitized = sanitize_url(url)
+    assert "code=%5Bhidden%5D" in sanitized or "code=[hidden]" in sanitized
+    assert "token=%5Bhidden%5D" in sanitized or "token=[hidden]" in sanitized
+    assert "state=xyz" in sanitized
+    assert "page=2" in sanitized
