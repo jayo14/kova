@@ -11,7 +11,10 @@ from typing import Any, Optional
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from pythonjsonlogger import jsonlogger
+try:
+    from pythonjsonlogger import json as jsonlogger
+except ImportError:
+    from pythonjsonlogger import jsonlogger
 
 from app.config.settings import settings
 from app.observability.redaction import RedactionFilter, redact
