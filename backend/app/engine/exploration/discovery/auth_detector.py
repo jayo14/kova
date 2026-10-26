@@ -25,19 +25,15 @@ class AuthDetector:
                 page.required_state = [StateAssertion(key="authenticated", value=False, predicate="eq")]
                 page.confidence = classification.confidence
                 page.source = "discovered" if classification.confidence >= 0.7 else "heuristic"
-            elif bundle.visible_password_input_count > 0 or bundle.visible_email_input_count > 0 or bundle.url_path_is_auth:
+            elif bundle.visible_password_input_count > 0 or bundle.visible_email_input_count > 0:
                 page.requires_auth = True
                 page.required_state = [StateAssertion(key="authenticated", value=False, predicate="eq")]
                 page.confidence = 0.85
                 page.source = "discovered"
-            else:
-                # Check if page is protected (e.g. requires logged-in state) based on role/auth paths
-                p_lower = page.url_pattern.lower()
-                if any(k in p_lower for k in ("/dashboard", "/admin", "/settings", "/profile", "/account", "/portal")):
-                    page.requires_auth = True
-                    page.required_state = [StateAssertion(key="authenticated", value=True, predicate="eq")]
-                    page.confidence = 0.8
-                    page.source = "heuristic"
+            # URL paths such as /dashboard, /admin or /account are NOT
+            # evidence that a page requires authentication: public pages,
+            # marketing routes and 404s can share those paths. Leave
+            # requires_auth unchanged rather than guess from the URL alone.
         except Exception as e:
             logger.warning("Auth inspection failed for %s: %s", page.url_pattern, e)
 
