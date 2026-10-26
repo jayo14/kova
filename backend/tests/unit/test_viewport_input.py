@@ -1,6 +1,6 @@
 import asyncio
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from playwright.async_api import async_playwright
 
@@ -88,6 +88,40 @@ async def test_named_keys_hello_backspace_x_produces_hellx():
         val = await page.input_value("#input-box")
         assert val == "hellx", f"Expected input value 'hellx', got '{val}'"
 
+    finally:
+        await browser_instance.close()
+        await pw.stop()
+
+
+@pytest.mark.asyncio
+async def test_input_coordinates_clamped_and_text_bounded():
+    """Verify out-of-range coordinates are clamped and long text is truncated safely."""
+    pw = await async_playwright().start()
+    browser_instance = await pw.chromium.launch(headless=True)
+    try:
+        page = await browser_instance.new_page()
+        await page.set_content("""
+            <input id="input-box" type="text" style="position:absolute; left:10px; top:10px;" />
+        """)
+
+        browser_session = MagicMock()
+        browser_session.page = page
+
+        runner = FlowRunner()
+        exec_id = "test-exec-bounds"
+
+        # Out-of-bounds coordinates shouldn't crash
+        await queue_user_input(exec_id, {"kind": "mouse_move", "x": -500, "y": 99999})
+        await queue_user_input(exec_id, {"kind": "click", "x": 10, "y": 10})
+        # Massive string should be truncated to 500 chars max
+        huge_text = "A" * 800
+        await queue_user_input(exec_id, {"kind": "type", "text": huge_text})
+
+        await runner._process_user_input(browser_session, exec_id)
+
+        val = await page.input_value("#input-box")
+        assert len(val) == 500
+        assert val == "A" * 500
     finally:
         await browser_instance.close()
         await pw.stop()

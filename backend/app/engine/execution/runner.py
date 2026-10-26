@@ -2192,22 +2192,29 @@ class FlowRunner:
             pending = await get_pending_input(execution_id)
             if not hasattr(self, "_last_mouse_up"):
                 self._last_mouse_up = {}
+            def _clamp_coord(v: Any, max_val: int = 1920) -> int:
+                try:
+                    return max(0, min(int(v), max_val))
+                except (TypeError, ValueError):
+                    return 0
+
             for msg in pending:
                 kind = msg.get("kind", "")
                 try:
                     if kind == "mouse_down":
-                        x, y = msg.get("x"), msg.get("y")
-                        if x is not None and y is not None:
-                            await browser.page.mouse.move(x, y)
+                        x = _clamp_coord(msg.get("x", 0), 1920)
+                        y = _clamp_coord(msg.get("y", 0), 1080)
+                        await browser.page.mouse.move(x, y)
                         await browser.page.mouse.down(button="left" if msg.get("button", 0) == 0 else "right")
                     elif kind == "mouse_up":
-                        x, y = msg.get("x"), msg.get("y")
-                        if x is not None and y is not None:
-                            await browser.page.mouse.move(x, y)
-                        self._last_mouse_up[execution_id] = (time.monotonic(), x or 0, y or 0)
+                        x = _clamp_coord(msg.get("x", 0), 1920)
+                        y = _clamp_coord(msg.get("y", 0), 1080)
+                        await browser.page.mouse.move(x, y)
+                        self._last_mouse_up[execution_id] = (time.monotonic(), x, y)
                         await browser.page.mouse.up(button="left" if msg.get("button", 0) == 0 else "right")
                     elif kind == "click":
-                        x, y = msg.get("x", 0), msg.get("y", 0)
+                        x = _clamp_coord(msg.get("x", 0), 1920)
+                        y = _clamp_coord(msg.get("y", 0), 1080)
                         last_up = self._last_mouse_up.get(execution_id)
                         if last_up is not None:
                             last_time, last_x, last_y = last_up
@@ -2216,10 +2223,12 @@ class FlowRunner:
                                 continue
                         await browser.page.mouse.click(x, y)
                     elif kind == "mouse_move":
-                        x, y = msg.get("x", 0), msg.get("y", 0)
+                        x = _clamp_coord(msg.get("x", 0), 1920)
+                        y = _clamp_coord(msg.get("y", 0), 1080)
                         await browser.page.mouse.move(x, y)
                     elif kind == "scroll":
-                        dx, dy = msg.get("delta_x", 0), msg.get("delta_y", 0)
+                        dx = max(-1000, min(int(msg.get("delta_x", 0)), 1000))
+                        dy = max(-1000, min(int(msg.get("delta_y", 0)), 1000))
                         await browser.page.mouse.wheel(dx, dy)
                     elif kind == "key_down":
                         key = msg.get("key", "")
@@ -2230,7 +2239,7 @@ class FlowRunner:
                         if key and (len(key) == 1 or key in ALLOWED_NAMED_KEYS):
                             await browser.page.keyboard.up(key)
                     elif kind == "type":
-                        text = msg.get("text", "")
+                        text = str(msg.get("text", ""))[:500]
                         if text:
                             await browser.page.keyboard.type(text)
                     elif kind == "nav_back":
