@@ -123,6 +123,24 @@ class ExecutionError(Exception):
         super().__init__(message)
 
 
+def classify_execution_failure(error: Exception | str, step: dict | None = None) -> str:
+    """Classify execution errors into bounded diagnostic categories."""
+    err_msg = str(error).lower()
+    if any(k in err_msg for k in ("navigation", "net::", "ns_error", "load timed out", "dns")):
+        return "NAVIGATION_ERROR"
+    if any(k in err_msg for k in ("stale", "detached from document", "element is not attached")):
+        return "STALE_ELEMENT"
+    if any(k in err_msg for k in ("not visible", "hidden", "intercepted", "element was covered")):
+        return "DOM_MUTATED"
+    if any(k in err_msg for k in ("verification failed", "assertion", "expected:", "did not match")):
+        return "ASSERTION_FAILED"
+    if any(k in err_msg for k in ("auth barrier", "login required", "unauthorized", "401")):
+        return "AUTH_BARRIER"
+    if step and FlowRunner._is_non_idempotent_step(step):
+        return "NON_IDEMPOTENT_SUBMISSION_UNCERTAIN"
+    return "UNKNOWN"
+
+
 class FlowRunner:
     """Deterministic flow execution runner.
 
@@ -2494,11 +2512,12 @@ class FlowRunner:
             return False
 
     # Actions whose failure may already have had side effects — never blindly
-    # re-executed. A retried click on 'Delete' or a form submit can double-apply.
-    NON_RETRYABLE_ACTION_TYPES = {"click"}
+    # re-executed. A retried click on 'Delete', 'Submit', or payment can double-apply.
+    NON_RETRYABLE_ACTION_TYPES = {"click", "submit", "press"}
     _NON_RETRYABLE_ACTION_TEXT = (
         "delete", "remove", "destroy", "purge", "drop",
         "confirm", "pay", "checkout", "purchase", "place order", "submit payment",
+        "save", "create", "register", "submit", "send", "post",
     )
     DESTRUCTIVE_ACTION_TEXT = _NON_RETRYABLE_ACTION_TEXT
 
@@ -2552,10 +2571,14 @@ class FlowRunner:
                 ) from exc
         return result
 
-    @staticmethod
-    def _is_destructive_step(step: dict) -> bool:
-        """Heuristically detect steps whose retry could cause real damage."""
+    @classmethod
+    def _is_non_idempotent_step(cls, step: dict) -> bool:
+        """Detect steps whose retry could cause duplicate side effects or data loss."""
+        if not isinstance(step, dict):
+            return False
         step_type = (step.get("type") or step.get("action") or "").lower()
+        if step_type in ("submit", "press"):
+            return True
         texts = [
             str(step.get("description", "") or ""),
             str(step.get("name", "") or ""),
@@ -2565,10 +2588,13 @@ class FlowRunner:
         if isinstance(target, dict):
             texts.append(str(target.get("text", "") or ""))
             texts.append(str(target.get("css", "") or ""))
+            texts.append(str(target.get("name", "") or ""))
         elif isinstance(target, str):
             texts.append(target)
         combined = (step_type + " " + " ".join(texts)).lower()
-        return any(kw in combined for kw in FlowRunner.DESTRUCTIVE_ACTION_TEXT)
+        return any(kw in combined for kw in cls.DESTRUCTIVE_ACTION_TEXT)
+
+    _is_destructive_step = _is_non_idempotent_step
 
     async def _execute_step_with_retry(
         self,
@@ -2579,38 +2605,56 @@ class FlowRunner:
         step_index: int,
         event_recorder: Callable | None,
     ) -> None:
-        """Execute a step with deterministic, strategy-aware recovery (PRD §21).
+        """Execute a step with deterministic, strategy-aware recovery and idempotency safeguards.
 
-        Recovery ladder for target_not_found: re-observe the page, then retry —
-        the observation itself refreshes Playwright's element handles, which is
-        the deterministic equivalent of "try the next resolution strategy".
-
-        Never retries:
-        - clicks (side effects already applied on partial failure)
-        - any step matching destructive keywords (delete/confirm/pay/...)
-        - validation_error, credential_error, verification_failed
+        Non-idempotent operations (clicks on submit/create/delete buttons, form submissions)
+        receive exactly 1 attempt. If an ambiguous failure occurs, re-observes the page
+        to determine if state changed before deciding whether to halt with UNVERIFIED.
         """
         raw_type = (step.get("type") or step.get("action") or "").lower() if isinstance(step, dict) else ""
-        destructive = self._is_destructive_step(step) if isinstance(step, dict) else False
+        non_idempotent = self._is_non_idempotent_step(step) if isinstance(step, dict) else False
 
-        # Clicks and destructive actions get exactly one attempt — a failed
-        # click may already have triggered navigation or state changes.
-        attempts = 1 if (raw_type in self.NON_RETRYABLE_ACTION_TYPES or destructive) else MAX_ACTION_RETRIES
+        attempts = 1 if (raw_type in self.NON_RETRYABLE_ACTION_TYPES or non_idempotent) else MAX_ACTION_RETRIES
 
         last_error = None
+        pre_url = getattr(browser.page, "url", "") if getattr(browser, "page", None) else ""
+
         for attempt in range(1, attempts + 1):
             try:
                 await self._execute_step(ctx, browser, action_executor, step, step_index, event_recorder)
                 return  # Success
             except ExecutionError as e:
                 last_error = e
+                classification = classify_execution_failure(e, step)
+                logger.info("Step %d execution error classified as %s: %s", step_index, classification, e.message)
+
+                if non_idempotent:
+                    # Idempotency safeguard: re-observe to check if action actually took effect
+                    post_obs = await browser.observe() if hasattr(browser, "observe") else {}
+                    post_url = getattr(browser.page, "url", "") if getattr(browser, "page", None) else ""
+                    if post_url and post_url != pre_url:
+                        logger.info("Non-idempotent step caused URL transition despite error, treating as completed")
+                        return
+
+                    ctx.record_event("action.idempotency_halted", {
+                        "step": step_index,
+                        "step_id": step.get("step_id") if isinstance(step, dict) else None,
+                        "action": raw_type,
+                        "failure_classification": classification,
+                        "reason": f"Halting retry on non-idempotent action '{raw_type}' to prevent duplicate mutations or side effects.",
+                    })
+                    await self._emit_events(ctx, event_recorder)
+                    raise ExecutionError(
+                        f"Non-idempotent action failed and cannot be safely retried: {e.message}",
+                        error_code="NON_IDEMPOTENT_SUBMISSION_UNCERTAIN",
+                        state=ctx.state.value if hasattr(ctx.state, "value") else str(ctx.state),
+                    ) from e
+
                 recoverable = e.error_code in (ErrorCode.TARGET_NOT_FOUND, ErrorCode.ACTION_FAILED)
                 if not recoverable or attempt >= attempts:
                     raise
 
                 if e.error_code == ErrorCode.TARGET_NOT_FOUND:
-                    # Re-observe before retrying: DOM may have re-rendered and
-                    # the previous snapshot was stale.
                     try:
                         observation = await browser.observe()
                         ctx.record_observation(observation)
@@ -2626,11 +2670,11 @@ class FlowRunner:
                     "step_id": step.get("step_id") if isinstance(step, dict) else None,
                     "attempt": attempt,
                     "error_code": e.error_code,
+                    "failure_classification": classification,
                 })
                 await self._emit_events(ctx, event_recorder)
-                # Brief pause before retry to allow UI to update
                 await asyncio.sleep(0.5)
-        # Should not reach here, but safety net
+
         if last_error:
             raise last_error
 
@@ -2756,7 +2800,7 @@ class FlowRunner:
 
         result = await action_executor.execute(
             raw_action,
-            execution_id=uuid.UUID(ctx.execution_id) if ctx.execution_id else None,
+            execution_id=uuid.UUID(str(ctx.execution_id)) if ctx.execution_id else None,
         )
 
         if not result["success"]:
