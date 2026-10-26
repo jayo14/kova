@@ -53,8 +53,14 @@ def _sentry_before_send(event: dict, hint: dict) -> dict | None:
     return event
 
 
-# Initialize Sentry SDK before FastAPI app initialization
-if settings.SENTRY_DSN:
+import os
+
+# Initialize Sentry SDK before FastAPI app initialization (skip in test runner or test environment)
+if (
+    settings.SENTRY_DSN
+    and settings.ENVIRONMENT not in ("test", "testing")
+    and not os.environ.get("PYTEST_CURRENT_TEST")
+):
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
         send_default_pii=False,
