@@ -168,10 +168,10 @@ async def test_publish_command_reaches_channel(exec_id):
     subscribed = asyncio.Event()
 
     async def _consume():
-        from app.engine.execution.control import subscribe_commands, _get_redis
+        from app.engine.execution.control import COMMAND_CHANNEL, _get_redis
         r = await _get_redis()
         pubsub = r.pubsub()
-        await pubsub.subscribe(f"kova:control:commands:{exec_id}")
+        await pubsub.subscribe(f"{COMMAND_CHANNEL}:{exec_id}")
         subscribed.set()
         try:
             async for message in pubsub.listen():
@@ -184,7 +184,7 @@ async def test_publish_command_reaches_channel(exec_id):
                 break
         finally:
             try:
-                await pubsub.unsubscribe(f"kova:control:commands:{exec_id}")
+                await pubsub.unsubscribe(f"{COMMAND_CHANNEL}:{exec_id}")
                 await pubsub.aclose()
             except Exception:
                 pass
