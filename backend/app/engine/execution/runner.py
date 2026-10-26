@@ -58,6 +58,7 @@ from app.engine.execution.control import (
     get_control_state,
     confirm_paused,
     confirm_resumed,
+    release_human_control,
     resolve_human_checkpoint,
     get_pending_input,
     check_pause,
@@ -2343,6 +2344,12 @@ class FlowRunner:
             await self._process_user_input(browser, execution_id)
 
             rec = await get_control_record(execution_id)
+            if rec.state == ControlState.HUMAN_CONTROL and rec.lease_expires_at and time.time() > rec.lease_expires_at:
+                logger.warning("Execution %s human takeover lease expired; reclaiming for agent", execution_id)
+                await release_human_control(execution_id)
+                resumed = True
+                break
+
             if rec.state in (ControlState.RESUME_REQUESTED, ControlState.RUNNING):
                 resumed = True
                 break
