@@ -11,6 +11,7 @@ export interface StepScreenshot {
   url: string;
   title: string;
   stepIndex: number | null;
+  status?: string | null;
 }
 
 export interface ExecutionBrowserProps {
@@ -190,7 +191,7 @@ export function ExecutionBrowser({
       </div>
 
       {/* Viewport Workspace */}
-      <div className="relative flex-1 min-h-[380px] sm:min-h-[440px] md:min-h-[500px] bg-background/50 overflow-hidden select-none">
+      <div className="relative flex-1 min-h-[420px] sm:min-h-[520px] md:min-h-[560px] bg-background/50 overflow-hidden select-none">
         {/* Agent Control Glow */}
         {isAgentControlled && (
           <div className="absolute inset-0 z-10 pointer-events-none">
@@ -358,6 +359,14 @@ export function ExecutionBrowser({
           <div className="flex gap-2 overflow-x-auto pb-1">
             {stepScreenshots.map((shot, index) => {
               const active = (scrubberIndex ?? stepScreenshots.length - 1) === index;
+              const upperStatus = shot.status ? String(shot.status).toUpperCase() : null;
+              const dotClass = !upperStatus
+                ? null
+                : upperStatus === "VERIFIED"
+                ? "bg-emerald-500"
+                : upperStatus === "FAILED"
+                ? "bg-destructive"
+                : "bg-muted-foreground/70";
               return (
                 <button
                   key={`${shot.url}-${index}`}
@@ -366,12 +375,20 @@ export function ExecutionBrowser({
                   aria-pressed={active}
                   aria-label={`Show ${shot.title || `step ${index + 1}`}`}
                   className={cn(
-                    "relative h-14 w-24 shrink-0 overflow-hidden rounded-md border-2 bg-background transition-colors",
+                    "relative h-16 w-28 shrink-0 overflow-hidden rounded-md border-2 bg-background transition-colors",
                     active ? "border-primary" : "border-border/60 hover:border-border"
                   )}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={shot.url} alt="" className="h-full w-full object-cover" />
+                  {dotClass && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-1 right-1 z-10 h-2 w-2 rounded-full ring-1 ring-white/40 shadow-sm"
+                    >
+                      <span className={cn("block h-full w-full rounded-full", dotClass)} />
+                    </span>
+                  )}
                   <span className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 text-[10px] font-medium text-white">
                     {shot.stepIndex != null ? `Step ${shot.stepIndex + 1}` : `Shot ${index + 1}`}
                   </span>

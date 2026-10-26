@@ -112,6 +112,7 @@ export function ExecutionDetailPage({
           title: item.title || item.purpose || "",
           stepIndex: Number.isFinite(parsed) ? parsed : null,
           createdAt: item.createdAt || "",
+          status: item.status ?? null,
         };
       });
 
@@ -120,7 +121,7 @@ export function ExecutionDetailPage({
       return a.createdAt.localeCompare(b.createdAt);
     });
 
-    return shots.map(({ url, title, stepIndex }) => ({ url, title, stepIndex }));
+    return shots.map(({ url, title, stepIndex, status }) => ({ url, title, stepIndex, status }));
   }, [evidence]);
 
   // Find live URL if page was navigated
