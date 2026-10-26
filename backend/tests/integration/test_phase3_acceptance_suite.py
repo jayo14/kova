@@ -294,7 +294,6 @@ async def test_phase3_acceptance_comprehensive_suite(controlled_server, db_sessi
     db_session.add(event_rec)
     await db_session.commit()
 
-    from unittest.mock import MagicMock
     mock_request = MagicMock()
     mock_request.base_url = "http://testserver"
 
