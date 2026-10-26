@@ -127,6 +127,10 @@ class OpenAICompatibleProvider(AIProvider):
     def models(self) -> list[str]:
         return self._models
 
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     async def generate_structured(
         self,
         system: str,
