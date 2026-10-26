@@ -52,7 +52,7 @@ export function RunHeader({
           <StatusBadge
             icon
             config={getRunStatusConfig(isPaused ? "PAUSED" : runStatus)}
-            className="border px-2.5 py-0.5 rounded-full"
+            className="px-2.5 py-1 rounded-full"
           />
         </h1>
       </div>
