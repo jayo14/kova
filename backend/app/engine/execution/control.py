@@ -351,8 +351,8 @@ async def release_human_control(
         if record.state in TERMINAL_CONTROL_STATES:
             return False, "Execution already terminated", record
 
-        if record.state != ControlState.HUMAN_CONTROL and record.state != ControlState.PAUSED:
-            return False, f"Execution not in human control (currently {record.state.value})", record
+        if record.state not in (ControlState.HUMAN_CONTROL, ControlState.PAUSED, ControlState.PAUSE_REQUESTED):
+            return False, f"Execution not in human control or paused (currently {record.state.value})", record
 
         if lease_id and record.lease_id and record.lease_id != lease_id:
             return False, "Mismatched or stale lease ID", record
@@ -370,6 +370,7 @@ async def release_human_control(
             generation=record.generation,
         )
         return True, "Control returned to agent", record
+
 
 
 async def request_resume(execution_id: str) -> ControlRecord:

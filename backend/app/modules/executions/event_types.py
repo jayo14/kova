@@ -62,6 +62,9 @@ class EventTypes:
     EXECUTION_HUMAN_CONTROLLED = "execution.human_controlled"
     EXECUTION_RESUMED = "execution.resumed"
     CONTROL_CHANGED = "control.changed"
+    HUMAN_CHECKPOINT_RAISED = "execution.human_checkpoint_raised"
+    HUMAN_CHECKPOINT_RESOLVED = "execution.human_checkpoint_resolved"
+
 
     # Agent loop (AI layer — proposals and reasoning; never secrets)
     GOAL_INTERPRETED = "agent.goal_interpreted"
