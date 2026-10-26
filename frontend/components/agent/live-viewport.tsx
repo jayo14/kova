@@ -88,6 +88,8 @@ export function LiveViewport({
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const framePendingRef = useRef(false);
+  const leaseIdRef = useRef<string | null>(null);
+  const generationRef = useRef<number>(1);
   const [hasReceivedFrame, setHasReceivedFrame] = useState(false);
   const [state, setState] = useState<ViewportState>("connecting");
   const [url, setUrl] = useState("");
@@ -95,20 +97,37 @@ export function LiveViewport({
   const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
   const [controlState, setControlState] = useState<"agent" | "human">("agent");
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
+  const [checkpoint, setCheckpoint] = useState<{ type: string; description: string; details?: any } | null>(null);
+  const [takeoverError, setTakeoverError] = useState<string | null>(null);
 
   const isHumanControlled = controlState === "human" || state === "user_control";
 
   const sendInput = useCallback((msg: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "input", ...msg }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "input",
+          lease_id: leaseIdRef.current,
+          generation: generationRef.current,
+          ...msg,
+        })
+      );
     }
   }, []);
 
   const sendNav = useCallback((kind: "back" | "forward" | "reload") => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "nav", kind }));
+      wsRef.current.send(
+        JSON.stringify({
+          type: "nav",
+          kind,
+          lease_id: leaseIdRef.current,
+          generation: generationRef.current,
+        })
+      );
     }
   }, []);
+
 
   const connect = useCallback(async () => {
     if (!executionId) return;
@@ -161,9 +180,35 @@ export function LiveViewport({
         img.src = objectUrl;
       } else {
         try {
-          const msg: ViewportMessage = JSON.parse(event.data);
-          if (msg.type === "state" && msg.state) {
-            setState(msg.state as ViewportState);
+          const msg = JSON.parse(event.data);
+          if (msg.type === "takeover_granted") {
+            leaseIdRef.current = msg.lease_id || null;
+            if (msg.generation) generationRef.current = msg.generation;
+            setControlState("human");
+            setState("user_control");
+            setTakeoverError(null);
+            onTakeover?.();
+          } else if (msg.type === "takeover_rejected") {
+            setTakeoverError(msg.reason || "Browser takeover unavailable");
+            setTimeout(() => setTakeoverError(null), 4000);
+          } else if (msg.type === "control_changed") {
+            if (msg.lease_id) leaseIdRef.current = msg.lease_id;
+            if (msg.generation) generationRef.current = msg.generation;
+            if (msg.checkpoint !== undefined) setCheckpoint(msg.checkpoint);
+            if (msg.control === "human") {
+              setControlState("human");
+              setState("user_control");
+            } else if (msg.control === "paused") {
+              setState("paused");
+            } else if (msg.control === "agent") {
+              setControlState("agent");
+              leaseIdRef.current = null;
+              setState("resuming");
+              setTimeout(() => setState("executing"), 1500);
+            }
+          } else if (msg.type === "state") {
+            if (msg.checkpoint !== undefined) setCheckpoint(msg.checkpoint);
+            if (msg.state) setState(msg.state as ViewportState);
             if (msg.url) setUrl(msg.url);
             if (msg.title) setTitle(msg.title);
             if (msg.control === "human" || msg.control === "agent") {
@@ -171,14 +216,6 @@ export function LiveViewport({
             }
             if (msg.cursor) setCursor(msg.cursor);
             else if (msg.state !== "paused" && msg.state !== "user_control") setCursor(null);
-          } else if (msg.type === "control_changed" && msg.control) {
-            setControlState(msg.control as "agent" | "human");
-            if (msg.control === "agent") {
-              setState("resuming");
-              setTimeout(() => setState("executing"), 1500);
-            } else {
-              setState("user_control");
-            }
           } else if (msg.type === "takeover_request") {
             setShowTakeoverDialog(true);
           }
@@ -187,6 +224,7 @@ export function LiveViewport({
         }
       }
     };
+
 
     ws.onclose = () => {
       if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
@@ -224,10 +262,7 @@ export function LiveViewport({
   const handleTakeoverAccept = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ type: "takeover_accept" }));
     setShowTakeoverDialog(false);
-    setState("user_control");
-    setControlState("human");
-    onTakeover?.();
-  }, [onTakeover]);
+  }, []);
 
   const handleTakeoverReject = useCallback(() => {
     wsRef.current?.send(JSON.stringify({ type: "takeover_reject" }));
@@ -236,11 +271,28 @@ export function LiveViewport({
   }, [onRelease]);
 
   const handleReturnControl = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "return_control" }));
+    wsRef.current?.send(
+      JSON.stringify({
+        type: "return_control",
+        lease_id: leaseIdRef.current,
+      })
+    );
+    leaseIdRef.current = null;
     setState("resuming");
     setControlState("agent");
     onRelease?.();
   }, [onRelease]);
+
+  const handlePause = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ type: "pause" }));
+    setState("paused");
+  }, []);
+
+  const handleResume = useCallback(() => {
+    wsRef.current?.send(JSON.stringify({ type: "resume" }));
+    setState("resuming");
+  }, []);
+
 
   // Mouse input handlers
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -473,6 +525,39 @@ export function LiveViewport({
           <div className="absolute inset-0 pointer-events-none border-2 border-amber-500/50 rounded-lg" />
         )}
 
+        {/* Checkpoint banner */}
+        {checkpoint && (
+          <div className="absolute top-10 left-3 right-3 z-30 flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-950/90 border border-amber-500/50 text-amber-200 backdrop-blur-md shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <MaterialIcon name="security" className="w-5 h-5 text-amber-400 shrink-0" />
+              <div className="text-xs">
+                <p className="font-semibold text-amber-100">Verification Barrier Encountered</p>
+                <p className="text-amber-200/80 truncate">{checkpoint.description || "Human intervention required"}</p>
+              </div>
+            </div>
+            {!isHumanControlled ? (
+              <button
+                type="button"
+                onClick={handleTakeoverAccept}
+                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-neutral-950 font-medium text-xs rounded-md shrink-0 transition-colors cursor-pointer"
+              >
+                Solve in Browser
+              </button>
+            ) : (
+              <span className="text-[11px] font-mono text-amber-300/80 px-2 py-0.5 rounded border border-amber-400/30">
+                Solving Challenge...
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Takeover error notification */}
+        {takeoverError && (
+          <div className="absolute top-10 left-3 right-3 z-30 p-2.5 rounded-lg bg-destructive/90 border border-destructive text-destructive-foreground text-xs shadow-lg animate-in fade-in duration-200">
+            {takeoverError}
+          </div>
+        )}
+
         {/* Takeover dialog */}
         {showTakeoverDialog && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm z-40">
@@ -484,13 +569,13 @@ export function LiveViewport({
               <div className="flex gap-2 justify-end">
                 <button
                   onClick={handleTakeoverReject}
-                  className="px-3 py-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors"
+                  className="px-3 py-1.5 text-caption text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                 >
                   Keep observing
                 </button>
                 <button
                   onClick={handleTakeoverAccept}
-                  className="px-3 py-1.5 text-caption bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors"
+                  className="px-3 py-1.5 text-caption bg-primary text-primary-foreground rounded-md hover:bg-primary/90 transition-colors cursor-pointer"
                 >
                   Take control
                 </button>
@@ -512,6 +597,8 @@ export function LiveViewport({
                 ? "bg-muted-foreground/40"
                 : isHumanControlled
                 ? "bg-amber-500"
+                : state === "paused"
+                ? "bg-amber-400"
                 : "bg-primary animate-pulse"
             )}
           />
@@ -522,6 +609,8 @@ export function LiveViewport({
               ? "Session ended"
               : isHumanControlled
               ? "You are controlling"
+              : state === "paused"
+              ? "Execution paused"
               : "Kova is controlling"}
           </span>
         </div>
@@ -539,16 +628,38 @@ export function LiveViewport({
             <span>Return control to Kova</span>
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={handleTakeoverAccept}
-            className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-caption font-medium text-foreground hover:bg-muted transition-colors shrink-0 cursor-pointer"
-          >
-            <MaterialIcon name="person" size={14} />
-            <span>Take over</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            {state === "paused" ? (
+              <button
+                type="button"
+                onClick={handleResume}
+                className="flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-2 py-1 text-caption font-medium hover:bg-primary/90 transition-colors shrink-0 cursor-pointer"
+              >
+                <MaterialIcon name="play_arrow" size={14} />
+                <span>Resume</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handlePause}
+                className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-caption font-medium text-muted-foreground hover:text-foreground transition-colors shrink-0 cursor-pointer"
+              >
+                <MaterialIcon name="pause" size={14} />
+                <span>Pause</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleTakeoverAccept}
+              className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-caption font-medium text-foreground hover:bg-muted transition-colors shrink-0 cursor-pointer"
+            >
+              <MaterialIcon name="person" size={14} />
+              <span>Take over</span>
+            </button>
+          </div>
         )}
       </div>
     </div>
   );
 }
+
