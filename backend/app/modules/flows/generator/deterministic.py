@@ -32,6 +32,22 @@ from app.modules.product_graph.repository import ProductGraphRepository
 logger = logging.getLogger(__name__)
 
 
+def _flow_signature(flow: GeneratedFlow) -> tuple:
+    """Stable identity for semantic duplicate detection within one request."""
+    return (
+        flow.persona_id,
+        tuple(str(page_id) for page_id in flow.page_ids),
+        tuple(
+            (
+                step.action,
+                getattr(step, "target", None),
+                getattr(step, "value", None),
+            )
+            for step in flow.internal
+        ),
+    )
+
+
 class DeterministicFlowGenerator:
     """Deterministic generator that walks the Product Graph to produce executable flows."""
 
@@ -102,7 +118,20 @@ class DeterministicFlowGenerator:
                 else:
                     unresolved.append(goal.name)
 
-        return flows, unresolved
+        deduped: list[GeneratedFlow] = []
+        positions: dict[tuple, int] = {}
+        for flow in flows:
+            signature = _flow_signature(flow)
+            existing = positions.get(signature)
+            if existing is None:
+                positions[signature] = len(deduped)
+                deduped.append(flow)
+                continue
+            logger.info("Deterministic generator: dropping duplicate flow %s", flow.name)
+            if deduped[existing].goal_id is None and flow.goal_id is not None:
+                deduped[existing] = flow
+
+        return deduped, unresolved
 
     async def _generate_flows_for_goal(
         self,
@@ -233,22 +262,10 @@ class DeterministicFlowGenerator:
                     target_actions = [a for a in all_actions if a.page_id == p.id]
                     break
 
-        # 4. Fallback: match page from actions
-        if not target_page and all_actions:
-            action_by_page: dict[uuid.UUID, list[ProductAction]] = {}
-            for a in all_actions:
-                action_by_page.setdefault(a.page_id, []).append(a)
-            if action_by_page:
-                best_pid = max(action_by_page.keys(), key=lambda pid: len(action_by_page[pid]))
-                target_page = next((p for p in all_pages if p.id == best_pid), None)
-                target_actions = action_by_page[best_pid]
-
-        if not target_page and all_pages:
-            target_page = all_pages[0]
-            target_actions = [a for a in all_actions if a.page_id == target_page.id]
-
         if not target_page:
-            logger.info("Deterministic generator: No page found for capability %s", cap.name)
+            # No page is grounded in this capability. Emitting an arbitrary page
+            # would fabricate a mission that was never evidenced by discovery.
+            logger.info("Deterministic generator: No grounded page for capability %s", cap.name)
             return None
 
         # Build steps
