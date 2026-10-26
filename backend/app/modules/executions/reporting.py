@@ -240,11 +240,89 @@ def diagnose_verification(check: dict, step_name: str | None = None) -> dict:
     }
 
 
-def build_timeline(events: list[object], execution_status: str | None = None) -> list[dict]:
+_INCONCLUSIVE_CHECK_TYPES = {
+    "unknown_condition",
+    "empty_condition",
+    "malformed_condition",
+    "vacuous_condition",
+    "unsupported_condition",
+    "verifier_error",
+}
+
+
+def derive_report_status(persisted_status: str | None, verification: dict | None) -> str | None:
+    """Reflect the evidence verdict without upgrading unproven executions.
+
+    A persisted COMPLETED status is only reported as COMPLETED when verification
+    passed. If a concrete check disproved the requirement the honest verdict is
+    FAILED; when no evidence can establish the outcome it remains UNVERIFIED.
+    """
+    status = (persisted_status or "").lower()
+    if status not in ("completed", "passed"):
+        return persisted_status
+    verification = verification or {}
+    checks = verification.get("checks") or []
+    if verification.get("passed") is True and checks and all(
+        isinstance(check, dict) and check.get("passed") is True for check in checks
+    ):
+        return persisted_status
+    if any(
+        isinstance(check, dict)
+        and check.get("passed") is False
+        and check.get("type") not in _INCONCLUSIVE_CHECK_TYPES
+        for check in checks
+    ):
+        return "FAILED"
+    return "UNVERIFIED"
+
+
+def compute_verdict_breakdown(checks: list | None, timeline: list | None) -> tuple[dict, int]:
+    """Count every assertion once and return an honest planned denominator.
+
+    Each verification check is classified exactly once. Only when no checks were
+    recorded are timeline step statuses used, so a blocked step cannot also be
+    counted as a failed check.
+    """
+    checks = [check for check in (checks or []) if isinstance(check, dict)]
+    timeline = [step for step in (timeline or []) if isinstance(step, dict)]
+    breakdown = {"passed": 0, "failed": 0, "blocked": 0, "unverified": 0}
+    if checks:
+        for check in checks:
+            if check.get("passed") is True:
+                breakdown["passed"] += 1
+            elif check.get("type") in _INCONCLUSIVE_CHECK_TYPES:
+                breakdown["unverified"] += 1
+            elif check.get("type") == "auth_barrier" or "blocked" in str(check.get("message", "")).lower():
+                breakdown["blocked"] += 1
+            elif check.get("passed") is False:
+                breakdown["failed"] += 1
+            else:
+                breakdown["unverified"] += 1
+    else:
+        for step in timeline:
+            status = step.get("status")
+            if status == "passed":
+                breakdown["passed"] += 1
+            elif status == "failed" or status == "error":
+                breakdown["failed"] += 1
+            elif status == "blocked":
+                breakdown["blocked"] += 1
+            else:
+                breakdown["unverified"] += 1
+    total_evaluated = sum(breakdown.values())
+    return breakdown, total_evaluated
+
+
+def build_timeline(
+    events: list[object],
+    execution_status: str | None = None,
+    verification_passed: bool | None = None,
+) -> list[dict]:
     """Group durable events into ordered steps without manufacturing missing results.
 
-    When the overall execution_status is COMPLETED, unverified steps that completed
-    their action successfully are promoted to 'passed' to avoid contradictory counts.
+    Unverified steps are promoted only when the execution both persisted as
+    COMPLETED and verification explicitly passed. A rejected execution must not
+    display steps as passed merely because the worker stopped cleanly.
     """
     steps: dict[str, dict] = {}
     order: list[str] = []
@@ -276,8 +354,12 @@ def build_timeline(events: list[object], execution_status: str | None = None) ->
         elif event_type in {"action.failed", "execution.failed"}:
             item.update({"status": "error", "error": sanitize_text(payload.get("error_message") or payload.get("error"))})
 
-    # Promote unverified steps to passed on successful executions
-    is_success = execution_status and execution_status.lower() in ("completed", "passed")
+    # Promote unverified steps only when overall verification actually passed.
+    is_success = (
+        execution_status
+        and execution_status.lower() in ("completed", "passed")
+        and verification_passed is True
+    )
     if is_success:
         for item in steps.values():
             if item["status"] == "unverified" and item.get("action_result") == "completed":

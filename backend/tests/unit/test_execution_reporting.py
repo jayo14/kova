@@ -114,3 +114,48 @@ def test_verdict_breakdown_and_denominator_transparency():
     total_evaluated = sum(breakdown.values())
     assert total_evaluated == 5
 
+
+
+def test_report_status_never_upgrades_rejected_completion():
+    from app.modules.executions.reporting import derive_report_status
+
+    assert derive_report_status("COMPLETED", {"passed": True, "checks": [{"type": "text_visible", "passed": True}]}) == "COMPLETED"
+    assert derive_report_status("COMPLETED", {"passed": False, "checks": [{"type": "text_visible", "passed": False, "actual": "Error"}]}) == "FAILED"
+    assert derive_report_status("COMPLETED", {"passed": False, "checks": []}) == "UNVERIFIED"
+    assert derive_report_status("COMPLETED", {"passed": False, "checks": [{"type": "vacuous_condition", "passed": False}]}) == "UNVERIFIED"
+    assert derive_report_status("FAILED", {"passed": False, "checks": []}) == "FAILED"
+
+
+def test_verdict_breakdown_counts_each_check_once_without_double_counting_steps():
+    from app.modules.executions.reporting import compute_verdict_breakdown
+
+    checks = [
+        {"type": "text_visible", "passed": True},
+        {"type": "text_visible", "passed": False, "actual": "missing"},
+        {"type": "auth_barrier", "passed": False, "message": "blocked by login"},
+        {"type": "unknown_condition", "passed": False},
+    ]
+    timeline = [
+        {"status": "passed"},
+        {"status": "blocked"},
+        {"status": "unverified"},
+    ]
+    breakdown, total = compute_verdict_breakdown(checks, timeline)
+    assert breakdown == {"passed": 1, "failed": 1, "blocked": 1, "unverified": 1}
+    assert total == 4
+
+    empty_breakdown, empty_total = compute_verdict_breakdown([], timeline)
+    assert empty_breakdown == {"passed": 1, "failed": 0, "blocked": 1, "unverified": 1}
+    assert empty_total == 3
+
+
+def test_rejected_completion_does_not_promote_unverified_steps_to_passed():
+    events = [
+        SimpleNamespace(event_type="action.started", payload={"step": 1, "type": "click", "expected_outcome": "saved"}, created_at=None),
+        SimpleNamespace(event_type="action.completed", payload={"step": 1, "duration_ms": 10}, created_at=None),
+    ]
+    rejected = build_timeline(events, execution_status="COMPLETED", verification_passed=False)
+    assert rejected[0]["status"] == "unverified"
+
+    verified = build_timeline(events, execution_status="COMPLETED", verification_passed=True)
+    assert verified[0]["status"] == "passed"
