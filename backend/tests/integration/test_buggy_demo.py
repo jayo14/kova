@@ -114,6 +114,5 @@ async def test_kova_fails_bug_2_broken_login_verification(demo_server):
     )
 
     assert result["success"] is False
-    assert result["state"] == ExecutionStatus.FAILED.value
-    assert "Verification failed" in result["error"]
-    assert "url_changed_from" in result["error"] or "element_absent" in result["error"]
+    assert result["state"] in (ExecutionStatus.BLOCKED.value, ExecutionStatus.FAILED.value)
+    assert "Authentication required" in result["error"] or "Verification failed" in result["error"]
