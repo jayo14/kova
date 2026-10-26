@@ -30,6 +30,19 @@ function formatHostname(url: string): string {
   }
 }
 
+function calculateDuration(startedAt?: string | null, completedAt?: string | null): string | null {
+  if (!startedAt || !completedAt) return null;
+  try {
+    const start = new Date(startedAt).getTime();
+    const end = new Date(completedAt).getTime();
+    const diff = end - start;
+    if (diff < 0) return null;
+    return `${(diff / 1000).toFixed(1)}s`;
+  } catch {
+    return null;
+  }
+}
+
 export function ExecutionHeader({
   execution,
   connectionStatus,
@@ -43,6 +56,7 @@ export function ExecutionHeader({
 }: ExecutionHeaderProps) {
   const statusConfig = getExecutionStatusConfig(execution.status);
   const isActive = isActiveStatus(execution.status);
+  const duration = calculateDuration(execution.startedAt, execution.completedAt);
   const backHref = execution.missionId
     ? `/flows/${execution.missionId}`
     : "/executions";
@@ -54,10 +68,19 @@ export function ExecutionHeader({
 
       {/* Title & Actions Bar */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-display sm:text-[2.25rem] font-bold text-foreground mb-1.5 tracking-tight truncate">
-            {execution.missionName}
-          </h1>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2.5 mb-1.5 min-w-0">
+            <h1
+              title={execution.missionName}
+              className="text-xl sm:text-2xl font-bold text-foreground tracking-tight truncate"
+            >
+              {execution.missionName}
+            </h1>
+            <StatusBadge
+              config={statusConfig}
+              className="px-2.5 py-1 rounded-full shrink-0"
+            />
+          </div>
 
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-body-sm text-muted-foreground">
             <span className="font-medium text-foreground">
@@ -73,11 +96,14 @@ export function ExecutionHeader({
             )}
             <span aria-hidden="true">·</span>
 
-            {/* Execution Status Badge */}
-            <StatusBadge config={statusConfig} className="px-2 py-0.5 rounded-md" />
-
-            {/* Validation Mode Badge */}
             <ModeBadge mode={execution.mode} />
+
+            {duration && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-caption">{duration}</span>
+              </>
+            )}
 
             {/* Subtle Restrained Realtime Stream Indicator */}
             {isActive && connectionStatus === "connected" && (
