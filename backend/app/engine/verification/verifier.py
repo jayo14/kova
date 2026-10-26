@@ -178,18 +178,25 @@ def is_vacuous_condition(condition: Any) -> bool:
                 if v.strip():
                     has_non_vacuous = True
             elif isinstance(v, dict):
-                fields = v.get("expected_fields") or {}
+                fields = v.get("expected_fields") or v.get("fields") or {}
                 texts = v.get("expected_text")
                 if isinstance(texts, str):
                     texts = [texts]
+                elif not isinstance(texts, (list, tuple)):
+                    texts = []
+                title = v.get("title")
+                if isinstance(title, str) and title.strip():
+                    texts = list(texts) + [title]
                 has_values = isinstance(fields, dict) and any(str(val).strip() for val in fields.values())
-                has_texts = isinstance(texts, (list, tuple)) and any(str(t).strip() for t in texts)
+                has_texts = any(str(t).strip() for t in texts if t is not None)
                 if has_values or has_texts:
                     has_non_vacuous = True
         elif k == "search_results":
             if isinstance(v, dict):
                 expected = v.get("expected_matches")
                 excluded = v.get("excluded_matches")
+                if excluded is None:
+                    excluded = v.get("excluded_terms")
                 if isinstance(expected, str):
                     expected = [expected]
                 if isinstance(excluded, str):
@@ -203,7 +210,10 @@ def is_vacuous_condition(condition: Any) -> bool:
                 if v.strip():
                     has_non_vacuous = True
             elif isinstance(v, dict):
-                if any(str(v.get(key) or "").strip() for key in ("message", "field", "selector")):
+                if any(
+                    str(v.get(key) or "").strip()
+                    for key in ("message", "expected_message", "field", "selector")
+                ):
                     has_non_vacuous = True
         else:
             has_non_vacuous = True
@@ -1276,12 +1286,17 @@ class Verifier:
                 )
 
         selector = config.get("selector")
-        expected_fields = config.get("expected_fields") or {}
+        expected_fields = config.get("expected_fields") or config.get("fields") or {}
         expected_texts = config.get("expected_text")
         if isinstance(expected_texts, str):
             expected_texts = [expected_texts]
-        elif expected_texts is None:
+        elif isinstance(expected_texts, (list, tuple)):
+            expected_texts = list(expected_texts)
+        else:
             expected_texts = []
+        title = config.get("title")
+        if isinstance(title, str) and title.strip():
+            expected_texts.append(title)
 
         has_expected_values = (
             isinstance(expected_fields, dict)
@@ -1434,7 +1449,11 @@ class Verifier:
         expected = config.get("expected_matches", [])
         if isinstance(expected, str):
             expected = [expected]
-        excluded = config.get("excluded_matches", [])
+        excluded = config.get("excluded_matches")
+        if excluded is None:
+            excluded = config.get("excluded_terms")
+        if excluded is None:
+            excluded = []
         if isinstance(excluded, str):
             excluded = [excluded]
         elif excluded is None:
@@ -1545,7 +1564,7 @@ class Verifier:
                 message="validation_error requires dict or string message",
             )
 
-        expected_msg = (config.get("message") or "").strip().lower()
+        expected_msg = (config.get("message") or config.get("expected_message") or "").strip().lower()
         field_name = config.get("field")
         selector = config.get("selector")
 
