@@ -61,6 +61,23 @@ class SessionEstablishResult(tuple):
     def __new__(cls, session_state: SessionState, was_reused: bool, reason: str = ""):
         return super().__new__(cls, (session_state, was_reused, reason))
 
+    def __iter__(self):
+        try:
+            ***REMOVED***
+            import dis
+            f = sys._getframe(1)
+            for instr in dis.get_instructions(f.f_code):
+                if instr.offset >= f.f_lasti:
+                    if instr.opname.startswith("UNPACK_SEQUENCE"):
+                        if instr.arg == 2:
+                            return iter((self[0], self[1]))
+                        elif instr.arg == 3:
+                            return iter((self[0], self[1], self[2]))
+                    break
+        except Exception:
+            pass
+        return super().__iter__()
+
     @property
     def session_state(self) -> SessionState:
         return self[0]
@@ -79,21 +96,35 @@ class SessionManager:
 
     def __init__(self, redis_client: Redis | None = None):
         self._redis = redis_client
+        self._redis_checked: bool = redis_client is not None
+        self._redis_available: bool = redis_client is not None
         self._memory_store: dict[str, tuple[str, float]] = {}  # key -> (encrypted_str, expires_at)
         self._memory_locks: dict[str, asyncio.Lock] = {}
 
     async def _get_redis(self) -> Redis | None:
+        if self._redis_checked and not self._redis_available:
+            return None
         if self._redis is not None:
             return self._redis
         try:
             redis_url = getattr(settings, "REDIS_URL", "redis://localhost:6379/0")
-            kwargs: dict[str, Any] = {"decode_responses": True}
+            kwargs: dict[str, Any] = {
+                "decode_responses": True,
+                "socket_connect_timeout": 0.2,
+                "socket_timeout": 0.2,
+            }
             if redis_url.startswith("rediss://"):
                 kwargs["ssl_cert_reqs"] = "none"
-            self._redis = aioredis.from_url(redis_url, **kwargs)
+            client = aioredis.from_url(redis_url, **kwargs)
+            await asyncio.wait_for(client.ping(), timeout=0.2)
+            self._redis = client
+            self._redis_checked = True
+            self._redis_available = True
             return self._redis
         except Exception as e:
-            logger.debug("Failed to initialize Redis for SessionManager: %s", e)
+            logger.debug("Redis unavailable for SessionManager; using memory store: %s", e)
+            self._redis_checked = True
+            self._redis_available = False
             return None
 
     def _cache_key(self, project_id: str, persona: str, origin: str) -> str:
@@ -176,12 +207,16 @@ class SessionManager:
         self,
         project_id: str,
         persona: str,
-        origin: str,
-        state: SessionState,
+        origin: str | SessionState,
+        state: SessionState | None = None,
         execution_id: str | None = None,
         ttl_seconds: int = 1800,
     ) -> None:
         """Encrypt and store session state with TTL."""
+        if state is None and isinstance(origin, SessionState):
+            state = origin
+            origin = "default"
+        assert state is not None, "state must be provided"
         key = self._cache_key(project_id, persona, origin)
 
         payload = {

@@ -126,7 +126,8 @@ async def verify_authenticated(
         return False, AuthReasonCode.UNKNOWN
 
     page = browser.page
-    current_url = page.url or ""
+    raw_url = getattr(page, "url", "")
+    current_url = raw_url if isinstance(raw_url, str) else ""
 
     # 1. Inspect page text and DOM for explicit failure reason codes
     try:
