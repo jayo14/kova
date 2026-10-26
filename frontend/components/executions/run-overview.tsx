@@ -237,16 +237,18 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
       </div>
 
       {/* Main Two-Column View: Mission Selector + Active Journey Stream */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left Column: Mission List */}
-        <JourneyList
-          executions={run.executions}
-          selectedExecutionId={selectedExecutionId}
-          onSelect={setSelectedExecutionId}
-        />
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        {/* Left Column: Mission List (~290px rail on wide screens) */}
+        <div className="lg:w-[290px] lg:shrink-0 min-w-0">
+          <JourneyList
+            executions={run.executions}
+            selectedExecutionId={selectedExecutionId}
+            onSelect={setSelectedExecutionId}
+          />
+        </div>
 
         {/* Right Column: Live Viewport, Scrubber & Detail for Selected Mission */}
-        <div className="lg:col-span-8">
+        <div className="flex-1 min-w-0">
           {loadingActive || !activeExecution ? (
             <div className="rounded-xl border border-border/60 bg-card p-12 text-center space-y-3">
               <MaterialIcon name="sync" className="w-7 h-7 animate-spin text-primary mx-auto" />
