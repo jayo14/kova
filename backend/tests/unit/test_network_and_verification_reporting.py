@@ -167,8 +167,11 @@ async def test_verification_failure_details_and_event_type():
     mock_verifier = AsyncMock()
     mock_verifier.verify.return_value = VerificationResult(passed=False, checks=[mock_check])
 
+    mock_action_executor = AsyncMock()
+    mock_action_executor.execute.return_value = {"success": True, "result": {}}
+
     with patch("app.engine.execution.runner.BrowserSession", return_value=mock_browser), \
-         patch("app.engine.execution.runner.ActionExecutor"), \
+         patch("app.engine.execution.runner.ActionExecutor", return_value=mock_action_executor), \
          patch("app.engine.execution.runner.Verifier", return_value=mock_verifier), \
          patch.object(runner, "_capture_evidence", new=AsyncMock()), \
          patch.object(runner, "_frame_producer", new=AsyncMock()), \
@@ -176,7 +179,7 @@ async def test_verification_failure_details_and_event_type():
 
         res = await runner.execute(
             execution_id=exec_id,
-            flow_steps=[],
+            flow_steps=[{"type": "navigate", "target": {"url": "https://example.com/catalog"}}],
             success_condition={"url_matches": "/dashboard"},
         )
 
