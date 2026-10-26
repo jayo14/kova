@@ -1229,6 +1229,54 @@ async def get_execution_report(
     if signature or format == "html" or ("application/json" not in accept_header and "text/html" in accept_header):
         return HTMLResponse(content=html_content)
 
+    all_checks = verification_dict.get("checks", [])
+    checks_passed = sum(1 for c in all_checks if c.get("passed") is True)
+    checks_failed = sum(1 for c in all_checks if c.get("passed") is False and c.get("type") not in ("blocked", "unverified", "empty_condition", "unknown_condition", "auth_barrier"))
+    checks_blocked = sum(1 for c in all_checks if c.get("type") == "auth_barrier" or "blocked" in str(c.get("message", "")).lower())
+    checks_unverified = sum(1 for c in all_checks if c.get("type") in ("unknown_condition", "empty_condition", "malformed_condition", "vacuous_condition"))
+
+    for step in timeline:
+        st = step.get("status")
+        if st == "blocked":
+            checks_blocked += 1
+        elif st == "unverified":
+            checks_unverified += 1
+
+    total_evaluated = checks_passed + checks_failed + checks_blocked + checks_unverified
+    verdict_breakdown = {
+        "passed": checks_passed,
+        "failed": checks_failed,
+        "blocked": checks_blocked,
+        "unverified": checks_unverified,
+    }
+
+    recovery_trail = []
+    for ev in events:
+        if ev.event_type in (
+            EventTypes.RECOVERY_STARTED,
+            "recovery.started",
+            "action.idempotency_halted",
+            "human_takeover_started",
+            "human_control_released",
+            EventTypes.EXECUTION_PAUSED,
+            EventTypes.EXECUTION_RESUMED,
+        ):
+            recovery_trail.append({
+                "event_type": ev.event_type,
+                "timestamp": ev.created_at.isoformat() if ev.created_at else None,
+                "payload": sanitize_payload(ev.payload or {}),
+            })
+
+    evidence_references = [
+        {
+            "id": str(item.get("id")),
+            "type": item.get("kind") or item.get("type", "evidence"),
+            "title": item.get("title", ""),
+            "status": item.get("status", ""),
+        }
+        for item in ev_items
+    ]
+
     report_response = {
         "execution_id": str(exec_uuid),
         "status": report_status,
@@ -1245,6 +1293,14 @@ async def get_execution_report(
         "error_message": sanitize_text(execution.error_message) if execution.error_message else None,
         "why_it_failed": why_it_failed,
         "verification": verification_dict,
+        "verdict_breakdown": verdict_breakdown,
+        "assertions_summary": {
+            "total_planned": max(total_evaluated, 1 if verification_dict.get("checks") else 0),
+            "total_evaluated": total_evaluated,
+            **verdict_breakdown,
+        },
+        "evidence_references": evidence_references,
+        "recovery_audit_trail": recovery_trail,
         "failure_category": execution.failure_category or (diagnostics.get("category") if diagnostics else None),
         "diagnosis": diagnostics,
         "steps": timeline,

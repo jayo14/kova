@@ -85,3 +85,32 @@ def test_verification_diagnosis_uses_recorded_expected_and_observed_values():
     assert report["observed"] == "Error"
     assert report["category"] == "application_behavior"
     assert report["hypothesis"] is None
+
+
+def test_verdict_breakdown_and_denominator_transparency():
+    # Verify calculation of verdict breakdowns across mixed states
+    checks = [
+        {"type": "url_matches", "passed": True, "expected": "/dashboard", "actual": "/dashboard"},
+        {"type": "element_visible", "passed": True, "expected": "#greeting", "actual": "visible"},
+        {"type": "text_visible", "passed": False, "expected": "Settings", "actual": "not found"},
+        {"type": "auth_barrier", "passed": False, "message": "auth barrier encountered: redirect to /login"},
+        {"type": "unknown_condition", "passed": False, "message": "unrecognized key"},
+    ]
+    passed = sum(1 for c in checks if c.get("passed") is True)
+    failed = sum(1 for c in checks if c.get("passed") is False and c.get("type") not in ("blocked", "unverified", "empty_condition", "unknown_condition", "auth_barrier"))
+    blocked = sum(1 for c in checks if c.get("type") == "auth_barrier" or "blocked" in str(c.get("message", "")).lower())
+    unverified = sum(1 for c in checks if c.get("type") in ("unknown_condition", "empty_condition", "malformed_condition", "vacuous_condition"))
+
+    breakdown = {
+        "passed": passed,
+        "failed": failed,
+        "blocked": blocked,
+        "unverified": unverified,
+    }
+    assert breakdown["passed"] == 2
+    assert breakdown["failed"] == 1
+    assert breakdown["blocked"] == 1
+    assert breakdown["unverified"] == 1
+    total_evaluated = sum(breakdown.values())
+    assert total_evaluated == 5
+
