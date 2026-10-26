@@ -311,3 +311,22 @@ async def test_agent_blocked_transitions_to_blocked(monkeypatch):
         assert result["success"] is False
         assert result["state"] == ExecutionState.BLOCKED.value
         assert result["failure_category"] == "destructive_action_disallowed"
+
+
+def test_verifier_rejection_distinguishes_disproof_from_inconclusive():
+    from app.engine.execution.runner import classify_verification_rejection
+    from app.engine.verification.verifier import VerificationCheck
+
+    disproved = VerificationResult(
+        passed=False,
+        checks=[VerificationCheck(type="text_visible", passed=False, expected="Order Confirmed", actual="Payment failed")],
+    )
+    assert classify_verification_rejection(disproved) == "FAILED"
+
+    inconclusive = VerificationResult(
+        passed=False,
+        checks=[VerificationCheck(type="vacuous_condition", passed=False, message="empty condition")],
+    )
+    assert classify_verification_rejection(inconclusive) == "UNVERIFIED"
+    assert classify_verification_rejection(VerificationResult(passed=False, checks=[])) == "UNVERIFIED"
+    assert classify_verification_rejection(None) == "UNVERIFIED"

@@ -73,6 +73,31 @@ logger = logging.getLogger(__name__)
 # Maximum execution duration in seconds (PRD §22)
 EXECUTION_TIMEOUT_SECONDS = 300  # 5 minutes
 
+# Failed checks of these types mean no outcome could be established. Any other
+# failed check is positive evidence that the requirement was disproved.
+INCONCLUSIVE_VERIFICATION_TYPES = {
+    "no_condition",
+    "empty_condition",
+    "unknown_condition",
+    "malformed_condition",
+    "vacuous_condition",
+    "unsupported_condition",
+    "verifier_error",
+    "page_unavailable",
+}
+
+
+def classify_verification_rejection(verification: Any) -> str:
+    """Return FAILED when evidence disproves a check, otherwise UNVERIFIED."""
+    checks = getattr(verification, "checks", None) or []
+    concrete_failures = [
+        check
+        for check in checks
+        if getattr(check, "passed", None) is False
+        and getattr(check, "type", "") not in INCONCLUSIVE_VERIFICATION_TYPES
+    ]
+    return "FAILED" if concrete_failures else "UNVERIFIED"
+
 # Live frame cadence for the viewport stream (~4 FPS, latest-wins)
 FRAME_INTERVAL_SECONDS = 0.25
 # Poll interval while paused: drain input → apply → frame → check resume
@@ -403,11 +428,15 @@ class FlowRunner:
                     "observations": ctx.observations,
                 }
             else:
-                ctx.transition(ExecutionState.UNVERIFIED)
+                rejection = classify_verification_rejection(verification)
+                rejected_state = (
+                    ExecutionState.FAILED if rejection == "FAILED" else ExecutionState.UNVERIFIED
+                )
+                ctx.transition(rejected_state)
                 ctx.completed_at = datetime.now(timezone.utc)
                 ctx.record_event(EventTypes.EXECUTION_COMPLETED, {
                     "completed_at": ctx.completed_at.isoformat(),
-                    "verification_status": "unverified",
+                    "verification_status": rejection.lower(),
                     "failure_category": "verifier_rejected_agent_completion",
                     "reason": "Agent completed but verifier rejected verification",
                 })
@@ -415,11 +444,11 @@ class FlowRunner:
                 return {
                     "success": False,
                     "execution_id": str(execution_id),
-                    "state": ExecutionState.UNVERIFIED.value,
+                    "state": rejected_state.value,
                     "failure_category": "verifier_rejected_agent_completion",
                     "verification": verification.to_dict() if verification else {},
                     "error": "Verifier rejected agent completion",
-                    "error_code": "UNVERIFIED",
+                    "error_code": "VERIFICATION_FAILED" if rejection == "FAILED" else "UNVERIFIED",
                     "current_state": ctx.current_state,
                     "events": ctx.events,
                     "observations": ctx.observations,
