@@ -197,7 +197,12 @@ async def test_execute_timeout_persists_terminal_status():
 
     runner = FlowRunner()
     exec_id = uuid.uuid4()
-    with patch("asyncio.wait_for", AsyncMock(side_effect=TimeoutError)), patch.object(
+
+    async def _timeout(coro, timeout):
+        coro.close()
+        raise TimeoutError
+
+    with patch("asyncio.wait_for", _timeout), patch.object(
         runner, "_persist_terminal_failure", AsyncMock()
     ) as persist:
         result = await runner.execute(exec_id, timeout_seconds=5)
