@@ -6,6 +6,9 @@ import { MaterialIcon } from "@/components/shared/material-icon";
 import {
   getRun,
   cancelRun,
+  pauseRun,
+  resumeRun,
+  getRunControl,
   streamRunEvents,
   type RunDetail,
 } from "@/lib/api/runs";
@@ -38,6 +41,9 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
 
   const [isCancelling, startCancelTransition] = useTransition();
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
 
   // Load run state on mount or runId change
   useEffect(() => {
@@ -45,9 +51,15 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
 
     async function fetchRunData() {
       try {
-        const data = await getRun(runId);
+        const [data, ctrl] = await Promise.all([
+          getRun(runId),
+          getRunControl(runId).catch(() => null),
+        ]);
         if (mounted) {
           setRun(data);
+          if (ctrl) {
+            setIsPaused(ctrl.state === "paused" || ctrl.state === "human_control");
+          }
           if (!selectedExecutionId && data.executions.length > 0) {
             setSelectedExecutionId(data.executions[0].id);
           }
@@ -151,6 +163,30 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
     });
   }, [runId]);
 
+  const handlePauseRun = useCallback(async () => {
+    setIsPausing(true);
+    try {
+      await pauseRun(runId, "User requested pause from Run Overview");
+      setIsPaused(true);
+    } catch (err) {
+      console.error("Failed to pause run:", err);
+    } finally {
+      setIsPausing(false);
+    }
+  }, [runId]);
+
+  const handleResumeRun = useCallback(async () => {
+    setIsResuming(true);
+    try {
+      await resumeRun(runId);
+      setIsPaused(false);
+    } catch (err) {
+      console.error("Failed to resume run:", err);
+    } finally {
+      setIsResuming(false);
+    }
+  }, [runId]);
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] space-y-4">
@@ -186,6 +222,11 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
           status={run.status}
           isCancelling={isCancelling}
           onCancel={() => setCancelDialogOpen(true)}
+          isPaused={isPaused}
+          isPausing={isPausing}
+          isResuming={isResuming}
+          onPause={handlePauseRun}
+          onResume={handleResumeRun}
         />
 
         <RunSummaryStats

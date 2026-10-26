@@ -11,6 +11,11 @@ interface RunHeaderProps {
   status: string;
   isCancelling: boolean;
   onCancel: () => void;
+  isPaused?: boolean;
+  isPausing?: boolean;
+  isResuming?: boolean;
+  onPause?: () => void;
+  onResume?: () => void;
 }
 
 export function RunHeader({
@@ -18,9 +23,15 @@ export function RunHeader({
   status,
   isCancelling,
   onCancel,
+  isPaused = false,
+  isPausing = false,
+  isResuming = false,
+  onPause,
+  onResume,
 }: RunHeaderProps) {
   const runStatus = normalizeRunStatus(status);
   const isRunning = runStatus === "RUNNING";
+  const canControl = isRunning || isPaused;
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
@@ -40,14 +51,42 @@ export function RunHeader({
           <span>Validation Run Overview</span>
           <StatusBadge
             icon
-            config={getRunStatusConfig(runStatus)}
+            config={getRunStatusConfig(isPaused ? "PAUSED" : runStatus)}
             className="border px-2.5 py-0.5 rounded-full"
           />
         </h1>
       </div>
 
       <div className="flex items-center gap-2.5">
-        {isRunning && (
+        {canControl && (
+          <>
+            {isPaused ? (
+              <button
+                type="button"
+                onClick={onResume}
+                disabled={isResuming || isCancelling}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-600 hover:bg-emerald-500/10 border border-emerald-500/30 transition-colors disabled:opacity-50"
+                aria-label="Resume Run"
+              >
+                <MaterialIcon name="play_arrow" className="w-4 h-4" />
+                {isResuming ? "Resuming..." : "Resume Run"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={onPause}
+                disabled={isPausing || isCancelling}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-600 hover:bg-amber-500/10 border border-amber-500/30 transition-colors disabled:opacity-50"
+                aria-label="Pause Run"
+              >
+                <MaterialIcon name="pause" className="w-4 h-4" />
+                {isPausing ? "Pausing..." : "Pause Run"}
+              </button>
+            )}
+          </>
+        )}
+
+        {canControl && (
           <button
             type="button"
             onClick={onCancel}

@@ -7,6 +7,7 @@ import type { StatusStyleConfig } from "@/lib/utils/execution-status";
  */
 export const RUN_STATUSES = [
   "RUNNING",
+  "PAUSED",
   "PASSED",
   "FAILED",
   "BLOCKED",
@@ -52,6 +53,13 @@ const RUN_STATUS_CONFIGS: Record<RunStatus, StatusStyleConfig> = {
     dotClass: "bg-blue-500",
     iconName: "sync",
     isAnimated: true,
+  },
+  PAUSED: {
+    label: "PAUSED",
+    badgeClass: "bg-amber-500/10 text-amber-600 border-amber-500/20",
+    dotClass: "bg-amber-500",
+    iconName: "pause_circle",
+    isAnimated: false,
   },
   PASSED: {
     label: "PASSED",

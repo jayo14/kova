@@ -134,6 +134,7 @@ export async function cancelRun(runId: string, token?: string): Promise<RunDetai
       mission_name?: string | null;
       status: string;
       error_code?: string | null;
+      errorMessage?: string | null;
       error_message?: string | null;
       created_at?: string | null;
       completed_at?: string | null;
@@ -156,7 +157,7 @@ export async function cancelRun(runId: string, token?: string): Promise<RunDetai
       missionName: ex.mission_name,
       status: ex.status,
       errorCode: ex.error_code,
-      errorMessage: ex.error_message,
+      errorMessage: ex.error_message || ex.errorMessage,
       createdAt: ex.created_at,
       completedAt: ex.completed_at,
       durationMs: ex.duration_ms,
@@ -164,6 +165,33 @@ export async function cancelRun(runId: string, token?: string): Promise<RunDetai
     })),
   };
 }
+
+export interface RunControlStatus {
+  run_id: string;
+  state: string;
+  executions: Record<string, any>;
+}
+
+export async function pauseRun(
+  runId: string,
+  reason?: string,
+  token?: string
+): Promise<RunControlStatus> {
+  return await api.post<RunControlStatus>(
+    `/api/v1/runs/${encodeURIComponent(runId)}/pause`,
+    { reason },
+    token
+  );
+}
+
+export async function resumeRun(runId: string, token?: string): Promise<RunControlStatus> {
+  return await api.post<RunControlStatus>(`/api/v1/runs/${encodeURIComponent(runId)}/resume`, {}, token);
+}
+
+export async function getRunControl(runId: string, token?: string): Promise<RunControlStatus> {
+  return await api.get<RunControlStatus>(`/api/v1/runs/${encodeURIComponent(runId)}/control`, token);
+}
+
 
 export interface RunStreamHandlers {
   onUpdate?: (update: {

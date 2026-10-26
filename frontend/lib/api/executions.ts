@@ -318,3 +318,105 @@ export async function cancelExecution(
     return null;
   }
 }
+
+export interface ExecutionControlRecord {
+  execution_id: string;
+  state: string;
+  owner: string;
+  lease_id?: string | null;
+  lease_expires_at?: number | null;
+  generation: number;
+  checkpoint?: Record<string, unknown> | null;
+  updated_at: number;
+}
+
+export async function getExecutionControl(
+  executionId: string,
+  token?: string
+): Promise<ExecutionControlRecord | null> {
+  try {
+    return await api.get<ExecutionControlRecord>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/control`,
+      token
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function pauseExecution(
+  executionId: string,
+  reason?: string,
+  token?: string
+): Promise<ExecutionControlRecord | null> {
+  try {
+    return await api.post<ExecutionControlRecord>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/pause`,
+      { reason },
+      token
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function resumeExecution(
+  executionId: string,
+  token?: string
+): Promise<ExecutionControlRecord | null> {
+  try {
+    return await api.post<ExecutionControlRecord>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/resume`,
+      {},
+      token
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function takeoverExecution(
+  executionId: string,
+  options?: { lease_duration_seconds?: number; client_id?: string } | number,
+  token?: string
+): Promise<ExecutionControlRecord | null> {
+  const leaseDuration =
+    typeof options === "number" ? options : options?.lease_duration_seconds ?? 300;
+  const clientId = typeof options === "object" ? options?.client_id : undefined;
+
+  try {
+    return await api.post<ExecutionControlRecord>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/takeover`,
+      {
+        lease_duration_seconds: leaseDuration,
+        ...(clientId ? { client_id: clientId } : {}),
+      },
+      token
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function releaseExecutionControl(
+  executionId: string,
+  options?: { lease_id?: string; client_id?: string } | string,
+  token?: string
+): Promise<ExecutionControlRecord | null> {
+  const leaseId = typeof options === "string" ? options : options?.lease_id;
+  const clientId = typeof options === "object" ? options?.client_id : undefined;
+
+  try {
+    return await api.post<ExecutionControlRecord>(
+      `/api/v1/executions/${encodeURIComponent(executionId)}/release`,
+      {
+        ...(leaseId ? { lease_id: leaseId } : {}),
+        ...(clientId ? { client_id: clientId } : {}),
+      },
+      token
+    );
+  } catch {
+    return null;
+  }
+}
+
