@@ -15,8 +15,26 @@ export function JourneyList({
   selectedExecutionId,
   onSelect,
 }: JourneyListProps) {
+  if (executions.length === 0) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-sm font-semibold text-foreground tracking-tight">
+            Selected Missions (0)
+          </h2>
+          <span className="text-xs text-muted-foreground">Click to inspect</span>
+        </div>
+        <div className="rounded-xl border border-dashed border-border/70 p-6 text-center">
+          <p className="text-xs text-muted-foreground">
+            No missions in this run.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="lg:col-span-4 space-y-3">
+    <div className="space-y-3">
       <div className="flex items-center justify-between px-1">
         <h2 className="text-sm font-semibold text-foreground tracking-tight">
           Selected Missions ({executions.length})
@@ -31,24 +49,29 @@ export function JourneyList({
           const isItemActive =
             isActiveStatus(normStatus) && normStatus !== "created" && normStatus !== "queued";
           const isItemWorking = WORKING_STATUSES.includes(normStatus);
+          const errorText = item.errorMessage || null;
 
           return (
             <button
               key={item.id}
               type="button"
               onClick={() => onSelect(item.id)}
-              className={`w-full text-left p-3.5 rounded-xl border transition-all text-xs space-y-2 ${
+              aria-pressed={isSelected}
+              className={`w-full min-w-0 text-left p-3.5 rounded-xl border transition-all text-xs space-y-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${
                 isSelected
                   ? "border-primary bg-primary/5 shadow-sm ring-1 ring-primary/20"
                   : "border-border/60 bg-card/60 hover:bg-muted/40 hover:border-border"
               }`}
             >
               <div className="flex items-start justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center font-mono text-[10px] text-muted-foreground shrink-0">
+                <div className="flex items-start gap-2 min-w-0">
+                  <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center font-mono text-[10px] text-muted-foreground shrink-0 mt-px">
                     {index + 1}
                   </span>
-                  <span className="font-semibold text-foreground line-clamp-1">
+                  <span
+                    title={item.missionName || "User Journey"}
+                    className="font-semibold text-foreground line-clamp-2 leading-snug"
+                  >
                     {item.missionName || "User Journey"}
                   </span>
                 </div>
@@ -75,16 +98,23 @@ export function JourneyList({
                 </span>
               </div>
 
-              {item.errorMessage && (
-                <p className="text-[11px] text-destructive line-clamp-1 pl-7">
-                  {item.errorMessage}
+              {errorText && (
+                <p
+                  title={errorText}
+                  className="text-[11px] text-destructive line-clamp-1 pl-7 break-words"
+                >
+                  {errorText}
                 </p>
               )}
 
               <div className="flex items-center justify-between text-[10px] text-muted-foreground pl-7">
-                <span>ID: {item.id.slice(0, 8)}</span>
+                <span className="truncate">ID: {item.id.slice(0, 8)}</span>
                 {item.durationMs && <span>{(item.durationMs / 1000).toFixed(1)}s</span>}
               </div>
+
+              {errorText && (
+                <p className="sr-only">{errorText}</p>
+              )}
             </button>
           );
         })}
