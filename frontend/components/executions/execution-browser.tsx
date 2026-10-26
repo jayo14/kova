@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import type { ExecutionStatus } from "@/lib/types";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { getExecutionStatusConfig } from "@/lib/utils/execution-status";
@@ -120,21 +120,6 @@ export function ExecutionBrowser({
       return "/";
     }
   })();
-
-  const latestAction = useMemo(() => {
-    for (let i = events.length - 1; i >= 0; i--) {
-      const evt = events[i];
-      if (evt?.eventType === "action.started" && evt.payload) {
-        const p = evt.payload as Record<string, unknown>;
-        return {
-          type: (p.type as string) || "action",
-          target: (p.target as string) || "",
-          value: (p.value as string) || "",
-        };
-      }
-    }
-    return null;
-  }, [events]);
 
   return (
     <div
