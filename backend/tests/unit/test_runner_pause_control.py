@@ -156,3 +156,35 @@ async def test_runner_resolves_checkpoint_on_resume():
     assert rec.state == ControlState.RUNNING
 
     await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_runner_reclaims_control_on_lease_expiry():
+    """Verify FlowRunner automatically reclaims control when human takeover lease expires."""
+    exec_id = str(uuid.uuid4())
+    await cleanup_control(exec_id)
+
+    runner = FlowRunner()
+    ctx = ExecutionContext(execution_id=exec_id, target_url="https://example.com")
+    ctx.state = ExecutionState.RUNNING
+
+    browser = MagicMock()
+    browser.page = AsyncMock()
+    browser.page.url = "https://example.com"
+    browser.page.screenshot = AsyncMock(return_value=b"fake-jpeg")
+    browser.observe = AsyncMock(return_value={"title": "Reclaimed"})
+
+    # 1. Acquire takeover with a very short lease (0.2s)
+    ok, lease_id, _ = await acquire_human_takeover(exec_id, client_id="abandoned_user", lease_duration_seconds=0.2)
+    assert ok is True
+
+    # Runner pause loop should detect expiration and reclaim control
+    handled = await runner._check_and_handle_pause(ctx, browser, exec_id, None)
+
+    assert handled is True
+    rec = await get_control_record(exec_id)
+    assert rec.state == ControlState.RUNNING
+    assert rec.owner == "agent"
+    assert rec.lease_id is None
+
+    await cleanup_control(exec_id)
