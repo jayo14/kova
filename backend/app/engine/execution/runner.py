@@ -187,6 +187,36 @@ class FlowRunner:
         self._last_mouse_up: dict[str, tuple[float, int, int]] = {}
         self._emit_lock = asyncio.Lock()
 
+    async def _persist_terminal_failure(
+        self, execution_id: Any, error_code: Any, error_message: str
+    ) -> None:
+        """Persist a FAILED/TIMEOUT terminal state, never overriding a terminal row."""
+        try:
+            from app.infrastructure.database.session import async_session_factory
+            from app.modules.executions.models import ExecutionStatus
+            from app.modules.executions.reporting import classify_failure, sanitize_text
+            from app.modules.executions.repository import ExecutionRepository
+
+            terminal_status = (
+                ExecutionStatus.TIMEOUT
+                if error_code == "EXECUTION_TIMEOUT"
+                else ExecutionStatus.FAILED
+            )
+            async with async_session_factory() as db:
+                repo = ExecutionRepository(db)
+                await repo.update_status(
+                    uuid.UUID(str(execution_id)),
+                    terminal_status,
+                    error_code=str(error_code),
+                    error_message=sanitize_text(error_message),
+                    failure_category=classify_failure(str(error_code)),
+                )
+                await db.commit()
+        except Exception as db_err:
+            logger.debug(
+                "Failed to persist FAILED status for execution %s: %s", execution_id, db_err
+            )
+
     async def execute(
         self,
         execution_id: uuid.UUID,
@@ -1723,6 +1753,12 @@ class FlowRunner:
             ctx.completed_at = datetime.now(timezone.utc)
             ctx.record_error(str(e))
             error_code = getattr(e, "error_code", ErrorCode.UNKNOWN)
+
+            # Persist the terminal failure so a runner crash never leaves the row
+            # stuck in RUNNING when the worker is not the caller.
+            if ctx.state == ExecutionState.FAILED:
+                await self._persist_terminal_failure(execution_id, error_code, str(e))
+
             ctx.record_event(EventTypes.EXECUTION_FAILED, {
                 "error": str(e),
                 "error_code": error_code,
