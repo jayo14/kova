@@ -147,3 +147,44 @@ async def test_runner_persists_timeout_as_timeout_status():
         await FlowRunner()._persist_terminal_failure(uuid.uuid4(), "EXECUTION_TIMEOUT", "slow")
 
     assert update_status.call_args[0][1] == ExecutionStatus.TIMEOUT
+
+
+@pytest.mark.asyncio
+async def test_mark_unverified_persists_reason_and_category():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from app.engine.execution.runner import FlowRunner
+    from app.engine.execution.state import ExecutionState
+    from app.modules.executions.models import ExecutionStatus
+
+    update_status = AsyncMock()
+
+    class _Session:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def commit(self):
+            return None
+
+    ctx = MagicMock()
+    ctx.state = ExecutionState.RUNNING
+    ctx.events = []
+
+    with patch(
+        "app.infrastructure.database.session.async_session_factory", return_value=_Session()
+    ), patch(
+        "app.modules.executions.repository.ExecutionRepository.update_status", update_status
+    ):
+        await FlowRunner()._mark_unverified(
+            ctx,
+            uuid.uuid4(),
+            failure_category="ai_proposal_rejected",
+            error_message="All AI-proposed steps failed validation; cannot execute.",
+        )
+
+    status = update_status.call_args[0][1]
+    assert status == ExecutionStatus.UNVERIFIED
+    assert update_status.call_args.kwargs["error_code"] == "UNVERIFIED"
+    assert update_status.call_args.kwargs["failure_category"] == "ai_proposal_rejected"
