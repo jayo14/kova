@@ -1,11 +1,13 @@
 "use client";
 
 import type { ExecutionDetail } from "@/lib/types";
+import type { ExecutionReport } from "@/lib/api/executions";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
 
 interface ExecutionResultProps {
   execution: ExecutionDetail;
+  report?: ExecutionReport | null;
   className?: string;
 }
 
@@ -47,8 +49,7 @@ const RESULT_VARIANTS: Record<string, ResultVariant> = {
     title: "Execution could not be completed reliably",
     titleClass: "text-orange-700 dark:text-orange-400",
     descriptionClass: "text-foreground/80",
-    description: (execution) =>
-      execution.error || "A browser, worker, or internal error stopped reliable verification.",
+    description: "A browser, worker, or internal error stopped reliable verification.",
   },
   blocked: {
     containerClass: "border border-amber-500/20 bg-amber-500/5",
@@ -57,8 +58,7 @@ const RESULT_VARIANTS: Record<string, ResultVariant> = {
     title: "Execution blocked",
     titleClass: "text-amber-700 dark:text-amber-400",
     descriptionClass: "text-foreground/80",
-    description: (execution) =>
-      execution.error ||
+    description:
       "Execution was blocked because a required prerequisite, role, or environment condition could not be satisfied.",
   },
   unverified: {
@@ -68,8 +68,7 @@ const RESULT_VARIANTS: Record<string, ResultVariant> = {
     title: "Execution completed without verification",
     titleClass: "text-orange-700 dark:text-orange-400",
     descriptionClass: "text-foreground/80",
-    description: (execution) =>
-      execution.error ||
+    description:
       "The actions were performed, but available evidence was insufficient to verify the intended business outcomes.",
   },
   timeout: {
@@ -105,8 +104,13 @@ function calculateDuration(startedAt?: string | null, completedAt?: string | nul
   }
 }
 
+function humanizeCategory(category: string): string {
+  return category.replaceAll("_", " ");
+}
+
 export function ExecutionResult({
   execution,
+  report,
   className,
 }: ExecutionResultProps) {
   const duration = calculateDuration(execution.startedAt, execution.completedAt);
@@ -114,22 +118,33 @@ export function ExecutionResult({
 
   if (!variant) return null;
 
-  const description =
-    typeof variant.description === "function"
-      ? variant.description(execution)
-      : variant.description;
+  const diagnosis = report?.diagnosis ?? null;
+  const explanation = diagnosis?.observed || execution.error || null;
+  const nextStep = diagnosis?.nextStep || null;
+  const reason = diagnosis?.reason || null;
+  const failureCategory = report?.failureCategory || null;
+  const errorCode = report?.errorCode || null;
+
+  // Fallback text when no report / execution error is available.
+  const fallbackDescription =
+    typeof variant.description === "function" ? variant.description(execution) : variant.description;
+
+  const explanationText = explanation || fallbackDescription;
+  const nextMessage =
+    nextStep || (execution.status === "completed" ? null : fallbackDescription);
 
   return (
     <section
       aria-label="Execution result"
       className={cn(
-        "rounded-2xl p-5 shadow-xs space-y-4",
+        "rounded-2xl p-5 shadow-xs space-y-3",
         variant.containerClass,
         className
       )}
     >
+      {/* Headline */}
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-3 min-w-0">
           <div
             className={cn(
               "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
@@ -138,18 +153,26 @@ export function ExecutionResult({
           >
             <MaterialIcon name={variant.icon} size={20} className={variant.iconClass} />
           </div>
-          <div>
-            <h3 className={cn("text-body font-semibold", variant.titleClass)}>
+          <div className="min-w-0">
+            <h3 className={cn("text-body-lg font-semibold tracking-tight", variant.titleClass)}>
               {variant.title}
             </h3>
-            <p
-              className={cn(
-                "text-body-sm mt-0.5 leading-relaxed",
-                variant.descriptionClass
-              )}
-            >
-              {description}
-            </p>
+
+            {/* Error-type tag */}
+            {(failureCategory || errorCode) && (
+              <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                {failureCategory && (
+                  <span className="inline-flex items-center rounded-md border border-border/60 bg-background/60 px-2 py-0.5 text-caption font-medium uppercase tracking-wide text-foreground/80">
+                    {humanizeCategory(failureCategory)}
+                  </span>
+                )}
+                {errorCode && (
+                  <span className="inline-flex items-center rounded-md border border-border/60 bg-background/60 px-2 py-0.5 text-caption font-mono text-muted-foreground">
+                    {errorCode}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -159,6 +182,41 @@ export function ExecutionResult({
           </span>
         )}
       </div>
+
+      {/* Plain-language explanation */}
+      <p className={cn("text-body-sm leading-relaxed", variant.descriptionClass)}>
+        {explanationText}
+      </p>
+
+      {/* Next step */}
+      {nextMessage && nextMessage !== explanationText && (
+        <p className="text-body-sm font-medium text-foreground">
+          <span className="font-semibold">Next:</span>{" "}
+          <span className="font-normal">{nextMessage}</span>
+        </p>
+      )}
+
+      {reason && (
+        <p className="text-caption text-muted-foreground">{reason}</p>
+      )}
+
+      {/* Raw error — collapsed by default so the verdict stays scannable */}
+      {execution.error && (
+        <details className="group rounded-lg border border-border/60 bg-background/60 overflow-hidden">
+          <summary className="flex items-center gap-1.5 px-3 py-2 text-caption font-medium cursor-pointer select-none text-foreground/70 hover:text-foreground transition-colors">
+            <MaterialIcon name="code" size={14} className="text-muted-foreground" />
+            Technical detail
+            <MaterialIcon
+              name="expand_more"
+              size={14}
+              className="ml-auto text-muted-foreground transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <pre className="max-h-40 overflow-auto px-3 py-2.5 text-caption leading-relaxed font-mono whitespace-pre-wrap break-all border-t border-border/40 text-foreground/80">
+            {execution.error}
+          </pre>
+        </details>
+      )}
     </section>
   );
 }
