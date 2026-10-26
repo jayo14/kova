@@ -169,8 +169,12 @@ export async function cancelRun(runId: string, token?: string): Promise<RunDetai
 
 export interface RunControlStatus {
   run_id: string;
-  state: string;
-  executions: Record<string, any>;
+  state?: string;
+  status?: string;
+  executions?: Record<string, any>;
+  active_executions?: number;
+  paused_executions?: number;
+  resumed_executions?: number;
 }
 
 export async function pauseRun(
