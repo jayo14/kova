@@ -244,6 +244,7 @@ async def test_phase3_acceptance_comprehensive_suite(controlled_server, db_sessi
     mock_browser = AsyncMock()
     mock_browser.page.url = f"{target_url}/records/new"
     mock_browser.observe.return_value = {"text": "Creation form"}
+    mock_browser.start_step_network_capture = MagicMock()
 
     # FlowRunner halts on non-idempotent action failure instead of blind replay
     with pytest.raises(ExecutionError) as exc_info:
