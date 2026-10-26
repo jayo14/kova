@@ -8,6 +8,7 @@ Always transitions to terminal state on exit.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 import os
@@ -2401,17 +2402,15 @@ class FlowRunner:
                 "post_takeover": True,
             })
 
-            # Check if user signed in or changed authentication state during takeover
+            # Multi-signal verification of authentication state after takeover
             if hasattr(browser, "page") and browser.page:
-                try:
-                    from app.engine.browser.auth import is_auth_page
-                    on_auth = await is_auth_page(browser.page)
-                except Exception:
-                    on_auth = False
-                if not on_auth and any(tok in current_url for tok in ("/dashboard", "/account", "/home", "/profile", "/settings", "/items", "/records")):
+                is_authenticated = await self._verify_authenticated_session(browser.page, current_url)
+                if is_authenticated:
                     ctx.current_state["authenticated"] = True
                     ctx.current_state["auth_restored"] = True
-                    logger.info("Post-takeover detected user authentication into %s", current_url)
+                    logger.info("Post-takeover verified authenticated session at %s", current_url)
+                else:
+                    logger.debug("Post-takeover session at %s is not verified as authenticated", current_url)
 
 
             await self._emit_events(ctx, event_recorder)
@@ -2423,6 +2422,76 @@ class FlowRunner:
         await publish_state(execution_id, "executing", page_url, "", control="agent")
         return True
 
+
+    async def _verify_authenticated_session(self, page: Any, current_url: str) -> bool:
+        """Verify whether the browser currently holds an authenticated session.
+
+        Requires positive multi-signal evidence rather than URL substrings:
+        1. Page must not be an auth barrier or login page.
+        2. Must have positive authenticated indicator (logout button, user greeting, profile).
+        3. Must not have active login buttons or error messages visible.
+        """
+        if not page or not hasattr(page, "locator"):
+            return False
+        try:
+            from app.engine.browser.auth import is_auth_page
+            if await is_auth_page(page, current_url):
+                return False
+
+            positive_selectors = [
+                "a[href*='logout']",
+                "a[href*='signout']",
+                "button:has-text('Log Out')",
+                "button:has-text('Sign Out')",
+                "button:has-text('Logout')",
+                "#user-greeting",
+                "#user-name",
+                "[data-testid*='logout']",
+                "[data-testid*='user-menu']",
+                ".user-info",
+            ]
+            has_positive_signal = False
+            for sel in positive_selectors:
+                loc = page.locator(sel)
+                if inspect.isawaitable(loc):
+                    loc = await loc
+                cnt = loc.count() if hasattr(loc, "count") else 0
+                if inspect.isawaitable(cnt):
+                    cnt = await cnt
+                if cnt > 0:
+                    first_el = loc.first
+                    if inspect.isawaitable(first_el):
+                        first_el = await first_el
+                    vis = first_el.is_visible() if hasattr(first_el, "is_visible") else False
+                    if inspect.isawaitable(vis):
+                        vis = await vis
+                    if vis:
+                        has_positive_signal = True
+                        break
+
+            if not has_positive_signal:
+                return False
+
+            login_loc = page.locator("a[href*='login'], a[href*='signin'], button:has-text('Sign In')")
+            if inspect.isawaitable(login_loc):
+                login_loc = await login_loc
+            login_cnt = login_loc.count() if hasattr(login_loc, "count") else 0
+            if inspect.isawaitable(login_cnt):
+                login_cnt = await login_cnt
+            for i in range(login_cnt):
+                el = login_loc.nth(i)
+                if inspect.isawaitable(el):
+                    el = await el
+                vis = el.is_visible() if hasattr(el, "is_visible") else False
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    return False
+
+            return True
+        except Exception as e:
+            logger.debug("Auth session verification encountered error: %s", e)
+            return False
 
     # Actions whose failure may already have had side effects — never blindly
     # re-executed. A retried click on 'Delete' or a form submit can double-apply.
