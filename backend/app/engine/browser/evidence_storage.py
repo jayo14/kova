@@ -5,12 +5,33 @@ Stores evidence artifacts in a private S3 bucket. Returns short-lived signed URL
 
 import asyncio
 import logging
+import re
 import boto3
 from botocore.exceptions import ClientError
 
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+_SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def _safe_segment(value: str, label: str) -> str:
+    """Reject identifiers that could escape the execution-owned key prefix."""
+    text = str(value)
+    if not _SAFE_SEGMENT.match(text):
+        raise ValueError(f"Invalid {label} for evidence storage key")
+    return text
+
+
+def _execution_prefixes(execution_id: str) -> tuple[str, ...]:
+    execution_id = _safe_segment(execution_id, "execution_id")
+    base = f"executions/{execution_id}/"
+    prefixes = [base]
+    configured = settings.storage_bucket("evidence")
+    if settings.RUMPTYCLOUD_BUCKET_NAME and configured:
+        prefixes.append(f"{configured}/{base}")
+    return tuple(prefixes)
 
 
 class EvidenceStorage:
@@ -74,11 +95,13 @@ class EvidenceStorage:
                 "Set RUMPTYCLOUD_S3_ENDPOINT and RUMPTYCLOUD_ACCESS_KEY_ID."
             )
 
+        safe_execution_id = _safe_segment(execution_id, "execution_id")
+        safe_evidence_id = _safe_segment(evidence_id, "evidence_id")
         ext = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(
             content_type, ".bin"
         )
-        filename = f"{evidence_id}{ext}"
-        object_path = f"executions/{execution_id}/evidence/{filename}"
+        filename = f"{safe_evidence_id}{ext}"
+        object_path = f"executions/{safe_execution_id}/evidence/{filename}"
         
         if settings.RUMPTYCLOUD_BUCKET_NAME:
             prefix = settings.storage_bucket("evidence")
@@ -162,8 +185,22 @@ class EvidenceStorage:
         }
 
     def create_signed_url(self, storage_key: str, execution_id: str, expires_in: int = 3600) -> str | None:
-        """Create a short-lived signed URL for secure evidence access."""
+        """Create a short-lived signed URL scoped to the owning execution."""
         if not settings.RUMPTYCLOUD_S3_ENDPOINT or not settings.RUMPTYCLOUD_ACCESS_KEY_ID:
+            return None
+
+        if not storage_key or ".." in storage_key.split("/"):
+            logger.warning("Rejected unsafe evidence storage key for execution %s", execution_id)
+            return None
+        try:
+            prefixes = _execution_prefixes(execution_id)
+        except ValueError:
+            logger.warning("Rejected invalid execution id for evidence access")
+            return None
+        if not any(storage_key.startswith(prefix) for prefix in prefixes):
+            logger.warning(
+                "Rejected evidence key outside execution %s scope", execution_id
+            )
             return None
 
         bucket = settings.RUMPTYCLOUD_BUCKET_NAME or settings.storage_bucket("evidence")
