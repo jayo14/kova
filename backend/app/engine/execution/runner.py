@@ -342,7 +342,13 @@ class FlowRunner:
             async with async_session_factory() as db:
                 repo = ExecutionRepository(db)
                 exec_uuid = uuid.UUID(str(execution_id))
-                await repo.update_status(exec_uuid, ExecutionStatus.UNVERIFIED)
+                await repo.update_status(
+                    exec_uuid,
+                    ExecutionStatus.UNVERIFIED,
+                    error_code="UNVERIFIED",
+                    error_message=error_message,
+                    failure_category=failure_category,
+                )
                 await db.commit()
         except Exception as db_err:
             logger.debug("Failed to persist UNVERIFIED status for execution %s: %s", execution_id, db_err)
