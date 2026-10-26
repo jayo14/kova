@@ -116,11 +116,18 @@ async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "obs
     if not frame_bytes or len(frame_bytes) > MAX_FRAME_BYTES:
         return
 
-    # Fan out immediately to local in-memory subscribers
+    # Fan out immediately to local in-memory subscribers (bounded queue, drop oldest on backpressure)
     queues = list(_memory_frame_subscribers.get(execution_id, set()))
     for q in queues:
-        if q.qsize() < 10:
+        if q.full():
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
             q.put_nowait((frame_bytes, state or "observing"))
+        except asyncio.QueueFull:
+            pass
 
     try:
         r = await _bin_client()
@@ -158,11 +165,18 @@ async def publish_state(
         payload["loading"] = loading
     payload.update(extra)
 
-    # Fan out immediately to local in-memory subscribers
+    # Fan out immediately to local in-memory subscribers (bounded queue, drop oldest on backpressure)
     s_queues = list(_memory_state_subscribers.get(execution_id, set()))
     for sq in s_queues:
-        if sq.qsize() < 20:
+        if sq.full():
+            try:
+                sq.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+        try:
             sq.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass
 
     try:
         r = await _text_client()
