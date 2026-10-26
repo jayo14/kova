@@ -139,6 +139,20 @@ def _is_vacuous_structural_target(target: Any) -> bool:
     return True
 
 
+def _contains_as_word(content_lower: str, value: str) -> bool:
+    """Whole-word (case-insensitive) containment for verification snippets.
+
+    Plain substring matching creates fail-positive proof: value "2" would
+    match "222" or "label=2"; "er" would match "Footer". Only bounded
+    occurrences count as evidence.
+    """
+    v = (value or "").strip().lower()
+    if not v:
+        return False
+    pattern = r"(?:^|[^a-z0-9_])" + re.escape(v) + r"(?:$|[^a-z0-9_])"
+    return re.search(pattern, content_lower) is not None
+
+
 def is_vacuous_condition(condition: Any) -> bool:
     """True when a condition cannot prove a user outcome (empty, unknown, or vacuous)."""
     if not isinstance(condition, dict) or not condition:
@@ -159,6 +173,38 @@ def is_vacuous_condition(condition: Any) -> bool:
                 has_non_vacuous = True
         elif k == "page_loaded":
             pass
+        elif k == "record_persisted":
+            if isinstance(v, str):
+                if v.strip():
+                    has_non_vacuous = True
+            elif isinstance(v, dict):
+                fields = v.get("expected_fields") or {}
+                texts = v.get("expected_text")
+                if isinstance(texts, str):
+                    texts = [texts]
+                has_values = isinstance(fields, dict) and any(str(val).strip() for val in fields.values())
+                has_texts = isinstance(texts, (list, tuple)) and any(str(t).strip() for t in texts)
+                if has_values or has_texts:
+                    has_non_vacuous = True
+        elif k == "search_results":
+            if isinstance(v, dict):
+                expected = v.get("expected_matches")
+                excluded = v.get("excluded_matches")
+                if isinstance(expected, str):
+                    expected = [expected]
+                if isinstance(excluded, str):
+                    excluded = [excluded]
+                has_expected = isinstance(expected, (list, tuple)) and any(str(i).strip() for i in expected)
+                has_excluded = isinstance(excluded, (list, tuple)) and any(str(i).strip() for i in excluded)
+                if has_expected or has_excluded:
+                    has_non_vacuous = True
+        elif k == "validation_error":
+            if isinstance(v, str):
+                if v.strip():
+                    has_non_vacuous = True
+            elif isinstance(v, dict):
+                if any(str(v.get(key) or "").strip() for key in ("message", "field", "selector")):
+                    has_non_vacuous = True
         else:
             has_non_vacuous = True
 
@@ -1174,13 +1220,21 @@ class Verifier:
                         details={"login_links_visible": True},
                     ))
                 else:
+                    # Absence of login links is NOT positive evidence of a
+                    # session: a public page, a 404, or a blank page also has
+                    # none. Authentication must be proven by an observable
+                    # session control (logout/profile) or an explicit
+                    # indicator. Fail closed instead of inferring success.
                     checks.append(VerificationCheck(
                         type="auth_session_indicator",
-                        passed=True,
-                        expected="session state without auth barrier",
-                        actual="unbarred",
-                        message="Page is unbarred and no login controls present",
-                        details={"inferred": True},
+                        passed=False,
+                        expected="positive session indicator (logout link, profile menu, or explicit indicator)",
+                        actual="no_positive_session_evidence",
+                        message=(
+                            "No positive authenticated-session indicator was observed; "
+                            "absence of login controls is not proof of authentication"
+                        ),
+                        details={"inferred": False},
                     ))
 
         return checks
@@ -1229,6 +1283,23 @@ class Verifier:
         elif expected_texts is None:
             expected_texts = []
 
+        has_expected_values = (
+            isinstance(expected_fields, dict)
+            and any(str(v).strip() for v in expected_fields.values())
+        ) or any(str(t).strip() for t in expected_texts if t is not None)
+        if not has_expected_values:
+            return VerificationCheck(
+                type="record_persisted",
+                passed=False,
+                expected="at least one non-empty expected field or text",
+                actual="no_expected_values",
+                message=(
+                    "record_persisted requires concrete expected field values or text; "
+                    "an empty specification cannot prove persistence"
+                ),
+                details={"reloaded": should_reload, "selector": selector},
+            )
+
         try:
             if selector:
                 locator = self.page.locator(selector)
@@ -1250,12 +1321,14 @@ class Verifier:
             content_lower = content.lower()
             missing_fields = []
             for fname, fval in expected_fields.items():
-                if str(fval).lower() not in content_lower:
+                fv = str(fval).strip()
+                if not fv or not _contains_as_word(content_lower, fv):
                     missing_fields.append(f"{fname}='{fval}'")
 
             missing_texts = []
             for t in expected_texts:
-                if str(t).lower() not in content_lower:
+                tv = str(t).strip()
+                if not tv or not _contains_as_word(content_lower, tv):
                     missing_texts.append(str(t))
 
             passed = len(missing_fields) == 0 and len(missing_texts) == 0
@@ -1382,7 +1455,15 @@ class Verifier:
                     )
                 content = await self._safe_inner_text(loc.first)
             else:
-                candidates = ["#records-table", "table", "[role='table']", "#results", ".results", ".records-list", "body"]
+                # Official container hierarchy: test-id'd results container
+                # first, then structural table roles/classes, then body as the
+                # last resort. Hardcoded app-specific ids are not portable.
+                candidates = [
+                    "[data-testid='results']",
+                    "[role='table']",
+                    "table",
+                    "body",
+                ]
                 content = ""
                 for cand in candidates:
                     loc = await self._safe_loc(cand)
@@ -1392,8 +1473,14 @@ class Verifier:
                         break
 
             content_lower = content.lower()
-            missing_expected = [item for item in expected if str(item).lower() not in content_lower]
-            unexpected_present = [item for item in excluded if str(item).lower() in content_lower]
+            missing_expected = [
+                item for item in expected
+                if not _contains_as_word(content_lower, str(item).strip())
+            ]
+            unexpected_present = [
+                item for item in excluded
+                if _contains_as_word(content_lower, str(item).strip())
+            ]
 
             passed = len(missing_expected) == 0 and len(unexpected_present) == 0
             details = {
@@ -1516,15 +1603,21 @@ class Verifier:
                     get_attr = first_el.get_attribute("aria-invalid") if hasattr(first_el, "get_attribute") else None
                     if inspect.isawaitable(get_attr):
                         get_attr = await get_attr
-                    if get_attr == "true":
-                        return VerificationCheck(
-                            type="validation_error",
-                            passed=True,
-                            expected=f"aria-invalid=true on field {field_name}",
-                            actual="aria-invalid=true",
-                            message=f"Field {field_name} marked invalid with aria-invalid='true'",
-                            details={"field": field_name},
-                        )
+                    # A decorated field alone does not prove the expected
+                    # failure message: it proves the field was flagged
+                    # invalid, not THIS validation path. Only treat it as
+                    # proof when it also names the expected message.
+                    if get_attr == "true" and expected_msg:
+                        field_text = str(await self._safe_inner_text(first_el) or "").lower()
+                        if expected_msg in field_text:
+                            return VerificationCheck(
+                                type="validation_error",
+                                passed=True,
+                                expected=config,
+                                actual=field_text[:200],
+                                message=f"Field {field_name} marked invalid with the expected message",
+                                details={"field": field_name, "text": field_text[:200]},
+                            )
 
             # Check 4: Text search if expected_msg provided
             if expected_msg:
@@ -1646,6 +1739,16 @@ class Verifier:
 
         if not isinstance(target, dict):
             raise VerificationError("Invalid target specification", "resolve")
+
+        # Text-only targets resolve directly through get_by_text so that
+        # duplicate matches stay visible via count(). Resolver text
+        # strategies return a single element and would hide ambiguity.
+        if target.get("text") and not any(
+            target.get(k) for k in ("role", "name", "label", "test_id", "css")
+        ):
+            get_by_text = getattr(self.page, "get_by_text", None)
+            if get_by_text is not None:
+                return get_by_text(str(target["text"]).strip())
 
         # Ranked candidate specifications from most specific to broadest
         candidates: list[tuple[str, dict[str, Any]]] = []
