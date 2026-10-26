@@ -267,3 +267,43 @@ async def test_auth_verified_fails_when_login_links_still_visible():
     assert res.passed is False
     assert any(c.type == "auth_session_indicator" and not c.passed for c in res.checks)
 
+
+
+@pytest.mark.asyncio
+async def test_auth_verified_does_not_infer_success_without_positive_evidence():
+    mock_page = AsyncMock()
+    mock_page.url = "https://example.com/dashboard"
+
+    def locator_side_effect(selector):
+        loc = AsyncMock()
+        loc.count.return_value = 0
+        loc.first.count.return_value = 0
+        loc.first.is_visible.return_value = False
+        return loc
+
+    mock_page.locator.side_effect = locator_side_effect
+    mock_body = AsyncMock()
+    mock_body.inner_text.return_value = "Public marketing page."
+    mock_page.query_selector.return_value = mock_body
+
+    verifier = Verifier(mock_page)
+    res = await verifier.verify({"auth_verified": {"auth_path": "/login"}})
+
+    assert res.passed is False
+    indicator = next(c for c in res.checks if c.type == "auth_session_indicator")
+    assert indicator.passed is False
+    assert indicator.actual == "no_positive_session_evidence"
+
+
+@pytest.mark.asyncio
+async def test_record_persisted_empty_spec_fails_closed():
+    mock_page = AsyncMock()
+    mock_body = AsyncMock()
+    mock_body.inner_text.return_value = "Anything at all"
+    mock_page.query_selector.return_value = mock_body
+
+    verifier = Verifier(mock_page)
+    res = await verifier.verify({"record_persisted": {}})
+
+    assert res.passed is False
+    assert res.outcome == "FAILED"
