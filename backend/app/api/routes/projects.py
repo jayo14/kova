@@ -14,6 +14,7 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 from app.modules.auth.audit_log import AuditLogger
 from app.modules.auth.rbac import verify_project_role
 from app.modules.auth.token_scopes import SCOPE_FLOWS_WRITE, require_scope
+from app.modules.flows.repository import FlowRepository
 from app.modules.flows.schemas import FlowRead, FlowUpdate
 from app.modules.flows.service import FlowService
 
@@ -151,12 +152,17 @@ async def update_project_flow(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid UUID")
 
-    await verify_project_role(db, proj_uuid, user, min_role="admin")
-    flow_service = FlowService(db)
-    flow = await flow_service.update_flow(fl_uuid, data)
-    if not flow:
+    flow_repo = FlowRepository(db)
+    flow = await flow_repo.get_by_id(fl_uuid)
+    if not flow or flow.project_id != proj_uuid:
         raise HTTPException(status_code=404, detail="Flow not found")
-    return flow
+
+    await verify_project_role(db, proj_uuid, user, min_role="tester")
+    flow_service = FlowService(db)
+    updated = await flow_service.update_flow(fl_uuid, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Flow not found")
+    return updated
 
 
 from app.modules.validation.service import ValidationService
