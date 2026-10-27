@@ -14,6 +14,7 @@ import {
   ProjectCommandInput,
   ProjectKnowledge,
   ProjectValidations,
+  ProjectSuites,
 } from "@/components/projects";
 import { getProjectKnowledge, getProjectValidations } from "@/lib/api/projects";
 import type { ProjectActivity as Activity, Mission, ExecutionDetail, MissionExecution } from "@/lib/types";
@@ -135,6 +136,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
               <ProjectOverview project={project} />
               <ProjectKnowledge knowledge={knowledge} />
               <ProjectValidations validations={validations} projectId={project.id} />
+              <ProjectSuites projectId={project.id} missions={missions} />
               <ProjectMissions
                 missions={missions}
                 executions={executionMap}

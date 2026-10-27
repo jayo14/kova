@@ -15,3 +15,4 @@ export { ProjectCommandInput } from "./project-command";
 export { ProjectSettingsDialog } from "./project-settings";
 export { ProjectKnowledge } from "./project-knowledge";
 export { ProjectValidations } from "./project-validations";
+export { ProjectSuites } from "./project-suites";
