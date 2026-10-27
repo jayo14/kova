@@ -200,14 +200,13 @@ class ExplorationService:
 
             email = cred.email
             raw_pass = cred.password
-            if raw_pass and raw_pass.startswith("gAAAAA"):
-                try:
-                    password = decrypt_credential(raw_pass)
-                except Exception as ex:
-                    logger.warning("Failed to decrypt stored credential password: %s", ex)
-                    password = raw_pass
-            else:
-                password = raw_pass
+            if not raw_pass:
+                raise ValueError("Stored credential password is empty.")
+            try:
+                password = decrypt_credential(raw_pass)
+            except Exception as ex:
+                logger.error("Failed to decrypt stored credential: %s", ex)
+                raise ValueError("Failed to decrypt stored credential; stored value is corrupt or invalid.") from ex
 
         if not email or not password:
             raise ValueError("Email and password are required.")
@@ -644,13 +643,14 @@ class ExplorationService:
                     if project_creds:
                         cred_obj = project_creds[0]
                         credential_id = cred_obj.name
-                        if credential is None and cred_obj.value:
+                        if credential is None and (getattr(cred_obj, "password", None) or getattr(cred_obj, "value", None)):
                             from app.modules.credentials.crypto import decrypt_credential
                             try:
-                                decrypted_val = decrypt_credential(cred_obj.value)
-                                credential = {"email": cred_obj.name, "password": decrypted_val}
+                                pass_to_decrypt = getattr(cred_obj, "password", None) or getattr(cred_obj, "value", None)
+                                decrypted_val = decrypt_credential(pass_to_decrypt)
+                                credential = {"email": getattr(cred_obj, "email", None) or cred_obj.name, "password": decrypted_val}
                             except Exception as ex:
-                                logger.debug("Could not decrypt project credential for exploration: %s", ex)
+                                logger.error("Could not decrypt project credential for exploration: %s", ex)
                 except Exception as e:
                     logger.debug("Could not resolve project credential for exploration: %s", e)
 

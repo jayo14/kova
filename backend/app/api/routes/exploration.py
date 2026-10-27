@@ -107,20 +107,27 @@ async def list_exploration_credentials(
     """List available credentials stored for the project associated with this exploration session."""
     session = await _get_authorized_session(session_id, user.id, db)
     service = CredentialService(db)
-    if session.project_id:
-        creds = await service.list_credentials(session.project_id)
-        if creds:
-            return creds
+    proj_repo = ProjectRepository(db)
 
-    # Fallback: check if other projects by the user for the same host have credentials
+    if session.project_id:
+        proj = await proj_repo.get_by_id_and_user(session.project_id, user.id)
+        if proj:
+            creds = await service.list_credentials(session.project_id)
+            if creds:
+                return creds
+
+    # Fallback: check if other projects with the same host have credentials,
+    # strictly restricted to projects where caller has verified access.
     if session.url:
         import re
         from urllib.parse import urlparse
         parsed = urlparse(session.url)
         clean_host = re.sub(r"^www\d*\.", "", (parsed.hostname or "").lower())
-        proj_repo = ProjectRepository(db)
         user_projects = await proj_repo.list_by_user(user.id, limit=50)
         for p in user_projects:
+            p_accessible = await proj_repo.get_by_id_and_user(p.id, user.id)
+            if not p_accessible:
+                continue
             p_host = re.sub(r"^www\d*\.", "", (urlparse(p.base_url).hostname or "").lower())
             if p_host == clean_host:
                 creds = await service.list_credentials(p.id)
