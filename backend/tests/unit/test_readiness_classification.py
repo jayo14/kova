@@ -191,22 +191,35 @@ def test_real_application_initially_slow_but_ready():
 
 
 import asyncio
+import pytest
 
 
-def test_cancellation_during_readiness_wait():
-    class Dummy:
-        pass
+@pytest.mark.asyncio
+async def test_cancellation_during_readiness_wait():
+    """14. Cancellation during the readiness wait."""
+    probe_called = 0
 
+    async def mock_probe():
+        nonlocal probe_called
+        probe_called += 1
+        return classify_page(_base_signals(title="Render", body_text="Service waking up"))
+
+    initial = classify_page(_base_signals(title="Render", body_text="Service waking up"))
+    cancelled = True
     waiter = ReadinessWaiter(
-        probe=lambda: asyncio.sleep(0),
-        intervals=(0.1,),
-        total_timeout=1.0,
+        probe=mock_probe,
+        intervals=(10.0, 10.0),
+        total_timeout=60.0,
+        sleep=asyncio.sleep,
     )
-    # Just ensure it can be constructed
-    assert waiter is not None
+    result = await waiter.resolve(initial, is_cancelled=lambda: cancelled)
+    # Must abort immediately when cancelled
+    assert result.state == PageReadiness.HOSTING_INTERSTITIAL
+    assert probe_called == 0
 
 
 def test_provider_unavailable_deterministic_classification():
+    """15. A provider-unavailable scenario where deterministic classification must still work."""
     signals = _base_signals(
         title="503 Service Unavailable",
         body_text="Service Unavailable",
@@ -214,3 +227,89 @@ def test_provider_unavailable_deterministic_classification():
     )
     res = classify_page(signals)
     assert res.state in (PageReadiness.PROXY_OR_GATEWAY_ERROR, PageReadiness.APPLICATION_ERROR, PageReadiness.HOSTING_INTERSTITIAL)
+
+
+@pytest.mark.asyncio
+async def test_interstitial_observation_never_becomes_persisted_mission(monkeypatch):
+    """16. An interstitial observation that must never become a persisted application mission."""
+    from app.engine.exploration.explorer import ExplorationEngine
+
+    monkeypatch.setattr("app.engine.exploration.explorer.get_ai_provider", lambda: None)
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://huntly-0pgj.onrender.com/",
+    )
+
+    class DummyPage:
+        url = "https://huntly-0pgj.onrender.com/"
+
+    interstitial_obs = {
+        "title": "Render - Application loading",
+        "elements": [
+            {"type": "button", "name": "START BUILDING ON RENDER TODAY"},
+            {"type": "button", "name": "Wake Up"},
+            {"type": "button", "name": "View Logs"},
+        ],
+        "text": "Incoming HTTP request detected. Service waking up. Allocating compute resources.",
+    }
+    discoveries, missions = await explorer._discover_workflows(DummyPage(), interstitial_obs, "User")
+    assert len(missions) == 0
+
+    fast = explorer._generate_fast_path_missions(DummyPage(), interstitial_obs, None)
+    assert len(fast) == 0
+
+
+@pytest.mark.asyncio
+async def test_valid_application_produces_meaningful_verifiable_mission(monkeypatch):
+    """17. A valid application observation that produces a meaningful, verifiable mission."""
+    from app.engine.exploration.explorer import ExplorationEngine
+
+    monkeypatch.setattr("app.engine.exploration.explorer.get_ai_provider", lambda: None)
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://app.huntly.io",
+    )
+
+    class DummyPage:
+        url = "https://app.huntly.io"
+
+    app_obs = {
+        "title": "Huntly Knowledge Workspace",
+        "elements": [
+            {"type": "button", "name": "Create Bookmark"},
+            {"type": "button", "name": "Search Articles"},
+        ],
+        "text": "Huntly helps teams curate knowledge and bookmarks.",
+    }
+    discoveries, missions = await explorer._discover_workflows(DummyPage(), app_obs, "User")
+    assert len(missions) >= 1
+    mission = missions[0]
+    assert mission.recommended is True
+    assert mission.category in ("feature", "navigation")
+    assert mission.successCondition is not None
+    assert len(mission.steps) > 0
+
+
+@pytest.mark.asyncio
+async def test_zero_valid_flows_and_unresolved_readiness_handling(monkeypatch):
+    """18. Frontend handling of zero valid flows and unresolved readiness."""
+    from app.engine.exploration.explorer import ExplorationEngine
+
+    monkeypatch.setattr("app.engine.exploration.explorer.get_ai_provider", lambda: None)
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://empty-shell.example.com",
+    )
+
+    class DummyPage:
+        url = "https://empty-shell.example.com"
+
+    empty_obs = {
+        "title": "Empty Shell",
+        "elements": [],
+        "text": "Nothing to interact with here.",
+    }
+    discoveries, missions = await explorer._discover_workflows(DummyPage(), empty_obs, "Visitor")
+    assert len(missions) == 0
+    assert any("No Actionable" in d.label or "No Executable" in d.label for d in discoveries)
+

@@ -2753,7 +2753,12 @@ class ExplorationEngine:
             if el.get("name") and len(el.get("name", "").strip()) >= 3
         )
         if real_interactive_count < 2:
-            return [], []
+            return [
+                DiscoveryItem(
+                    label="No Actionable Flows Discovered",
+                    description=f"Explored {title or current_url} but found insufficient interactive controls to form executable journeys",
+                )
+            ], []
 
         discovered_areas: list[DiscoveryItem] = []
         missions: list[DiscoveredMission] = []
