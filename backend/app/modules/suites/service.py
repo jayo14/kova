@@ -67,14 +67,15 @@ class SuiteService:
 
         if not flow_ids:
             return []
+        unique_ids = list(dict.fromkeys(flow_ids))
         result = await self.db.execute(
-            select(Flow).where(Flow.id.in_(flow_ids), Flow.project_id == project_id)
+            select(Flow).where(Flow.id.in_(unique_ids), Flow.project_id == project_id)
         )
         flows = {flow.id: flow for flow in result.scalars().all()}
-        missing = [str(flow_id) for flow_id in flow_ids if flow_id not in flows]
+        missing = [str(flow_id) for flow_id in unique_ids if flow_id not in flows]
         if missing:
             raise ValueError(f"Flows not found in project: {', '.join(missing)}")
-        return [flows[flow_id] for flow_id in flow_ids]
+        return [flows[flow_id] for flow_id in unique_ids]
 
     async def create_suite(
         self, data: SuiteCreate, *, user_id: uuid.UUID | None

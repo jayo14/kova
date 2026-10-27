@@ -323,3 +323,18 @@ async def test_deleted_flow_is_reported_as_error_without_running(
     assert detail["items"][0].status == "error"
     assert detail["items"][0].failure_signature == "flow:missing"
     assert detail["items"][0].execution_id is None
+
+
+async def test_duplicate_flow_ids_are_deduplicated(db_session, suite_context):
+    flow = suite_context["flows"][0]
+    suite = await SuiteService(db_session, flow_executor=FakeExecutor()).create_suite(
+        SuiteCreate(
+            project_id=suite_context["project"].id,
+            name="Dupes",
+            flow_ids=[flow.id, flow.id, flow.id],
+        ),
+        user_id=suite_context["user"].id,
+    )
+
+    version = await SuiteService(db_session).latest_version(suite)
+    assert [item["id"] for item in version.flow_snapshot] == [str(flow.id)]
