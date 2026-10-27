@@ -4695,6 +4695,44 @@ class ExplorationEngine:
             }
 
         if intent == "create_account":
+            target_route = (element or {}).get("href") or ""
+            if (element or {}).get("type") in ("link", "a") or target_route.startswith("/"):
+                target_path = target_route or "/signup"
+                return {
+                    "name": f"Navigate to {el_name}",
+                    "description": f"Use '{el_name}' to navigate to the user registration page.",
+                    "objective": f"Verify that {persona} can navigate to account creation",
+                    "category": "navigation",
+                    "kind": "navigation_test",
+                    "journey": [
+                        f"Open {app_name}",
+                        f"Click '{el_name}'",
+                        f"Verify account creation page is loaded",
+                    ],
+                    "steps": [
+                        {"type": "navigate", "url": base_url},
+                        {"type": "wait", "value": "500"},
+                        {"type": "click", "target": selector},
+                        {"type": "wait", "value": "500"},
+                    ],
+                    "success_condition": {
+                        "url_matches": {"pattern": target_path.lstrip("/") or "signup"},
+                    },
+                    "confidence": 0.75,
+                    "estimated_time": 10,
+                    "user_goal": "Access account registration form",
+                    "expected_outcome": f"Application navigates to registration view matching '{target_path}'",
+                    "classification": "navigation",
+                    "is_core": False,
+                    "runnable": True,
+                    "validation_status": "eligible",
+                    "provenance": {
+                        "observed_controls": [el_name, selector],
+                        "observed_routes": [base_url, target_path],
+                        "preconditions": [],
+                        "unmet_preconditions": [],
+                    },
+                }
             if not credential_id:
                 return {
                     "name": "Create an account (needs credentials)",
@@ -4704,6 +4742,7 @@ class ExplorationEngine:
                     ),
                     "objective": "Create an account and reach the authenticated experience",
                     "category": "auth",
+                    "kind": "feature_test",
                     "journey": [
                         f"Open {app_name}",
                         f"Use the registration entry point '{el_name}'",
@@ -4717,6 +4756,15 @@ class ExplorationEngine:
                     "expected_outcome": "User account is registered and authenticated session is established",
                     "classification": "auth",
                     "is_core": False,
+                    "runnable": False,
+                    "validation_status": "blocked_by_prerequisites",
+                    "rejection_reasons": ["Registration requires valid user credentials"],
+                    "provenance": {
+                        "observed_controls": [el_name, selector],
+                        "observed_routes": [base_url],
+                        "preconditions": ["test_credentials"],
+                        "unmet_preconditions": ["test_credentials"],
+                    },
                 }
             email_selector = "input[type='email'], input[name='email'], input[name='username']"
             password_selector = "input[type='password'], input[name='password']"
@@ -4725,6 +4773,7 @@ class ExplorationEngine:
                 "description": f"Verify that {persona.lower()} can register and reach the authenticated experience.",
                 "objective": f"Verify that {persona} can create an account and access the platform",
                 "category": "auth",
+                "kind": "feature_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Use the registration entry point '{el_name}'",
@@ -4750,6 +4799,14 @@ class ExplorationEngine:
                 "expected_outcome": "User account is registered and authenticated session is established",
                 "classification": "auth",
                 "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector, email_selector, password_selector],
+                    "observed_routes": [base_url],
+                    "preconditions": ["configured_credentials"],
+                    "unmet_preconditions": [],
+                },
             }
 
         if intent == "search":

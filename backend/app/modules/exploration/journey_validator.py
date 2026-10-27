@@ -472,6 +472,17 @@ def deduplicate_and_rank_journeys(
     seen_keys: set[str] = set()
 
     for m in missions:
+        if m.validation_status == "blocked_by_prerequisites" or not m.runnable:
+            m.runnable = False
+            m.recommended = False
+            route_path = (m.route_analysis or {}).get("path", "")
+            intent_norm = normalize_journey_intent(m.name, route_path)
+            key = f"blocked:{intent_norm}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                blocked_missions.append(m)
+            continue
+
         # Check and attempt repair only with concrete capability evidence
         val = validate_journey(m, capabilities)
         if not val.is_valid:
@@ -483,17 +494,6 @@ def deduplicate_and_rank_journeys(
             m.validation_status = "rejected_by_quality_gate"
             m.rejection_reasons = [d.message for d in val.defects]
             logger.info("Excluding invalid journey '%s': %s", m.name, [d.message for d in val.defects])
-            continue
-
-        if m.validation_status == "blocked_by_prerequisites" or not m.runnable:
-            m.runnable = False
-            m.recommended = False
-            route_path = (m.route_analysis or {}).get("path", "")
-            intent_norm = normalize_journey_intent(m.name, route_path)
-            key = f"blocked:{intent_norm}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                blocked_missions.append(m)
             continue
 
         m.runnable = True

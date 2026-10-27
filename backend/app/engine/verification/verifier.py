@@ -926,10 +926,14 @@ class Verifier:
         """Check if target element has expected attribute value."""
         try:
             locator = await self._resolve_target(target)
-            actual_val = await locator.get_attribute(attribute)
+            actual_val = locator.get_attribute(attribute)
+            if inspect.isawaitable(actual_val):
+                actual_val = await actual_val
             if (actual_val or "") != expected_value:
                 try:
-                    prop_val = await locator.evaluate(f"el => el['{attribute}'] !== undefined ? String(el['{attribute}']) : null")
+                    prop_val = locator.evaluate(f"el => el['{attribute}'] !== undefined ? String(el['{attribute}']) : null")
+                    if inspect.isawaitable(prop_val):
+                        prop_val = await prop_val
                     if prop_val is not None:
                         actual_val = prop_val
                 except Exception:
