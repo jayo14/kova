@@ -14,6 +14,7 @@ import {
 } from "@/lib/api/runs";
 import { getExecution, getExecutionEvents } from "@/lib/api/executions";
 import { mapExecutionEvents } from "@/lib/executions/event-mapper";
+import { ExecutionActivity } from "./execution-activity";
 import { ExecutionDetailPage } from "./execution-detail-page";
 import { ExecutionCancelDialog } from "./execution-cancel-dialog";
 import { JourneyList } from "./journey-list";
@@ -60,9 +61,7 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
           if (ctrl) {
             setIsPaused(ctrl.state === "paused" || ctrl.state === "human_control");
           }
-          if (!selectedExecutionId && data.executions.length > 0) {
-            setSelectedExecutionId(data.executions[0].id);
-          }
+          setSelectedExecutionId((current) => current ?? data.executions[0]?.id ?? null);
           setLoading(false);
         }
       } catch (err) {
@@ -122,7 +121,6 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
     if (!selectedExecutionId) return;
 
     let mounted = true;
-    setLoadingActive(true);
 
     async function loadSelectedExecution() {
       try {
@@ -214,48 +212,42 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      {/* Top Navigation & Status Bar */}
-      <div className="flex flex-col gap-4 bg-card/60 backdrop-blur-sm border border-border/60 rounded-xl p-5 shadow-sm">
-        <RunHeader
-          runId={run.id}
-          status={run.status}
-          isCancelling={isCancelling}
-          onCancel={() => setCancelDialogOpen(true)}
-          isPaused={isPaused}
-          isPausing={isPausing}
-          isResuming={isResuming}
-          onPause={handlePauseRun}
-          onResume={handleResumeRun}
-        />
+    <div className="animate-in fade-in duration-300">
+      <RunHeader
+        runId={run.id}
+        status={run.status}
+        isCancelling={isCancelling}
+        onCancel={() => setCancelDialogOpen(true)}
+        isPaused={isPaused}
+        isPausing={isPausing}
+        isResuming={isResuming}
+        onPause={handlePauseRun}
+        onResume={handleResumeRun}
+      />
 
-        <RunSummaryStats
-          summary={run.summary}
-          progress={run.progress}
-          status={run.status}
-        />
-      </div>
+      <div className="mt-6 grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="min-w-0 space-y-5">
+          <RunSummaryStats
+            summary={run.summary}
+            progress={run.progress}
+            status={run.status}
+          />
 
-      {/* Main Two-Column View: Mission Selector + Active Journey Stream */}
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        {/* Left Column: Mission List (~290px rail on wide screens) */}
-        <div className="lg:w-[290px] lg:shrink-0 min-w-0">
           <JourneyList
             executions={run.executions}
             selectedExecutionId={selectedExecutionId}
             onSelect={setSelectedExecutionId}
           />
-        </div>
 
-        {/* Right Column: Live Viewport, Scrubber & Detail for Selected Mission */}
-        <div className="flex-1 min-w-0">
-          {loadingActive || !activeExecution ? (
-            <div className="rounded-xl border border-border/60 bg-card p-12 text-center space-y-3">
+          {loadingActive ||
+          !activeExecution ||
+          activeExecution.id !== selectedExecutionId ? (
+            <div className="rounded-[20px] border border-border/70 bg-card p-12 text-center space-y-3 shadow-[0_1px_2px_rgba(42,23,13,0.04)]">
               <MaterialIcon name="sync" className="w-7 h-7 animate-spin text-primary mx-auto" />
               <p className="text-body-sm text-muted-foreground">Loading journey execution detail...</p>
             </div>
           ) : (
-            <div className="rounded-xl border border-border/60 bg-card overflow-hidden shadow-sm">
+            <div className="overflow-hidden rounded-[20px] border border-border/70 bg-card shadow-[0_1px_2px_rgba(42,23,13,0.04)]">
               <ExecutionDetailPage
                 key={activeExecution.id}
                 initialExecution={activeExecution}
@@ -265,6 +257,14 @@ export function RunOverview({ runId, initialRun }: RunOverviewProps) {
             </div>
           )}
         </div>
+
+        <aside className="hidden min-w-0 xl:sticky xl:top-[88px] xl:block">
+          <ExecutionActivity
+            activities={activeActivities}
+            variant="rail"
+            className="xl:h-[calc(100vh-112px)]"
+          />
+        </aside>
       </div>
 
       <ExecutionCancelDialog

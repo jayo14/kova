@@ -58,7 +58,6 @@ export function ExecutionBrowser({
   executionId,
   stepScreenshots = [],
 }: ExecutionBrowserProps) {
-  const [liveUrl, setLiveUrl] = useState<string>(url);
   const [actionFlash, setActionFlash] = useState<string | null>(null);
   const [scrubber, setScrubber] = useState<{ count: number; index: number | null }>({
     count: stepScreenshots.length,
@@ -80,29 +79,25 @@ export function ExecutionBrowser({
   const isAgentControlled = agentControlledStatuses.includes(status);
   const statusConfig = getExecutionStatusConfig(status);
 
-  useEffect(() => {
+  const liveUrl = useMemo(() => {
     for (let i = events.length - 1; i >= 0; i--) {
-      const p = events[i]?.payload;
-      if (p && typeof p.url === "string" && p.url) {
-        setLiveUrl(p.url);
-        break;
+      const payload = events[i]?.payload;
+      if (payload && typeof payload.url === "string" && payload.url) {
+        return payload.url;
       }
     }
-  }, [events]);
-
-  useEffect(() => {
-    if (currentAction) {
-      setActionFlash(currentAction);
-      const t = setTimeout(() => setActionFlash(null), 2000);
-      return () => clearTimeout(t);
-    }
-  }, [currentAction]);
-
-  useEffect(() => {
-    if (!events.some((e) => e.payload && typeof (e.payload as Record<string, unknown>).url === "string")) {
-      setLiveUrl(url);
-    }
+    return url;
   }, [url, events]);
+
+  useEffect(() => {
+    if (!currentAction) return;
+    const show = setTimeout(() => setActionFlash(currentAction), 0);
+    const hide = setTimeout(() => setActionFlash(null), 2000);
+    return () => {
+      clearTimeout(show);
+      clearTimeout(hide);
+    };
+  }, [currentAction]);
 
   const displayHost = (() => {
     try {
@@ -126,13 +121,13 @@ export function ExecutionBrowser({
       role="region"
       aria-label="Browser workspace viewport"
       className={cn(
-        "flex flex-col rounded-2xl border bg-card overflow-hidden shadow-xs transition-all",
-        isAgentControlled ? "border-primary/40 shadow-primary/5" : "border-border/80",
+        "flex flex-col overflow-hidden rounded-xl border bg-card transition-all",
+        isAgentControlled ? "border-primary/40" : "border-border/70",
         className
       )}
     >
       {/* Browser Chrome Header */}
-      <div className="flex items-center justify-between border-b border-border/70 bg-secondary/30 px-4 py-2.5">
+      <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-secondary/40 px-3 py-2">
         {/* Window Controls */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5" aria-hidden="true">
@@ -143,7 +138,7 @@ export function ExecutionBrowser({
         </div>
 
         {/* Address Bar */}
-        <div className="flex max-w-xs sm:max-w-sm md:max-w-md items-center gap-1.5 rounded-lg border border-border/60 bg-background/80 px-3 py-1 text-caption font-mono text-muted-foreground">
+        <div className="flex min-w-0 max-w-md flex-1 items-center gap-1.5 rounded-md border border-border/60 bg-background/80 px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
           <MaterialIcon
             name="lock"
             size={12}
@@ -176,7 +171,7 @@ export function ExecutionBrowser({
       </div>
 
       {/* Viewport Workspace */}
-      <div className="relative flex-1 min-h-[420px] sm:min-h-[520px] md:min-h-[560px] bg-background/50 overflow-hidden select-none">
+      <div className="relative min-h-[300px] flex-1 select-none overflow-hidden bg-background/50 sm:min-h-[360px]">
         {/* Agent Control Glow */}
         {isAgentControlled && (
           <div className="absolute inset-0 z-10 pointer-events-none">
@@ -309,37 +304,21 @@ export function ExecutionBrowser({
           </div>
         )}
 
-        {/* Terminal Failed / Error / Timeout / Cancelled */}
-        {!isActive && (status === "failed" || status === "timeout" || status === "error" || status === "cancelled" || status === "unverified") && (
-          <div className="absolute bottom-4 left-4 right-4 z-30 flex items-center justify-between rounded-xl border border-destructive/30 bg-card/95 backdrop-blur-md p-3.5 shadow-lg animate-in fade-in slide-in-from-bottom-3 duration-300">
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-destructive/10 text-destructive shrink-0">
-                <MaterialIcon name={status === "timeout" ? "timer_off" : status === "cancelled" ? "cancel" : "error"} size={18} />
-              </div>
-              <div>
-                <p className="text-body-sm font-semibold text-foreground">
-                  {status === "timeout" ? "Execution timed out" : status === "cancelled" ? "Execution cancelled" : "Execution failed"}
-                </p>
-                <p className="text-caption text-muted-foreground line-clamp-1">
-                  {errorMessage || "Kova could not accomplish the mission objective."}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Step scrubber — replay each verified step without leaving the page */}
       {!isActive && stepScreenshots.length > 0 && (
-        <div className="border-t border-border/70 bg-secondary/20 px-3 py-2.5">
+        <div className="border-t border-border/70 bg-secondary/30 px-3 py-2.5">
           <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-1.5 text-caption font-medium text-foreground">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
               <MaterialIcon name="history" size={14} className="text-muted-foreground" />
-              <span>Verified steps</span>
+              <span>Verified steps {stepScreenshots.length} of {stepScreenshots.length}</span>
             </div>
-            <span className="text-caption text-muted-foreground">
-              {selectedShot ? `${(scrubberIndex ?? stepScreenshots.length - 1) + 1} of ${stepScreenshots.length}` : ""}
-            </span>
+            {selectedShot && (
+              <span className="font-mono text-[10px] text-muted-foreground">
+                Shot {(scrubberIndex ?? stepScreenshots.length - 1) + 1}
+              </span>
+            )}
           </div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {stepScreenshots.map((shot, index) => {
@@ -360,7 +339,7 @@ export function ExecutionBrowser({
                   aria-pressed={active}
                   aria-label={`Show ${shot.title || `step ${index + 1}`}`}
                   className={cn(
-                    "relative h-16 w-28 shrink-0 overflow-hidden rounded-md border-2 bg-background transition-colors",
+                    "relative h-14 w-24 shrink-0 overflow-hidden rounded-md border-2 bg-background transition-colors",
                     active ? "border-primary" : "border-border/60 hover:border-border"
                   )}
                 >

@@ -6,6 +6,8 @@ import { usePathname } from "next/navigation";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
 import { getMe } from "@/lib/api/onboarding";
+import { getExecutions } from "@/lib/api/executions";
+import type { ExecutionDetail } from "@/lib/types";
 
 interface NavItem {
   label: string;
@@ -32,26 +34,27 @@ function NavButton({ item, active }: { item: NavItem; active: boolean }) {
     <Link
       href={item.href}
       className={cn(
-        "flex items-center gap-3 rounded-xl px-3 py-2 text-body-sm transition-all duration-150 select-none",
+        "flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] leading-5 transition-colors duration-150 select-none",
         active
-          ? "bg-primary/8 text-primary font-semibold shadow-2xs"
-          : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground font-normal"
+          ? "bg-[var(--sand)] font-semibold text-foreground"
+          : "font-normal text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
       )}
       aria-current={active ? "page" : undefined}
     >
       <MaterialIcon
         name={item.icon}
-        size={18}
-        className={cn(active ? "text-primary font-bold" : "text-muted-foreground")}
+        size={17}
+        className={cn(active ? "text-[var(--rust)]" : "text-muted-foreground/80")}
       />
-      <span>{item.label}</span>
+      <span className="truncate">{item.label}</span>
     </Link>
   );
 }
 
-export function AppSidebar() {
+export function AppSidebar({ organizationName }: { organizationName?: string }) {
   const pathname = usePathname();
   const [onboardingStep, setOnboardingStep] = useState<number | null>(null);
+  const [recent, setRecent] = useState<ExecutionDetail[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -69,29 +72,98 @@ export function AppSidebar() {
     };
   }, [pathname]);
 
+  useEffect(() => {
+    let mounted = true;
+    getExecutions()
+      .then((items) => {
+        if (mounted) setRecent(items.slice(0, 3));
+      })
+      .catch(() => {
+        // Recent runs are optional chrome; ignore fetch failures.
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const isActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard";
     return pathname.startsWith(href);
   };
 
   return (
-    <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-56 lg:flex-col border-r border-border bg-background/95 select-none">
-      {/* Kova Wordmark Header */}
-      <div className="flex h-14 items-center px-5 border-b border-border">
-        <Link href="/dashboard" className="flex items-center gap-2" aria-label="Kova home">
-          <span className="text-body-lg font-bold tracking-tight text-foreground font-sans">
+    <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-60 lg:flex-col border-r border-border bg-card select-none">
+      <div className="flex h-14 items-center px-4">
+        <Link href="/dashboard" className="flex items-center gap-2.5" aria-label="Kova home">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--rust)] font-heading text-base font-bold leading-none text-[var(--background)]">
+            K
+          </span>
+          <span className="font-heading text-lg font-bold tracking-tight text-foreground">
             Kova
           </span>
         </Link>
       </div>
 
+      <div className="px-3 pb-3">
+        <Link
+          href="/organization"
+          className="flex items-center gap-2.5 rounded-xl border border-border/80 bg-background/70 px-2.5 py-2 transition-colors hover:bg-background"
+        >
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-[var(--sand)] text-[11px] font-semibold uppercase text-[var(--rust)]">
+            {(organizationName || "Kova").slice(0, 2)}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[9px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+              Workspace
+            </span>
+            <span className="block truncate text-xs font-semibold text-foreground">
+              {organizationName || "Personal"}
+            </span>
+          </span>
+          <MaterialIcon name="unfold_more" size={14} className="text-muted-foreground" />
+        </Link>
+      </div>
+
       {/* Primary Application Navigation */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4" aria-label="Main navigation">
-        <div className="flex flex-col gap-1">
+      <nav className="flex-1 overflow-y-auto px-3 py-2" aria-label="Main navigation">
+        <div className="flex flex-col gap-0.5">
           {primaryNav.map((item) => (
             <NavButton key={item.href} item={item} active={isActive(item.href)} />
           ))}
         </div>
+
+        {recent.length > 0 && (
+          <div className="mt-6">
+            <div className="flex items-center justify-between px-2.5 pb-1.5">
+              <span className="text-[9px] font-semibold uppercase tracking-[0.14em] text-muted-foreground/70">
+                Recent
+              </span>
+              <Link href="/executions" className="text-[10px] text-muted-foreground hover:text-foreground">
+                View all
+              </Link>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {recent.map((execution) => (
+                <Link
+                  key={execution.id}
+                  href="/executions"
+                  className="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-[12px] text-muted-foreground transition-colors hover:bg-secondary/60 hover:text-foreground"
+                >
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 shrink-0 rounded-full",
+                      execution.status === "completed" && "bg-emerald-500",
+                      execution.status === "failed" && "bg-destructive",
+                      execution.status === "blocked" && "bg-amber-500",
+                      !["completed", "failed", "blocked"].includes(execution.status) && "bg-[var(--clay)]"
+                    )}
+                  />
+                  <span className="truncate">{execution.missionName || "Untitled run"}</span>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </nav>
 
       {/* Complete setup card */}
