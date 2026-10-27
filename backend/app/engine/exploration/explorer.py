@@ -27,7 +27,7 @@ from app.modules.exploration.schemas import (
     DiscoveredMission,
     DiscoveryItem,
 )
-from app.modules.exploration.journey_validator import deduplicate_and_rank_journeys
+from app.modules.exploration.journey_validator import deduplicate_and_rank_journeys, validate_journey
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
 from app.config.settings import get_settings
@@ -3444,8 +3444,10 @@ class ExplorationEngine:
                 persona="User",
                 elements=elements,
             )
-            goal_mission.recommended = True
-            missions.append(goal_mission)
+            val = validate_journey(goal_mission)
+            if val.is_valid:
+                goal_mission.recommended = True
+                missions.append(goal_mission)
 
         # 2. Extract top 2-3 prominent interactive elements
         seen_names: set[str] = set()
@@ -3453,9 +3455,9 @@ class ExplorationEngine:
             seen_names.add(goal.lower())
 
         priority_keywords = [
-            "start", "get started", "explore", "sign up", "register", "login",
+            "start", "get started", "explore", "sign up", "register", "login", "sign in",
             "search", "new", "create", "pricing", "features", "dashboard",
-            "docs", "documentation", "try", "demo"
+            "docs", "documentation", "try", "demo", "password"
         ]
 
         scored_elements: list[tuple[int, dict]] = []
@@ -3470,7 +3472,7 @@ class ExplorationEngine:
                 continue
 
             score = 0
-            if el.get("type") in ("button", "a"):
+            if el.get("type") in ("button", "a", "link"):
                 score += 2
             for kw in priority_keywords:
                 if kw in name_lower:
@@ -3483,44 +3485,22 @@ class ExplorationEngine:
         for _, el in scored_elements[: (3 if not goal else 2)]:
             name = el["name"].strip()
             seen_names.add(name.lower())
-            clean_name = name.replace("'", "\\'")
-            selector = el.get("selector") or f"button:has-text('{clean_name}'), a:has-text('{clean_name}')"
-            is_rec = len(missions) == 0
-
-            missions.append(
-                DiscoveredMission(
-                    id=f"mission-{uuid.uuid4().hex[:8]}",
-                    name=f"Explore {name}",
-                    title=f"Explore {name}",
-                    description=f"Interact with '{name}' on {title or 'application'} to test functionality.",
-                    objective=f"Verify that interacting with '{name}' executes as expected.",
-                    persona="User",
-                    category="feature",
-                    journey=[
-                        f"Visit {title or 'application'}",
-                        f"Click '{name}'",
-                        "Verify visible feedback or navigation",
-                    ],
-                    steps=[
-                        {"type": "navigate", "url": current_url},
-                        {"type": "wait", "value": "500"},
-                        {"type": "click", "target": selector},
-                        {"type": "wait", "value": "500"},
-                    ],
-                    successCondition={
-                        "element_count": {
-                            "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, h3, button, input",
-                            "min": 1,
-                        }
-                    },
-                    confidence=0.85,
-                    recommended=is_rec,
-                    route_analysis={"accessible": True, "source": "fast_path"},
-                    estimated_time_seconds=10,
-                    expectation_source="fast_path",
-                    review_required=False,
-                )
+            mission = self._build_element_mission(
+                el, current_url, title, persona="User", recommended=False
             )
+            if mission:
+                val = validate_journey(mission)
+                if val.is_valid and mission.runnable:
+                    missions.append(mission)
+                elif mission.validation_status == "blocked_by_prerequisites":
+                    missions.append(mission)
+
+        # Select at most one recommended mission among eligible runnable candidates
+        eligible = [m for m in missions if m.runnable and m.validation_status == "eligible"]
+        for m in missions:
+            m.recommended = False
+        if eligible:
+            eligible[0].recommended = True
 
         return missions
 
@@ -3647,7 +3627,7 @@ class ExplorationEngine:
     def _build_route_walk_mission(
         self, goal: str, base_url: str, title: str, persona: str, elements: list[dict],
     ) -> DiscoveredMission:
-        """Fallback: emit a single route-walk mission with low confidence."""
+        """Fallback: emit a single route-walk mission with honest confidence."""
         goal_words = [w.lower() for w in goal.split() if len(w) > 2]
         matching_el = next(
             (el for el in elements if any(gw in el.get("name", "").lower() for gw in goal_words)),
@@ -3667,24 +3647,20 @@ class ExplorationEngine:
         is_matching = bool(matching_el)
         target_pattern = re.sub(r'[^a-zA-Z0-9]+', '.*', el_name.lower()) if el_name else ".*"
         success_condition = {
-            "url_changed_to": f".*{target_pattern}.*",
-            "element_count": {
-                "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button",
-                "min": 1,
-            },
+            "url_matches": {"pattern": target_pattern if target_pattern != ".*" else ".*"},
         }
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
             name=goal,
             title=goal,
-            description=f"Attempt the goal '{goal}' and verify the application responds by changing state.",
-            objective=f"Verify that {persona} can act on '{el_name}' and the application visibly responds" if is_matching else goal,
+            description=f"Attempt the goal '{goal}' and verify the application responds.",
+            objective=f"Verify that {persona} can act on '{el_name}' and reach destination" if is_matching else goal,
             persona=persona,
-            category="feature" if is_matching else "route_walk",
+            category="feature" if is_matching else "navigation",
             journey=[
                 f"Access {title or 'application'}",
-                f"Use the control matching the goal: '{el_name}'",
-                "Verify the application state changes in response",
+                f"Click '{el_name}' to accomplish goal: {goal}",
+                f"Verify navigation or destination view for '{goal}'",
             ],
             steps=steps,
             successCondition=success_condition,
@@ -3696,6 +3672,17 @@ class ExplorationEngine:
                 "warning": "" if is_matching else "No matching capabilities found; emitted a route-walk mission. Consider running Product Discovery first.",
             },
             estimated_time_seconds=15,
+            expected_outcome=f"Application completes navigation and renders destination for '{goal}'",
+            classification="navigation",
+            kind="navigation_test",
+            runnable=is_matching,
+            validation_status="eligible" if is_matching else "rejected_by_quality_gate",
+            provenance={
+                "observed_controls": [el_name, target_selector] if matching_el else [],
+                "observed_routes": [base_url],
+                "preconditions": [],
+                "unmet_preconditions": [],
+            },
         )
 
     def _find_capability_for_route(self, route: dict, all_capabilities: list[Any]) -> Any | None:
@@ -4291,18 +4278,19 @@ class ExplorationEngine:
 
         if not selector or not selector.startswith("#"):
             clean_name = el_name.replace("'", "\\'")
-            if el_type == "link":
+            if el_type in ("link", "a"):
                 selector = f"a:has-text('{clean_name}')"
             else:
                 selector = f"button:has-text('{clean_name}'), [role='button']:has-text('{clean_name}')"
 
         # Classify user intent from element name and context
-        intent = self._classify_intent(el_name)
+        intent = self._classify_intent(el_name, element=element)
 
         # Generate journey based on intent (auth journeys reference credentials)
         journey_data = self._build_journey_for_intent(
             intent, el_name, selector, base_url, title, persona,
             credential_id=self.credential_id,
+            element=element,
         )
 
         return DiscoveredMission(
@@ -4317,23 +4305,49 @@ class ExplorationEngine:
             steps=journey_data["steps"],
             successCondition=journey_data["success_condition"],
             confidence=journey_data["confidence"],
-            recommended=recommended,
+            recommended=recommended and journey_data.get("runnable", True),
             estimated_time_seconds=journey_data["estimated_time"],
             user_goal=journey_data.get("user_goal"),
             expected_outcome=journey_data.get("expected_outcome"),
             classification=journey_data.get("classification", "functional"),
             is_core=journey_data.get("is_core", False),
+            kind=journey_data.get("kind", "feature_test"),
+            runnable=journey_data.get("runnable", True),
+            validation_status=journey_data.get("validation_status", "eligible"),
+            provenance=journey_data.get("provenance", {}),
+            rejection_reasons=journey_data.get("rejection_reasons", []),
         )
 
-    def _classify_intent(self, element_name: str) -> str:
+    def _classify_intent(self, element_name: str, element: dict | None = None) -> str:
         """Classify user intent from element/button text.
 
         Maps UI text to meaningful user goals, not just "click this button".
         """
         lower = element_name.lower().strip()
+        elem = element or {}
+        selector = str(elem.get("selector") or "").lower()
+        href = str(elem.get("href") or "").lower()
+
+        # Password visibility toggle
+        if (
+            any(kw in lower for kw in ["show password", "hide password", "toggle password", "view password", "reveal password"])
+            or ("password" in lower and any(w in lower for w in ["show", "hide", "visibility", "toggle"]))
+            or ("password" in selector and any(w in selector for w in ["toggle", "show", "hide", "visibility"]))
+        ):
+            return "password_toggle"
+
+        # External OAuth providers
+        oauth_keywords = ["google", "github", "apple", "microsoft", "facebook", "twitter", "okta", "saml", "sso"]
+        if any(kw in lower for kw in oauth_keywords) or any(kw in selector for kw in oauth_keywords):
+            if any(kw in lower for kw in ["sign in", "continue with", "log in", "login", "auth"]) or "oauth" in selector or "oauth" in lower:
+                return "oauth_login"
+
+        # Password recovery navigation
+        if any(kw in lower for kw in ["forgot password", "reset password", "forgot your password"]) or "/forgot-password" in href or "/reset-password" in href:
+            return "forgot_password"
 
         # Account / Auth intents
-        if any(kw in lower for kw in ["get started", "sign up", "register", "create account", "join"]):
+        if any(kw in lower for kw in ["get started", "sign up", "register", "create account", "join"]) or "/signup" in href or "/register" in href:
             return "create_account"
         if any(kw in lower for kw in ["log in", "login", "sign in", "continue with"]):
             return "login"
@@ -4386,6 +4400,7 @@ class ExplorationEngine:
     def _build_journey_for_intent(
         self, intent: str, el_name: str, selector: str, base_url: str, title: str, persona: str,
         credential_id: str | None = None,
+        element: dict | None = None,
     ) -> dict:
         """Generate a multi-step journey with outcome-verifying success criteria.
 
@@ -4396,6 +4411,136 @@ class ExplorationEngine:
         """
 
         app_name = title or "the application"
+
+        if intent == "password_toggle":
+            password_input = "input[type='password'], input[name*='password' i], input[id*='password' i]"
+            toggle_sel = selector or "button[aria-label*='password' i], button:has-text('Show password'), button:has-text('Hide password')"
+            return {
+                "name": "Toggle password visibility",
+                "description": "Enter test text into the password field, toggle visibility to reveal cleartext, and toggle again to restore masking.",
+                "objective": "Verify that the password visibility toggle reveals masked text and returns to masked state",
+                "category": "control_exploration",
+                "kind": "control_exploration",
+                "journey": [
+                    f"Open {app_name}",
+                    "Enter test text into password input",
+                    f"Click '{el_name}' to reveal password",
+                    "Verify password input type changes to text",
+                    f"Click '{el_name}' again to mask password",
+                    "Verify password input type returns to password",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "wait", "value": "500"},
+                    {"type": "type", "target": password_input, "value": "SecretPassword123!"},
+                    {"type": "wait", "value": "200"},
+                    {"type": "click", "target": toggle_sel},
+                    {"type": "wait", "value": "200"},
+                    {"type": "click", "target": toggle_sel},
+                    {"type": "wait", "value": "200"},
+                ],
+                "success_condition": {
+                    "element_attribute": {
+                        "target": password_input,
+                        "attribute": "type",
+                        "value": "password",
+                    }
+                },
+                "confidence": 0.85,
+                "estimated_time": 10,
+                "user_goal": "Toggle password visibility to verify cleartext reveal and masking",
+                "expected_outcome": "Password field toggles between masked and visible states and returns to masked password type",
+                "classification": "functional",
+                "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, toggle_sel, password_input],
+                    "observed_routes": [base_url],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
+
+        if intent == "oauth_login":
+            provider = "Google" if "google" in el_name.lower() or "google" in selector.lower() else (
+                "GitHub" if "github" in el_name.lower() or "github" in selector.lower() else (
+                    "Apple" if "apple" in el_name.lower() or "apple" in selector.lower() else "external identity provider"
+                )
+            )
+            return {
+                "name": f"Sign in with {provider} (external OAuth)",
+                "description": (
+                    f"Authentication via {provider} delegates to an external OAuth identity provider. "
+                    f"Requires configured OAuth credentials or interactive human authentication."
+                ),
+                "objective": f"Authenticate via external {provider} OAuth provider",
+                "category": "auth",
+                "kind": "control_exploration",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Select '{el_name}'",
+                    f"Complete {provider} external authentication (requires external credentials or human handoff)",
+                    "Verify authenticated state upon redirection back to application",
+                ],
+                "steps": [],
+                "success_condition": None,
+                "confidence": 0.4,
+                "estimated_time": 20,
+                "user_goal": f"Sign in using {provider} OAuth account",
+                "expected_outcome": f"External {provider} authentication completes and returns authenticated session",
+                "classification": "auth",
+                "is_core": False,
+                "runnable": False,
+                "validation_status": "blocked_by_prerequisites",
+                "rejection_reasons": [
+                    f"External {provider} OAuth boundary requires interactive human authentication or configured OAuth credentials"
+                ],
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
+                    "preconditions": [f"external_{provider.lower()}_credentials"],
+                    "unmet_preconditions": [f"external_{provider.lower()}_credentials"],
+                },
+            }
+
+        if intent == "forgot_password":
+            target_route = (element or {}).get("href") or "/forgot-password"
+            return {
+                "name": f"Navigate to {el_name}",
+                "description": f"Use the '{el_name}' link to navigate to the password recovery page.",
+                "objective": f"Verify that {persona} can navigate to the password recovery page",
+                "category": "navigation",
+                "kind": "navigation_test",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Click '{el_name}'",
+                    f"Verify password recovery destination is loaded",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "wait", "value": "500"},
+                    {"type": "click", "target": selector},
+                    {"type": "wait", "value": "500"},
+                ],
+                "success_condition": {
+                    "url_matches": {"pattern": target_route.lstrip("/") or "forgot-password"},
+                },
+                "confidence": 0.75,
+                "estimated_time": 10,
+                "user_goal": "Access password recovery form",
+                "expected_outcome": f"Application navigates to password recovery view matching '{target_route}'",
+                "classification": "navigation",
+                "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url, target_route],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
 
         if intent == "generate_report":
             textarea_selector = "textarea, div[contenteditable='true'], input[name*='content' i], input[name*='log' i], input[placeholder*='log' i], input[placeholder*='report' i], textarea[placeholder*='entry' i]"
@@ -4724,6 +4869,7 @@ class ExplorationEngine:
                     ),
                     "objective": "Log in and reach the authenticated experience",
                     "category": "auth",
+                    "kind": "feature_test",
                     "journey": [
                         f"Open {app_name}",
                         "Navigate to login",
@@ -4738,6 +4884,15 @@ class ExplorationEngine:
                     "expected_outcome": "User is authenticated and redirected to application dashboard",
                     "classification": "auth",
                     "is_core": False,
+                    "runnable": False,
+                    "validation_status": "blocked_by_prerequisites",
+                    "rejection_reasons": ["Authentication requires valid user credentials"],
+                    "provenance": {
+                        "observed_controls": [el_name, selector],
+                        "observed_routes": [base_url],
+                        "preconditions": ["test_credentials"],
+                        "unmet_preconditions": ["test_credentials"],
+                    },
                 }
             email_selector = "input[type='email'], input[name='email'], input[name='username']"
             password_selector = "input[type='password'], input[name='password']"
@@ -4746,6 +4901,7 @@ class ExplorationEngine:
                 "description": f"Verify that {persona.lower()} can authenticate and reach the post-login state.",
                 "objective": f"Verify that {persona} can log in successfully",
                 "category": "auth",
+                "kind": "feature_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Use the login entry point '{el_name}'",
@@ -4771,37 +4927,56 @@ class ExplorationEngine:
                 "expected_outcome": "User is authenticated and redirected to application dashboard",
                 "classification": "auth",
                 "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector, email_selector, password_selector],
+                    "observed_routes": [base_url],
+                    "preconditions": ["configured_credentials"],
+                    "unmet_preconditions": [],
+                },
             }
 
         if intent == "navigate_dashboard":
+            target_route = (element or {}).get("href")
+            pattern = target_route.lstrip("/") if target_route else "dashboard"
             return {
                 "name": f"Open {el_name}",
                 "description": (
                     f"Navigate to {el_name} and verify the destination page loads "
-                    f"with real interactive content."
+                    f"with dashboard content."
                 ),
                 "objective": f"Verify that {persona} can reach {el_name}",
-                "category": "feature",
+                "category": "navigation",
+                "kind": "navigation_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Navigate to '{el_name}'",
-                    "Verify the destination page has loaded with content",
+                    "Verify dashboard view loads",
                 ],
                 "steps": [
                     {"type": "navigate", "url": base_url},
                     {"type": "wait", "value": "500"},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "800"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
-                    "element_count": {"selector": "a[href], button, [role='region'], main, form, table", "min": 1},
+                    "url_matches": {"pattern": pattern},
                 },
-                "confidence": 0.65,
+                "confidence": 0.70,
                 "estimated_time": 12,
                 "user_goal": f"Access {el_name}",
-                "expected_outcome": f"{el_name} view loads with dashboard widgets",
+                "expected_outcome": f"{el_name} view loads matching '{pattern}'",
                 "classification": "navigation",
                 "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url, pattern],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
             }
 
         if intent == "purchase":
@@ -4814,6 +4989,7 @@ class ExplorationEngine:
                 ),
                 "objective": f"Verify that {persona} can reach the purchase flow",
                 "category": "feature",
+                "kind": "feature_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Open '{el_name}'",
@@ -4823,17 +4999,25 @@ class ExplorationEngine:
                     {"type": "navigate", "url": base_url},
                     {"type": "wait", "value": "500"},
                     {"type": "click", "target": selector},
-                    {"type": "wait", "value": "800"},
+                    {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
-                    "element_count": {"selector": "button, form, input, [role='dialog'], [role='region'], h1, h2, h3", "min": 1},
+                    "element_count": {"selector": "[data-testid*='pricing' i], [data-testid*='plan' i], .pricing-table", "min": 1},
                 },
-                "confidence": 0.5,
+                "confidence": 0.6,
                 "estimated_time": 15,
                 "user_goal": f"Access purchase options via {el_name}",
                 "expected_outcome": "Purchase and pricing interface displays tiers and options",
                 "classification": "functional",
                 "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
             }
 
         if intent == "get_help":
@@ -4845,6 +5029,7 @@ class ExplorationEngine:
                 ),
                 "objective": f"Verify that {persona} can access {el_name} resources",
                 "category": "content",
+                "kind": "navigation_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Navigate to '{el_name}'",
@@ -4864,37 +5049,86 @@ class ExplorationEngine:
                 "expected_outcome": f"Help center or documentation pages load with reference guides",
                 "classification": "navigation",
                 "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
             }
 
-        # Default: bounded navigation check with honest description.
+        target_route = (element or {}).get("href")
+        if target_route and not target_route.startswith("javascript:") and not target_route.startswith("#"):
+            return {
+                "name": f"Navigate to {el_name}",
+                "description": f"Use '{el_name}' to navigate to {target_route}.",
+                "objective": f"Verify that {persona} can navigate to {el_name}",
+                "category": "navigation",
+                "kind": "navigation_test",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Click '{el_name}'",
+                    f"Verify navigation to {target_route}",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "wait", "value": "500"},
+                    {"type": "click", "target": selector},
+                    {"type": "wait", "value": "500"},
+                ],
+                "success_condition": {
+                    "url_matches": {"pattern": target_route.lstrip("/") or ".*"},
+                },
+                "confidence": 0.65,
+                "estimated_time": 10,
+                "user_goal": f"Navigate to {el_name}",
+                "expected_outcome": f"Destination view for {el_name} loads matching '{target_route}'",
+                "classification": "navigation",
+                "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url, target_route],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
+
         return {
-            "name": f"Open {el_name}",
-            "description": (
-                f"Use the '{el_name}' control and verify the destination "
-                f"page or modal responds with content."
-            ),
-            "objective": f"Verify that {persona} can use '{el_name}' and the app responds",
+            "name": f"Explore {el_name}",
+            "description": f"Interact with '{el_name}' control on {app_name}.",
+            "objective": f"Verify that {persona} can interact with '{el_name}'",
             "category": "feature",
+            "kind": "control_exploration",
             "journey": [
                 f"Open {app_name}",
-                f"Use '{el_name}'",
-                "Verify the destination interface renders with content",
+                f"Interact with '{el_name}'",
             ],
             "steps": [
                 {"type": "navigate", "url": base_url},
                 {"type": "wait", "value": "500"},
                 {"type": "click", "target": selector},
-                {"type": "wait", "value": "800"},
+                {"type": "wait", "value": "500"},
             ],
-            "success_condition": {
-                "element_count": {"selector": "a[href], button, h1, h2, h3, [role='region'], main", "min": 1},
-            },
-            "confidence": 0.55,
+            "success_condition": None,
+            "confidence": 0.3,
             "estimated_time": 10,
-            "user_goal": f"Navigate to {el_name}",
-            "expected_outcome": f"Destination view for {el_name} loads with content",
-            "classification": "navigation",
+            "user_goal": f"Interact with {el_name}",
+            "expected_outcome": None,
+            "classification": "functional",
             "is_core": False,
+            "runnable": False,
+            "validation_status": "rejected_by_quality_gate",
+            "rejection_reasons": ["No observable state transition or outcome defined for control"],
+            "provenance": {
+                "observed_controls": [el_name, selector],
+                "observed_routes": [base_url],
+                "preconditions": [],
+                "unmet_preconditions": [],
+            },
         }
 
     def _generate_recommendation(self, missions: list[DiscoveredMission]) -> str:

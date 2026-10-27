@@ -33,26 +33,28 @@ def make_quiza_signin_observation():
 
 
 def test_quiza_failure_mode_unqualified_element_missions():
-    """Reproduces how Kova previously created shallow 'Explore Show password' missions."""
+    """Confirms that shallow 'Explore Show password' missions with generic element_count are prevented."""
     engine = ExplorationEngine(exploration_id=uuid.uuid4(), url="https://quiza-ai.vercel.app/signin")
     obs = make_quiza_signin_observation()
 
     class DummyPage:
         url = "https://quiza-ai.vercel.app/signin"
 
-    # Fast path previously took 'Show password' and made it an executable mission with generic element_count
     missions = engine._generate_fast_path_missions(DummyPage(), obs, goal=None)
     names = [m.name for m in missions]
 
-    # Notice: previously "Explore Show password" was generated with trivial assertions:
-    show_pwd = next((m for m in missions if "Show password" in m.name), None)
-    if show_pwd:
-        # Trivial assertion: just checks if main, button, or input exists!
-        assert isinstance(show_pwd.successCondition, dict)
-        assert "element_count" in show_pwd.successCondition
-        # And it was marked recommended!
-        # The prompt says: "Explore Show password is not an adequate test definition.
-        # A valid control test should verify that the password field changes visibility and can return to its original masked state."
+    # Verify generic "Explore Show password" is NOT generated
+    assert not any(m.name == "Explore Show password" for m in missions)
+
+    # Verify password toggle is generated as a grounded control exploration
+    pwd_toggle = next((m for m in missions if "password visibility" in m.name.lower()), None)
+    assert pwd_toggle is not None
+    assert pwd_toggle.kind == "control_exploration"
+    assert pwd_toggle.runnable is True
+    assert pwd_toggle.validation_status == "eligible"
+    assert "element_attribute" in pwd_toggle.successCondition
+    assert pwd_toggle.successCondition["element_attribute"]["attribute"] == "type"
+    assert pwd_toggle.successCondition["element_attribute"]["value"] == "password"
 
 
 def test_quiza_failure_mode_repair_journey_synthesizes_vague_assertions():

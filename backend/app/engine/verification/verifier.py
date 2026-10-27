@@ -927,6 +927,13 @@ class Verifier:
         try:
             locator = await self._resolve_target(target)
             actual_val = await locator.get_attribute(attribute)
+            if (actual_val or "") != expected_value:
+                try:
+                    prop_val = await locator.evaluate(f"el => el['{attribute}'] !== undefined ? String(el['{attribute}']) : null")
+                    if prop_val is not None:
+                        actual_val = prop_val
+                except Exception:
+                    pass
             passed = (actual_val or "") == expected_value
             return VerificationCheck(
                 type="element_attribute",
