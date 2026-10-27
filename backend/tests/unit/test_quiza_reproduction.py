@@ -56,7 +56,7 @@ def test_quiza_failure_mode_unqualified_element_missions():
 
 
 def test_quiza_failure_mode_repair_journey_synthesizes_vague_assertions():
-    """Reproduces how repair_journey previously masked invalid journeys by inserting generic assertions."""
+    """Confirms that repair_journey does NOT mask invalid journeys by inserting generic assertions, and quality gate rejects them."""
     bad_mission = DiscoveredMission(
         id="bad-1",
         name="Open Show password",
@@ -73,16 +73,13 @@ def test_quiza_failure_mode_repair_journey_synthesizes_vague_assertions():
         expected_outcome=None,
     )
 
-    # Initial validation flags SHALLOW_NAVIGATION
+    # Initial validation flags SHALLOW_NAVIGATION / VACUOUS_ASSERTION
     val = validate_journey(bad_mission)
     assert not val.is_valid
-    assert any(d.code == "SHALLOW_NAVIGATION" for d in val.defects)
 
-    # Repair previously changed classification to navigation and synthesized outcome to mask defects
+    # Repair must NOT mask defects by synthesizing generic layout assertions or fake outcomes
     repaired = repair_journey(bad_mission)
-    assert repaired.classification == "navigation"
-    assert "verify destination interface rendered" in repaired.expected_outcome
-
     val2 = validate_journey(repaired)
-    # The repair masked the defect so it passed validation!
-    assert val2.is_valid
+    assert not val2.is_valid
+    assert any(d.code in ("VACUOUS_ASSERTION", "SHALLOW_NAVIGATION", "VAGUE_OUTCOME") for d in val2.defects)
+

@@ -21,14 +21,32 @@ from app.modules.exploration.schemas import DiscoveredMission
 logger = logging.getLogger(__name__)
 
 VAGUE_OUTCOME_PATTERNS = [
-    re.compile(r"^\s*verify\s+(?:page\s+loaded|navigation\s+works|visible\s+feedback|content\s+renders?|expected\s+results?\s+present)\s*\.?\s*$", re.I),
+    re.compile(r"^\s*verify\s+(?:page\s+loaded|navigation\s+works|visible\s+feedback|content\s+renders?|expected\s+results?\s+present|visible\s+feedback\s+or\s+navigation|application\s+state\s+changes?)\s*\.?\s*$", re.I),
     re.compile(r"^\s*expected\s+results?\s+present\s*$", re.I),
     re.compile(r"^\s*verify\s+visible\s+feedback\s*$", re.I),
     re.compile(r"^\s*verify\s+page\s+loaded\s*$", re.I),
     re.compile(r"^\s*verify\s+navigation\s*$", re.I),
     re.compile(r"^\s*lands\s+on\s+expected\s+page\s*$", re.I),
     re.compile(r"^\s*page\s+responds\s*$", re.I),
+    re.compile(r"^\s*destination\s+(?:content|interface)\s+rendered\s*\.?\s*$", re.I),
+    re.compile(r"^\s*destination\s+view\s+for\s+.*loads\s+with\s+content\s*\.?\s*$", re.I),
+    re.compile(r"verify\s+(?:the\s+)?application\s+state\s+changes?", re.I),
+    re.compile(r"verify\s+application\s+state\s+transition\s+with\s+observable\s+ui\s+feedback", re.I),
+    re.compile(r"use\s+the\s+control\s+matching\s+the\s+goal", re.I),
 ]
+
+_GENERIC_ELEMENT_COUNT_SELECTORS = frozenset({
+    "a, button",
+    "a[href], button",
+    "div, section, p",
+    "h1, h2, [role='heading']",
+    "main, [role='main'], header, footer, body",
+    "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, h3, button, input",
+    "a[href], button, h1, h2, h3, [role='region'], main",
+    "button, form, input, [role='dialog'], [role='region'], h1, h2, h3",
+    "a[href], [role='article'], article, li",
+    "a[href], button, [role='region'], main, form, table",
+})
 
 VALID_STEP_TYPES = {
     "navigate", "click", "type", "fill", "select", "submit", "scroll",
@@ -162,45 +180,117 @@ def validate_journey(
             severity="error",
         ))
 
-    # 3. Outcome specificity
+    # 3. Outcome specificity and non-vacuous assertions
     raw_outcome = mission.expected_outcome or (
         mission.successCondition if isinstance(mission.successCondition, str) else None
     )
     if is_vague_outcome(raw_outcome):
-        # Check if successCondition dict is also trivial
-        if isinstance(mission.successCondition, dict):
-            # If successCondition is just element_count >= 1 with generic selectors, it is vague
-            keys = list(mission.successCondition.keys())
-            if keys == ["element_count"]:
-                sel = mission.successCondition.get("element_count", {}).get("selector", "")
-                if sel in ("a, button", "a[href], button", "div, section, p", "h1, h2, [role='heading']", "main, [role='main'], header, footer, body", "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, h3, button, input"):
-                    defects.append(QualityDefect(
-                        code="VAGUE_OUTCOME",
-                        message="Journey has vague, non-specific verification outcome",
-                        severity="error",
-                    ))
-            elif keys == ["url_matches"] and mission.classification == "functional":
+        defects.append(QualityDefect(
+            code="VAGUE_OUTCOME",
+            message="Expected outcome is empty or generic placeholder",
+            severity="error",
+        ))
+
+    # Vacuous / generic assertions check
+    if isinstance(mission.successCondition, dict):
+        keys = list(mission.successCondition.keys())
+        if keys == ["element_count"]:
+            sel = str(mission.successCondition.get("element_count", {}).get("selector", "")).strip().lower()
+            if sel in _GENERIC_ELEMENT_COUNT_SELECTORS or sel in ("main", "body", "html", "div", "section", "p", "a", "button", "h1, h2, h3"):
                 defects.append(QualityDefect(
-                    code="VAGUE_OUTCOME",
-                    message="Functional journey cannot pass merely by URL change",
+                    code="VACUOUS_ASSERTION",
+                    message=f"Success condition relies on generic layout selector ({sel}) rather than observable feature state",
                     severity="error",
                 ))
-        else:
+        elif "url_matches" in keys:
+            pat = str(mission.successCondition.get("url_matches", "")).strip()
+            if pat in (".*", "^", "^.*$", ".*?", ""):
+                defects.append(QualityDefect(
+                    code="VACUOUS_ASSERTION",
+                    message="url_matches pattern is vacuous and matches any destination",
+                    severity="error",
+                ))
+
+    # Generic ungrounded action check
+    all_text = " ".join([
+        mission.name or "",
+        mission.objective or "",
+        mission.user_goal or "",
+        " ".join(mission.journey or []),
+        str(mission.steps or []),
+    ]).lower()
+
+    if "use the control matching the goal" in all_text or "click the button matching the goal" in all_text:
+        defects.append(QualityDefect(
+            code="GENERIC_ACTION",
+            message="Journey contains generic placeholder instructions ('use the control matching the goal')",
+            severity="error",
+        ))
+
+    if (
+        "verify visible feedback or navigation" in all_text
+        or "verify application state changes" in all_text
+        or "verify the application state changes" in all_text
+        or "verify visible feedback" in all_text
+    ):
+        defects.append(QualityDefect(
+            code="GENERIC_ACTION",
+            message="Journey contains generic action without observable application outcome",
+            severity="error",
+        ))
+
+    # Specific control exploration check: password visibility toggle
+    name_and_target = f"{mission.name} {mission.objective} {str(mission.steps)}".lower()
+    if any(kw in name_and_target for kw in ("show password", "hide password", "toggle password", "password visibility")):
+        has_attribute_check = False
+        if isinstance(mission.successCondition, dict):
+            if "element_attribute" in mission.successCondition:
+                attr = mission.successCondition["element_attribute"].get("attribute", "")
+                if attr in ("type", "aria-checked", "aria-expanded"):
+                    has_attribute_check = True
+        for step in mission.steps or []:
+            if isinstance(step, dict) and step.get("type") in ("assert_attribute", "assert_value", "assert_visible"):
+                has_attribute_check = True
+        if not has_attribute_check:
             defects.append(QualityDefect(
-                code="VAGUE_OUTCOME",
-                message="Expected outcome is empty or generic placeholder",
+                code="INADEQUATE_CONTROL_TEST",
+                message="Password visibility control exploration must verify that the password input toggles to visible and returns to masked state",
                 severity="error",
             ))
 
-    # Generic ungrounded action check
-    if mission.journey and len(mission.journey) <= 3:
-        journey_text = " ".join(mission.journey).lower()
-        if "verify visible feedback or navigation" in journey_text:
+    # Specific OAuth button check
+    if any(kw in name_and_target for kw in ("google", "apple", "oauth", "github", "microsoft")) and any(kw in name_and_target for kw in ("sign in", "login", "auth", "continue with")):
+        if isinstance(mission.successCondition, dict) and "auth_verified" in mission.successCondition:
             defects.append(QualityDefect(
-                code="GENERIC_ACTION",
-                message="Journey contains only generic navigation/feedback steps without observable application outcome",
+                code="INVALID_OAUTH_CLAIM",
+                message="OAuth provider buttons cannot be verified as local login journeys without an authenticated test identity or OAuth mock harness",
                 severity="error",
             ))
+        if is_navigation_only_workflow(mission) or (isinstance(mission.successCondition, dict) and "element_count" in mission.successCondition):
+            defects.append(QualityDefect(
+                code="INVALID_OAUTH_CLAIM",
+                message="Clicking an OAuth provider button without configured OAuth identity or external handoff assertions is invalid",
+                severity="error",
+            ))
+
+    # Unmet Preconditions check
+    needs_credentials = (
+        mission.category == "auth"
+        or "needs credentials" in name_and_target
+        or any(isinstance(s, dict) and s.get("credential_field") for s in (mission.steps or []))
+    )
+    has_valid_creds = bool(
+        getattr(mission, "credential_id", None)
+        or any(isinstance(s, dict) and s.get("credential_id") not in (None, "", "null") for s in (mission.steps or []))
+    )
+    if needs_credentials and not has_valid_creds:
+        mission.runnable = False
+        mission.validation_status = "blocked_by_prerequisites"
+        defects.append(QualityDefect(
+            code="UNMET_PRECONDITION",
+            message="Journey requires test credentials or authenticated session that is not currently available",
+            severity="error",
+        ))
 
     # 4. Execution compatibility
     for idx, step in enumerate(mission.steps or []):
@@ -237,102 +327,55 @@ def repair_journey(
     mission: DiscoveredMission,
     capabilities: list[DiscoveredCapability] | None = None,
 ) -> DiscoveredMission:
-    """Attempt to repair a weak journey candidate using available discovery evidence."""
-    # Find matching capability if available
+    """Attempt to ground journey candidate using concrete capability evidence.
+
+    Does NOT fabricate generic strings or generic assertions. If real evidence
+    is missing, the journey remains invalid.
+    """
     matching_cap: DiscoveredCapability | None = None
     if capabilities:
         for cap in capabilities:
-            if cap.id == mission.capability_id or cap.name.lower() in mission.name.lower():
+            if cap.id == mission.capability_id or (cap.name and cap.name.lower() in (mission.name or "").lower()):
                 matching_cap = cap
                 break
 
-    # 1. Repair Classification: if shallow navigation, classify as navigation
-    if is_navigation_only_workflow(mission):
-        mission.classification = "navigation"
-        if mission.recommended:
-            mission.recommended = False
-
-    # 2. Repair Expected Outcome and Success Condition
+    # Ground Expected Outcome only from matching discovered capability evidence
     if is_vague_outcome(mission.expected_outcome) or not mission.expected_outcome:
-        if matching_cap and matching_cap.expected_outcome:
+        if matching_cap and matching_cap.expected_outcome and not is_vague_outcome(matching_cap.expected_outcome):
             mission.expected_outcome = matching_cap.expected_outcome
-        elif mission.classification == "functional":
-            # Synthesize outcome grounded in steps
-            action_verbs = [
-                s.get("type") for s in mission.steps
-                if isinstance(s, dict) and s.get("type") in ("type", "fill", "submit", "click")
-            ]
-            if "type" in action_verbs or "fill" in action_verbs:
-                mission.expected_outcome = (
-                    f"Submit valid inputs for {mission.name}, confirm form processing, "
-                    f"and verify the resulting state or created item appears."
-                )
-            else:
-                mission.expected_outcome = (
-                    f"Execute {mission.name} workflow and verify application state transition "
-                    f"with observable UI feedback."
-                )
-        else:
-            mission.expected_outcome = f"Navigate to {mission.name} and verify destination interface rendered."
 
-    # 3. Repair vague success condition dict
-    if isinstance(mission.successCondition, dict):
-        if "url_changed_to" in mission.successCondition:
-            cfg = mission.successCondition["url_changed_to"]
-            if isinstance(cfg, dict) and "to" not in cfg:
-                del mission.successCondition["url_changed_to"]
-                if not mission.successCondition:
-                    mission.successCondition = {
-                        "element_count": {
-                            "selector": "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, button, input",
-                            "min": 1,
-                        }
-                    }
-
-        keys = list(mission.successCondition.keys())
-        if keys == ["element_count"]:
-            sel = mission.successCondition["element_count"].get("selector", "")
-            if sel in ("a, button", "a[href], button", "div, section, p"):
-                # Upgrade to require actionable response elements
-                mission.successCondition = {
-                    "element_count": {
-                        "selector": "form, table, [role='table'], [role='article'], [role='dialog'], [role='alert'], .success, .result",
-                        "min": 1,
-                    }
-                }
-    elif not mission.successCondition and mission.classification == "functional":
-        mission.successCondition = {
-            "element_count": {
-                "selector": "main, [role='main'], form, table, [role='dialog'], [role='status']",
-                "min": 1,
-            }
-        }
-
-    # Ground success conditions in discovered workflow types
+    # Ground success conditions in discovered workflow types when concrete steps exist
     name_lower = (mission.name + " " + (mission.objective or "")).lower()
-    if not mission.steps or "needs credentials" in name_lower:
-        pass
-    elif any(k in name_lower for k in ("login", "sign in", "signin", "auth")):
-        mission.successCondition = {"auth_verified": {"auth_path": "/login"}}
-    elif any(k in name_lower for k in ("search", "filter", "find records")):
-        if not isinstance(mission.successCondition, dict) or "search_results" not in mission.successCondition:
-            mission.successCondition = {
-                "search_results": {
-                    "query": "",
-                    "expected_matches": [],
-                    "selector": "table, [role='table'], #records-table, .results",
+    if mission.steps and "needs credentials" not in name_lower:
+        if any(k in name_lower for k in ("search", "filter", "find records")):
+            if not isinstance(mission.successCondition, dict) or "search_results" not in mission.successCondition:
+                mission.successCondition = {
+                    "search_results": {
+                        "query": "",
+                        "expected_matches": [],
+                        "selector": "table, [role='table'], #records-table, .results",
+                    }
                 }
-            }
-    elif any(k in name_lower for k in ("create", "add record", "new record", "save record", "post")):
-        if not isinstance(mission.successCondition, dict) or ("record_persisted" not in mission.successCondition and "text_visible" not in mission.successCondition):
-            mission.successCondition = {
-                "record_persisted": {
-                    "expected_text": mission.name,
-                    "reload": True,
+                if not mission.expected_outcome:
+                    mission.expected_outcome = f"Execute search for {mission.name} and verify matching records appear in results table."
+        elif any(k in name_lower for k in ("create", "add record", "new record", "save record", "post", "report")):
+            if not isinstance(mission.successCondition, dict) or ("record_persisted" not in mission.successCondition and "text_visible" not in mission.successCondition):
+                mission.successCondition = {
+                    "record_persisted": {
+                        "expected_text": mission.name,
+                        "reload": True,
+                    }
                 }
-            }
+                if not mission.expected_outcome:
+                    mission.expected_outcome = f"Submit and verify {mission.name} is successfully generated and persisted."
 
-    # 4. User Goal grounding
+    # Clean up empty url_changed_to
+    if isinstance(mission.successCondition, dict) and "url_changed_to" in mission.successCondition:
+        cfg = mission.successCondition["url_changed_to"]
+        if isinstance(cfg, dict) and "to" not in cfg:
+            del mission.successCondition["url_changed_to"]
+
+    # Ground User Goal from objective
     if not mission.user_goal:
         mission.user_goal = mission.objective
 
@@ -428,16 +471,27 @@ def deduplicate_and_rank_journeys(
     seen_keys: set[str] = set()
 
     for m in missions:
-        # Check and attempt repair
+        # Check and attempt repair only with concrete capability evidence
         val = validate_journey(m, capabilities)
         if not val.is_valid:
             m = repair_journey(m, capabilities)
             val = validate_journey(m, capabilities)
 
-        # If it's still fundamentally invalid (e.g. destructive or unsupported action), exclude it
         if not val.is_valid:
+            m.runnable = False
+            m.validation_status = "rejected_by_quality_gate"
+            m.rejection_reasons = [d.message for d in val.defects]
             logger.info("Excluding invalid journey '%s': %s", m.name, [d.message for d in val.defects])
             continue
+
+        if m.validation_status == "blocked_by_prerequisites" or not m.runnable:
+            m.runnable = False
+            m.recommended = False
+            continue
+
+        m.runnable = True
+        m.validation_status = "eligible"
+        m.rejection_reasons = []
 
         # Deduplication key based on normalized intent, category, and target path
         route_path = (m.route_analysis or {}).get("path", "")
@@ -468,9 +522,11 @@ def deduplicate_and_rank_journeys(
     # Sort descending by score
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    # Designate exactly ONE recommended journey:
-    # Must be the highest-scoring functional workflow (never auth/setup or navigation if functional exists)
-    results = [m for _, m in scored]
+    # Designate exactly ONE recommended journey from eligible runnable candidates
+    results = [m for _, m in scored if m.runnable]
+    if not results:
+        return []
+
     for m in results:
         m.recommended = False
 
@@ -494,7 +550,7 @@ def deduplicate_and_rank_journeys(
     else:
         primary_candidate = next(
             (m for m in results if m.classification == "functional" and m.category not in ("auth", "navigation")),
-            results[0]
+            next((m for m in results if m.category != "auth"), results[0])
         )
     primary_candidate.recommended = True
     primary_candidate.ranking_rationale = (
