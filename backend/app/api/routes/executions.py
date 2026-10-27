@@ -742,6 +742,10 @@ async def get_execution_trace(
     if signature:
         if not _verify_report_signature(exec_uuid, signature):
             raise HTTPException(status_code=401, detail="Invalid signature")
+        from app.modules.executions.repository import ExecutionRepository
+        execution = await ExecutionRepository(db).get_by_id(exec_uuid)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
     else:
         if not user:
             raise HTTPException(status_code=401, detail="Not authenticated")
@@ -770,23 +774,22 @@ async def get_execution_trace(
         if os.path.exists(cleaned):
             local_path = cleaned
 
-    # 4. Search trace directories if not resolved yet
+    # 4. Search trace directories strictly by execution ID if not resolved yet
     if not local_path:
         search_dirs = [
             getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_traces"),
             "/tmp/kova_traces",
-            "/tmp/kova_videos",
         ]
         hex_id = exec_uuid.hex
+        str_id = str(exec_uuid)
         for d in search_dirs:
-            if not os.path.exists(d):
+            if not os.path.isdir(d):
                 continue
-            for fname in os.listdir(d):
-                if (hex_id in fname or fname.startswith("trace_")) and fname.endswith(".zip"):
-                    candidate = os.path.join(d, fname)
-                    if os.path.isfile(candidate):
-                        local_path = candidate
-                        break
+            for fname in [f"trace_{str_id}.zip", f"trace_{hex_id}.zip", f"{str_id}.zip", f"{hex_id}.zip"]:
+                candidate = os.path.join(d, fname)
+                if os.path.isfile(candidate):
+                    local_path = candidate
+                    break
             if local_path:
                 break
 
