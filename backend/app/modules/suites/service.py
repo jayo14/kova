@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,7 +58,9 @@ class SuiteService:
         self.repo = SuiteRepository(db)
         self.flow_executor = flow_executor
 
-    async def _load_flows(self, project_id: uuid.UUID, flow_ids: list[uuid.UUID]) -> list[Any]:
+    async def _load_flows(
+        self, project_id: uuid.UUID, flow_ids: list[uuid.UUID]
+    ) -> list[Any]:
         from sqlalchemy import select
 
         from app.modules.flows.models import Flow
@@ -72,7 +76,9 @@ class SuiteService:
             raise ValueError(f"Flows not found in project: {', '.join(missing)}")
         return [flows[flow_id] for flow_id in flow_ids]
 
-    async def create_suite(self, data: SuiteCreate, *, user_id: uuid.UUID | None) -> TestSuite:
+    async def create_suite(
+        self, data: SuiteCreate, *, user_id: uuid.UUID | None
+    ) -> TestSuite:
         existing = await self.repo.list_suites(data.project_id)
         if any(suite.name == data.name for suite in existing):
             raise ValueError(f"Suite '{data.name}' already exists in this project")
@@ -114,7 +120,10 @@ class SuiteService:
     ) -> TestSuite:
         if data.name is not None and data.name != suite.name:
             siblings = await self.repo.list_suites(suite.project_id)
-            if any(sibling.name == data.name and sibling.id != suite.id for sibling in siblings):
+            if any(
+                sibling.name == data.name and sibling.id != suite.id
+                for sibling in siblings
+            ):
                 raise ValueError(f"Suite '{data.name}' already exists in this project")
             suite.name = data.name
         if data.description is not None:
@@ -175,14 +184,20 @@ class SuiteService:
                 flow_key = str(item.flow_id) if item.flow_id else item.flow_name
                 entry = by_flow.setdefault(
                     flow_key,
-                    {"flow_id": item.flow_id, "flow_name": item.flow_name, "statuses": []},
+                    {
+                        "flow_id": item.flow_id,
+                        "flow_name": item.flow_name,
+                        "statuses": [],
+                    },
                 )
                 entry["statuses"].append(item.status)
 
         flows: list[dict[str, Any]] = []
         for entry in by_flow.values():
             statuses = entry["statuses"][-5:]
-            transitions = sum(1 for left, right in zip(statuses, statuses[1:]) if left != right)
+            transitions = sum(
+                1 for left, right in itertools.pairwise(statuses) if left != right
+            )
             has_pass = "passed" in statuses
             has_other = any(status != "passed" for status in statuses)
             flows.append(
@@ -195,11 +210,17 @@ class SuiteService:
                     "flaky": bool(has_pass and has_other and transitions >= 2),
                 }
             )
-        flows.sort(key=lambda entry: (entry["flaky"], entry["transitions"]), reverse=True)
+        flows.sort(
+            key=lambda entry: (entry["flaky"], entry["transitions"]), reverse=True
+        )
         return {"suite_id": suite_id, "flows": flows}
 
-    async def _history(self, suite_id: uuid.UUID, exclude_run_id: uuid.UUID | None = None) -> dict[str, dict[str, Any]]:
-        runs = await self.repo.list_completed_runs(suite_id, limit=5, exclude_run_id=exclude_run_id)
+    async def _history(
+        self, suite_id: uuid.UUID, exclude_run_id: uuid.UUID | None = None
+    ) -> dict[str, dict[str, Any]]:
+        runs = await self.repo.list_completed_runs(
+            suite_id, limit=5, exclude_run_id=exclude_run_id
+        )
         items = await self.repo.list_items_for_runs([run.id for run in runs])
         by_run: dict[uuid.UUID, list[SuiteRunItem]] = {}
         for item in items:
@@ -212,11 +233,16 @@ class SuiteService:
         history: dict[str, dict[str, Any]] = {}
         for flow_id, statuses in grouped.items():
             statuses = statuses[-5:]
-            transitions = sum(1 for left, right in zip(statuses, statuses[1:]) if left != right)
+            transitions = sum(
+                1 for left, right in itertools.pairwise(statuses) if left != right
+            )
             has_pass = "passed" in statuses
             has_other = any(status != "passed" for status in statuses)
             history[flow_id] = {
-                "recent_failure": any(status in ("failed", "error", "blocked", "unverified") for status in statuses),
+                "recent_failure": any(
+                    status in ("failed", "error", "blocked", "unverified")
+                    for status in statuses
+                ),
                 "flaky": bool(has_pass and has_other and transitions >= 2),
             }
         return history
@@ -242,7 +268,10 @@ class SuiteService:
         )
         if same_version:
             baseline = same_version[0]
-            return baseline, f"latest completed run of suite version {version} ({baseline.id})"
+            return (
+                baseline,
+                f"latest completed run of suite version {version} ({baseline.id})",
+            )
         any_version = await self.repo.list_completed_runs(
             suite.id, limit=1, exclude_run_id=exclude_run_id
         )
@@ -254,10 +283,14 @@ class SuiteService:
             )
         return None, None
 
-    async def _default_executor(self, flow: dict[str, Any], run: SuiteRun) -> dict[str, Any]:
-        from app.modules.executions.event_model import ExecutionEvent
+    async def _default_executor(
+        self, flow: dict[str, Any], run: SuiteRun
+    ) -> dict[str, Any]:
         from app.modules.executions.models import ExecutionStatus
-        from app.modules.executions.repository import ExecutionEventRepository, ExecutionRepository
+        from app.modules.executions.repository import (
+            ExecutionEventRepository,
+            ExecutionRepository,
+        )
         from app.modules.executions.schemas import ExecutionCreate
         from app.modules.executions.service import ExecutionService
         from app.modules.flows.models import Flow
@@ -282,6 +315,7 @@ class SuiteService:
                 "assertions": [],
                 "failure_signature": "flow:missing",
                 "execution_id": None,
+                "flow_missing": True,
                 "error": "Flow no longer exists",
             }
 
@@ -322,15 +356,17 @@ class SuiteService:
             else:
                 status = "failed"
             error_message = result.get("error")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             status = "error"
             error_message = str(exc)
             try:
                 await execution_repo.update_status(
-                    execution.id, ExecutionStatus.ERROR, error_message=error_message[:1000]
+                    execution.id,
+                    ExecutionStatus.ERROR,
+                    error_message=error_message[:1000],
                 )
                 await self.db.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 await self.db.rollback()
 
         events = await ExecutionEventRepository(self.db).list_by_execution(execution.id)
@@ -372,7 +408,7 @@ class SuiteService:
             request.baseline_run_id,
         )
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         run = await self.repo.create_run(
             suite_id=suite.id,
             project_id=suite.project_id,
@@ -403,7 +439,7 @@ class SuiteService:
             result: dict[str, Any]
             try:
                 result = await executor(flow, run)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 result = {
                     "status": "error",
                     "duration_ms": 0,
@@ -414,10 +450,14 @@ class SuiteService:
                 }
 
             status = str(result.get("status") or "error")
+            missing_flow = bool(result.get("flow_missing"))
+            item_flow_id = None if missing_flow else flow_uuid
             assertions = normalize_assertions(result.get("assertions"))
-            signature = result.get("failure_signature") or failure_signature(status, assertions)
+            signature = result.get("failure_signature") or failure_signature(
+                status, assertions
+            )
             item_data = {
-                "flow_id": flow_uuid,
+                "flow_id": item_flow_id,
                 "flow_name": flow.get("name") or str(flow_uuid or "unknown"),
                 "position": position,
                 "status": status,
@@ -436,7 +476,7 @@ class SuiteService:
             item_rows.append(item)
             current_items.append(
                 {
-                    "flow_id": flow_uuid,
+                    "flow_id": item_flow_id,
                     "flow_name": item_data["flow_name"],
                     "status": status,
                     "assertions": assertions,
@@ -489,7 +529,11 @@ class SuiteService:
             and status_counts["error"] == 0
             and planned == len(selected)
         )
-        run_status = "partial" if status_counts["skipped"] or status_counts["error"] else "completed"
+        run_status = (
+            "partial"
+            if status_counts["skipped"] or status_counts["error"]
+            else "completed"
+        )
         if planned == 0:
             run_status = "completed"
 
@@ -512,7 +556,7 @@ class SuiteService:
         }
         run.comparison = comparison
         run.status = run_status
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
         await self.db.commit()
         return run
 

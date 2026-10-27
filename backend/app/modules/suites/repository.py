@@ -34,7 +34,9 @@ class SuiteRepository:
         return suite
 
     async def get_suite(self, suite_id: uuid.UUID) -> TestSuite | None:
-        result = await self.db.execute(select(TestSuite).where(TestSuite.id == suite_id))
+        result = await self.db.execute(
+            select(TestSuite).where(TestSuite.id == suite_id)
+        )
         return result.scalar_one_or_none()
 
     async def list_suites(self, project_id: uuid.UUID) -> list[TestSuite]:
@@ -71,7 +73,9 @@ class SuiteRepository:
         await self.db.flush()
         return record
 
-    async def get_version(self, suite_id: uuid.UUID, version: int) -> TestSuiteVersion | None:
+    async def get_version(
+        self, suite_id: uuid.UUID, version: int
+    ) -> TestSuiteVersion | None:
         result = await self.db.execute(
             select(TestSuiteVersion).where(
                 TestSuiteVersion.suite_id == suite_id,

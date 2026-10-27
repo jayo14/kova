@@ -15,16 +15,56 @@ def assertion(key: str, status: str) -> dict:
 
 def test_compare_runs_classifies_each_transition():
     baseline = [
-        {"flow_id": "a", "flow_name": "A", "status": "passed", "assertions": [assertion("login", "passed")]},
-        {"flow_id": "b", "flow_name": "B", "status": "failed", "assertions": [assertion("cart", "failed")]},
-        {"flow_id": "c", "flow_name": "C", "status": "passed", "assertions": [assertion("pay", "passed")]},
-        {"flow_id": "d", "flow_name": "D", "status": "passed", "assertions": [assertion("gone", "passed")]},
+        {
+            "flow_id": "a",
+            "flow_name": "A",
+            "status": "passed",
+            "assertions": [assertion("login", "passed")],
+        },
+        {
+            "flow_id": "b",
+            "flow_name": "B",
+            "status": "failed",
+            "assertions": [assertion("cart", "failed")],
+        },
+        {
+            "flow_id": "c",
+            "flow_name": "C",
+            "status": "passed",
+            "assertions": [assertion("pay", "passed")],
+        },
+        {
+            "flow_id": "d",
+            "flow_name": "D",
+            "status": "passed",
+            "assertions": [assertion("gone", "passed")],
+        },
     ]
     current = [
-        {"flow_id": "a", "flow_name": "A", "status": "failed", "assertions": [assertion("login", "failed")]},
-        {"flow_id": "b", "flow_name": "B", "status": "passed", "assertions": [assertion("cart", "passed")]},
-        {"flow_id": "c", "flow_name": "C", "status": "passed", "assertions": [assertion("refund", "passed")]},
-        {"flow_id": "e", "flow_name": "E", "status": "passed", "assertions": [assertion("new", "passed")]},
+        {
+            "flow_id": "a",
+            "flow_name": "A",
+            "status": "failed",
+            "assertions": [assertion("login", "failed")],
+        },
+        {
+            "flow_id": "b",
+            "flow_name": "B",
+            "status": "passed",
+            "assertions": [assertion("cart", "passed")],
+        },
+        {
+            "flow_id": "c",
+            "flow_name": "C",
+            "status": "passed",
+            "assertions": [assertion("refund", "passed")],
+        },
+        {
+            "flow_id": "e",
+            "flow_name": "E",
+            "status": "passed",
+            "assertions": [assertion("new", "passed")],
+        },
     ]
 
     result = compare_runs(
@@ -61,8 +101,18 @@ def test_compare_runs_without_baseline_marks_new_coverage():
 
 def test_targeted_mode_only_keeps_changed_flows():
     flows = [
-        {"id": "1", "name": "Checkout", "routes": ["/checkout"], "criticality": "critical"},
-        {"id": "2", "name": "Settings", "routes": ["/settings"], "criticality": "critical"},
+        {
+            "id": "1",
+            "name": "Checkout",
+            "routes": ["/checkout"],
+            "criticality": "critical",
+        },
+        {
+            "id": "2",
+            "name": "Settings",
+            "routes": ["/settings"],
+            "criticality": "critical",
+        },
     ]
     selected = prioritize_flows(
         flows,
@@ -77,7 +127,12 @@ def test_targeted_mode_only_keeps_changed_flows():
 def test_prioritized_mode_orders_all_flows():
     flows = [
         {"id": "1", "name": "Settings", "routes": ["/settings"], "criticality": "low"},
-        {"id": "2", "name": "Checkout", "routes": ["/checkout"], "criticality": "critical"},
+        {
+            "id": "2",
+            "name": "Checkout",
+            "routes": ["/checkout"],
+            "criticality": "critical",
+        },
     ]
     selected = prioritize_flows(
         flows,
@@ -98,7 +153,11 @@ async def suite_context(db_session):
     await db_session.flush()
 
     flows = []
-    for name, route in (("Checkout", "/checkout"), ("Login", "/login"), ("Search", "/search")):
+    for name, route in (
+        ("Checkout", "/checkout"),
+        ("Login", "/login"),
+        ("Search", "/search"),
+    ):
         flow = Flow(
             project_id=project.id,
             name=name,
@@ -125,7 +184,9 @@ class FakeExecutor:
             "status": status,
             "duration_ms": 10,
             "execution_id": None,
-            "assertions": [assertion("check", status if status != "failed" else "failed")],
+            "assertions": [
+                assertion("check", status if status != "failed" else "failed")
+            ],
             "error": None,
         }
 
@@ -142,7 +203,9 @@ async def test_suite_runs_baseline_comparison_and_flakiness(db_session, suite_co
         user_id=suite_context["user"].id,
     )
 
-    first = await service.run_suite(suite, SuiteRunRequest(), user_id=suite_context["user"].id)
+    first = await service.run_suite(
+        suite, SuiteRunRequest(), user_id=suite_context["user"].id
+    )
     assert first.status == "completed"
     assert first.baseline_run_id is None
     detail = await service.get_run_with_items(first)
@@ -151,10 +214,15 @@ async def test_suite_runs_baseline_comparison_and_flakiness(db_session, suite_co
     assert detail["summary"]["verdict"] == "unchanged"
 
     executor.statuses["Checkout"] = "failed"
-    second = await service.run_suite(suite, SuiteRunRequest(), user_id=suite_context["user"].id)
+    second = await service.run_suite(
+        suite, SuiteRunRequest(), user_id=suite_context["user"].id
+    )
     detail = await service.get_run_with_items(second)
     assert second.baseline_run_id == first.id
-    assert second.baseline_reason == f"latest completed run of suite version 1 ({first.id})"
+    assert (
+        second.baseline_reason
+        == f"latest completed run of suite version 1 ({first.id})"
+    )
     assert detail["summary"]["new_failures"] == 1
     assert detail["summary"]["verdict"] == "regression"
     assert detail["summary"]["regressed"] is True
@@ -171,6 +239,7 @@ async def test_suite_runs_baseline_comparison_and_flakiness(db_session, suite_co
     flows = {flow["flow_name"]: flow for flow in flaky["flows"]}
     assert flows["Checkout"]["flaky"] is True
     assert flows["Checkout"]["transitions"] >= 2
+    assert flows["Checkout"]["statuses"] == ["passed", "failed", "passed", "failed"]
     assert flows["Login"]["flaky"] is False
 
 
@@ -201,7 +270,11 @@ async def test_update_flow_set_creates_new_version(db_session, suite_context):
     service = SuiteService(db_session, flow_executor=FakeExecutor())
     flows = suite_context["flows"]
     suite = await service.create_suite(
-        SuiteCreate(project_id=suite_context["project"].id, name="Versioned", flow_ids=[flows[0].id]),
+        SuiteCreate(
+            project_id=suite_context["project"].id,
+            name="Versioned",
+            flow_ids=[flows[0].id],
+        ),
         user_id=suite_context["user"].id,
     )
 
@@ -221,3 +294,32 @@ async def test_update_flow_set_creates_new_version(db_session, suite_context):
     version = await service.latest_version(updated)
     assert len(version.flow_snapshot) == 2
     assert version.notes == "add login"
+
+
+async def test_deleted_flow_is_reported_as_error_without_running(
+    db_session, suite_context
+):
+    service = SuiteService(db_session)
+    flow = suite_context["flows"][0]
+    suite = await service.create_suite(
+        SuiteCreate(
+            project_id=suite_context["project"].id, name="Stale", flow_ids=[flow.id]
+        ),
+        user_id=suite_context["user"].id,
+    )
+
+    await db_session.delete(flow)
+    await db_session.commit()
+
+    run = await service.run_suite(
+        suite,
+        SuiteRunRequest(mode="targeted", changed_files=["src/checkout/page.tsx"]),
+        user_id=suite_context["user"].id,
+    )
+
+    assert run.status == "partial"
+    detail = await service.get_run_with_items(run)
+    assert detail["summary"]["error"] == 1
+    assert detail["items"][0].status == "error"
+    assert detail["items"][0].failure_signature == "flow:missing"
+    assert detail["items"][0].execution_id is None
