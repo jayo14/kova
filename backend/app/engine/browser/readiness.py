@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
@@ -500,13 +501,52 @@ def is_infrastructure_control(label: str, surrounding_text: str = "") -> bool:
     norm = _normalize(label)
     if not norm:
         return False
+    # If it's a URL, only flag if it navigates to an external provider dashboard/marketing domain
+    if norm.startswith("http://") or norm.startswith("https://"):
+        try:
+            parsed = urlparse(norm)
+            host = (parsed.hostname or "").lower()
+            if any(
+                host == p or host.endswith(f".{p}")
+                for p in (
+                    "render.com",
+                    "railway.app",
+                    "heroku.com",
+                    "fly.io",
+                    "vercel.com",
+                    "netlify.com",
+                    "cloudflare.com",
+                )
+            ):
+                return True
+        except ValueError:
+            pass
+        return False
+
+    # Specific infrastructure phrases
     if any(ctrl in norm for ctrl in _INFRA_CONTROL_LANGUAGE):
         return True
-    has_provider = any(p in norm for p in _PROVIDER_TOKENS)
-    if has_provider and any(action in norm for action in ("start", "build", "dashboard", "console", "logs", "docs", "deploy", "status", "host", "cloud")):
-        return True
-    if any(action in norm for action in ("start building on", "powered by", "deployed with", "hosted by")):
-        return True
+
+    # Label mentioning provider by name as a distinct word combined with provider-level action
+    for p in _PROVIDER_TOKENS:
+        if re.search(r"\b" + re.escape(p) + r"\b", norm):
+            if any(
+                action in norm
+                for action in (
+                    "start building",
+                    "build on",
+                    "dashboard",
+                    "console",
+                    "logs",
+                    "deploy",
+                    "status",
+                    "wake up",
+                    "waking",
+                    "hosted on",
+                    "powered by",
+                )
+            ):
+                return True
     return False
 
 
