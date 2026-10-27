@@ -156,6 +156,32 @@ class Settings(BaseSettings):
         val = int(v) if v is not None else 50
         return min(max(val, 1), 200)
 
+    # Page readiness: how long Kova waits for a slow / sleeping deployment to
+    # serve the real application before reporting it as unresolved.
+    PAGE_READINESS_TIMEOUT_SECONDS: float = 20.0
+    PAGE_READINESS_RETRY_INTERVALS: str = "0.5,1.0,2.0,3.0"
+
+    @field_validator("PAGE_READINESS_TIMEOUT_SECONDS", mode="before")
+    @classmethod
+    def cap_page_readiness_timeout(cls, v: Any) -> float:
+        val = float(v) if v is not None else 20.0
+        return min(max(val, 1.0), 120.0)
+
+    @property
+    def page_readiness_intervals(self) -> tuple[float, ...]:
+        intervals: list[float] = []
+        for chunk in str(self.PAGE_READINESS_RETRY_INTERVALS).split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                value = float(chunk)
+            except ValueError:
+                continue
+            if value >= 0:
+                intervals.append(value)
+        return tuple(intervals) or (0.5, 1.0, 2.0, 3.0)
+
     # Observability & SRE (Chunk 16)
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
     PROMETHEUS_ENABLED: bool = True

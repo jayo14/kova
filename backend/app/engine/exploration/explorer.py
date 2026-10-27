@@ -30,6 +30,15 @@ from app.modules.exploration.schemas import (
 from app.modules.exploration.journey_validator import deduplicate_and_rank_journeys
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
+from app.config.settings import get_settings
+from app.engine.browser.readiness import (
+    PageReadiness,
+    PageSignals,
+    ReadinessAssessment,
+    ReadinessWaiter,
+    assess_url_integrity,
+    classify_page,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +113,13 @@ class ExplorationEngine:
         self._last_interactive_elements: list[dict] = []
         self._last_persona: str = "User"
         self._discovered_sections: list[dict] = []
+        # Page readiness state. ``_page_ready`` defaults to True so direct
+        # callers that bypass ``explore()`` (unit tests, helpers) keep working;
+        # ``explore()`` always overwrites it from observed signals.
+        self._requested_url: str = url
+        self._redirect_chain: list[str] = []
+        self._readiness: ReadinessAssessment | None = None
+        self._page_ready: bool = True
 
     def _spawn_bg(self, coro) -> asyncio.Task:
         task = asyncio.create_task(coro)
@@ -127,6 +143,102 @@ class ExplorationEngine:
                     await res
             except Exception as e:
                 logger.warning("Error emitting exploration event %s: %s", event_type, e)
+
+
+    async def _collect_page_signals(self, page, observed_url: str | None = None) -> PageSignals:
+        """Collect deterministic signals for readiness classification."""
+        requested_url = self._requested_url or self.url
+        final_url = observed_url or getattr(page, "url", requested_url)
+        title = ""
+        body_text = ""
+        http_status = None
+        browser_error = None
+
+        try:
+            title = await page.title()
+        except Exception as e:
+            browser_error = browser_error or str(e)
+
+        try:
+            body_text = await page.inner_text("body")
+        except Exception as e:
+            browser_error = browser_error or str(e)
+
+        elements = []
+        forms = []
+        links = []
+        nav_items = []
+        headings = []
+        interactive_count = 0
+        form_count = 0
+        has_password = False
+        has_email = False
+
+        try:
+            data = await page.evaluate(
+                """() => {
+                    const elements = Array.from(document.querySelectorAll('button, [role="button"], input, select, textarea, a[href]'));
+                    const forms = Array.from(document.querySelectorAll('form'));
+                    const links = Array.from(document.querySelectorAll('a[href]'));
+                    const navs = Array.from(document.querySelectorAll('nav, [role="navigation"] a, header a'));
+                    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]'));
+                    let hasPassword = false;
+                    let hasEmail = false;
+                    elements.forEach(el => {
+                        const tag = el.tagName.toLowerCase();
+                        if (tag === 'input') {
+                            const type = (el.getAttribute('type') || 'text').toLowerCase();
+                            if (type === 'password') hasPassword = true;
+                            if (type === 'email') hasEmail = true;
+                        }
+                    });
+                    return {
+                        interactive: elements.length,
+                        forms: forms.length,
+                        links: links.length,
+                        navs: navs.length,
+                        headings: headings.length,
+                        hasPassword,
+                        hasEmail
+                    };
+                }"""
+            )
+            if isinstance(data, dict):
+                interactive_count = int(data.get("interactive") or 0)
+                form_count = int(data.get("forms") or 0)
+                link_count = int(data.get("links") or 0)
+                nav_item_count = int(data.get("navs") or 0)
+                heading_count = int(data.get("headings") or 0)
+                has_password = bool(data.get("hasPassword"))
+                has_email = bool(data.get("hasEmail"))
+            else:
+                link_count = 0
+                nav_item_count = 0
+                heading_count = 0
+        except Exception:
+            interactive_count = 0
+            form_count = 0
+            link_count = 0
+            nav_item_count = 0
+            heading_count = 0
+
+        return PageSignals(
+            requested_url=requested_url,
+            observed_url=final_url,
+            title=title or "",
+            body_text=body_text or "",
+            http_status=http_status,
+            redirect_chain=list(self._redirect_chain),
+            interactive_count=interactive_count,
+            form_count=form_count,
+            link_count=link_count,
+            heading_count=heading_count,
+            nav_item_count=nav_item_count,
+            has_password_field=has_password,
+            has_email_field=has_email,
+            browser_error=browser_error,
+        )
+
 
     def cancel(self):
         self._is_cancelled = True
@@ -643,6 +755,62 @@ class ExplorationEngine:
                         "discoveries": [],
                         "candidate_missions": [],
                     }
+
+                # Track redirect chain from navigation
+                try:
+                    self._redirect_chain = []
+                    if response is not None and hasattr(response, "request"):
+                        req = response.request
+                        # Playwright may not expose full chain easily; store observed URL
+                    self._redirect_chain = []
+                except Exception:
+                    self._redirect_chain = []
+
+                # Assess page readiness before discovery
+                settings = get_settings()
+                self._requested_url = self.url
+                readiness_waiter = ReadinessWaiter(
+                    probe=lambda: self._probe_readiness(page),
+                    intervals=settings.page_readiness_intervals,
+                    total_timeout=settings.PAGE_READINESS_TIMEOUT_SECONDS,
+                    sleep=asyncio.sleep,
+                )
+
+                initial_readiness = await self._probe_readiness(page)
+                self._readiness = await readiness_waiter.resolve(
+                    initial_readiness,
+                    is_cancelled=lambda: self._is_cancelled,
+                )
+                self._page_ready = self._readiness.is_ready
+
+                await self._emit("page.readiness", self._readiness.to_dict())
+
+                if not self._readiness.is_ready and self._readiness.state not in (PageReadiness.AUTHENTICATION_REQUIRED,):
+                    # If it's a hosting interstitial that never resolved, we must not discover from it
+                    if self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING, PageReadiness.PROXY_OR_GATEWAY_ERROR, PageReadiness.BROWSER_ERROR, PageReadiness.UNKNOWN_PAGE):
+                        # For hosting interstitials/loading that didn't resolve, stop here with clear message
+                        if self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING):
+                            error_msg = self._readiness.reason or "Hosting service did not become ready within the allowed window."
+                            await self._emit("state_change", {"status": "BLOCKED"})
+                            await self._emit("exploration.blocked", {"reason": error_msg, "readiness": self._readiness.to_dict()})
+                            return {
+                                "status": ExplorationStatus.BLOCKED if hasattr(ExplorationStatus, "BLOCKED") else "blocked",
+                                "error_message": error_msg,
+                                "discoveries": [],
+                                "candidate_missions": [],
+                                "readiness": self._readiness.to_dict(),
+                            }
+                        # Other non-ready states
+                        error_msg = self._readiness.reason or "Unable to identify the application reliably."
+                        await self._emit("state_change", {"status": "FAILED"})
+                        await self._emit("exploration.failed", {"error": error_msg, "readiness": self._readiness.to_dict()})
+                        return {
+                            "status": ExplorationStatus.FAILED,
+                            "error_message": error_msg,
+                            "discoveries": [],
+                            "candidate_missions": [],
+                            "readiness": self._readiness.to_dict(),
+                        }
 
                 # Emit page.loaded with title, brand metadata, and capture initial rendered screenshot
                 page_title = await page.title()
