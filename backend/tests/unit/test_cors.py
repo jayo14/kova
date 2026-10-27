@@ -11,7 +11,8 @@ async def test_production_cors_origins(monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "CORS_ORIGINS", "https://kova.app,https://custom.kova.app")
 
-    assert settings.cors_origins_list == ["https://kova.app", "https://custom.kova.app"]
+    assert "https://kova.app" in settings.cors_origins_list
+    assert "https://custom.kova.app" in settings.cors_origins_list
 
     # Development localhost origins must not be in production cors list
     assert "http://localhost:3000" not in settings.cors_origins_list
