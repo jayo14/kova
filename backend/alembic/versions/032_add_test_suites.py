@@ -70,7 +70,7 @@ def upgrade() -> None:
             sa.Column("baseline_reason", sa.Text(), nullable=True),
             sa.Column("comparison", json_type, nullable=False, server_default=sa.text("'{}'")),
             sa.Column("changed_files", json_type, nullable=False, server_default=sa.text("'[]'")),
-            sa.Column("commit_sha", sa.String(length=64), nullable=True),
+            sa.Column("commit_sha", sa.String(length=128), nullable=True),
             sa.Column("branch", sa.String(length=255), nullable=True),
             sa.Column("summary", json_type, nullable=False, server_default=sa.text("'{}'")),
             sa.Column("error_message", sa.Text(), nullable=True),

@@ -6,6 +6,7 @@ import { MaterialIcon } from "@/components/shared/material-icon";
 import {
   createSuite,
   getSuiteFlakiness,
+  getSuiteRun,
   listSuiteRuns,
   listSuites,
   runSuite,
@@ -44,6 +45,7 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [runs, setRuns] = useState<SuiteRun[]>([]);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
+  const [runDetails, setRunDetails] = useState<Record<string, SuiteRun>>({});
   const [flakiness, setFlakiness] = useState<FlakyFlow[]>([]);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -85,6 +87,8 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
   useEffect(() => {
     if (!selectedId) return;
     async function load() {
+      setOpenRunId(null);
+      setRunDetails({});
       await loadDetail(selectedId as string);
     }
     load();
@@ -125,12 +129,28 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
         .map((file) => file.trim())
         .filter(Boolean);
       const run = await runSuite(selectedId, { mode, changedFiles: files });
+      setRunDetails((current) => ({ ...current, [run.id]: run }));
       setOpenRunId(run.id);
       await loadDetail(selectedId);
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function toggleRun(run: SuiteRun) {
+    if (openRunId === run.id) {
+      setOpenRunId(null);
+      return;
+    }
+    setOpenRunId(run.id);
+    if (runDetails[run.id]) return;
+    try {
+      const detail = await getSuiteRun(run.id);
+      setRunDetails((current) => ({ ...current, [run.id]: detail }));
+    } catch (err) {
+      setError(getErrorMessage(err));
     }
   }
 
@@ -280,6 +300,7 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
                 <div className="space-y-2">
                   {visibleRuns.map((run) => {
                     const open = openRunId === run.id;
+                    const detail = runDetails[run.id];
                     return (
                       <div
                         key={run.id}
@@ -287,7 +308,7 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
                       >
                         <button
                           type="button"
-                          onClick={() => setOpenRunId(open ? null : run.id)}
+                          onClick={() => toggleRun(run)}
                           className="flex w-full flex-wrap items-center justify-between gap-2 px-3 py-2 text-left"
                         >
                           <span className="flex items-center gap-2 text-caption">
@@ -318,12 +339,15 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
 
                         {open && (
                           <div className="space-y-2 border-t border-border/60 px-3 py-2">
-                            {run.baselineReason && (
+                            {(detail?.baselineReason ?? run.baselineReason) && (
                               <p className="text-caption text-muted-foreground">
-                                Baseline: {run.baselineReason}
+                                Baseline: {detail?.baselineReason ?? run.baselineReason}
                               </p>
                             )}
-                            {(run.items ?? []).map((item) => (
+                            {!detail && (
+                              <p className="text-caption text-muted-foreground">Loading run detail…</p>
+                            )}
+                            {(detail?.items ?? []).map((item) => (
                               <div
                                 key={item.id}
                                 className="flex flex-wrap items-center justify-between gap-2 text-caption"
@@ -357,10 +381,10 @@ export function ProjectSuites({ projectId, missions }: ProjectSuitesProps) {
                                 </span>
                               </div>
                             ))}
-                            {run.summary.newFailures > 0 && (
+                            {(detail?.summary ?? run.summary).newFailures > 0 && (
                               <p className="text-caption text-destructive">
-                                {run.summary.newFailures} new failure(s) ·{" "}
-                                {run.summary.persistentFailures} persistent
+                                {(detail?.summary ?? run.summary).newFailures} new failure(s) ·{" "}
+                                {(detail?.summary ?? run.summary).persistentFailures} persistent
                               </p>
                             )}
                           </div>
