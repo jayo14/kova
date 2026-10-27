@@ -63,8 +63,6 @@ async def _get_authorized_session(
             detail="Exploration session not found",
         )
     if session.user_id != user_id:
-        if not settings.is_production:
-            return session
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Forbidden: exploration session belongs to another user",
