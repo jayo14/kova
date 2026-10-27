@@ -468,6 +468,7 @@ def deduplicate_and_rank_journeys(
     - Recommends the highest-value functional workflow with an explicit rationale
     """
     validated: list[DiscoveredMission] = []
+    blocked_missions: list[DiscoveredMission] = []
     seen_keys: set[str] = set()
 
     for m in missions:
@@ -487,6 +488,12 @@ def deduplicate_and_rank_journeys(
         if m.validation_status == "blocked_by_prerequisites" or not m.runnable:
             m.runnable = False
             m.recommended = False
+            route_path = (m.route_analysis or {}).get("path", "")
+            intent_norm = normalize_journey_intent(m.name, route_path)
+            key = f"blocked:{intent_norm}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                blocked_missions.append(m)
             continue
 
         m.runnable = True
@@ -503,7 +510,7 @@ def deduplicate_and_rank_journeys(
         validated.append(m)
 
     if not validated:
-        return []
+        return blocked_missions[:max_results]
 
     # Score each validated journey
     scored: list[tuple[float, DiscoveredMission]] = []
@@ -525,7 +532,7 @@ def deduplicate_and_rank_journeys(
     # Designate exactly ONE recommended journey from eligible runnable candidates
     results = [m for _, m in scored if m.runnable]
     if not results:
-        return []
+        return blocked_missions[:max_results]
 
     for m in results:
         m.recommended = False
@@ -561,4 +568,4 @@ def deduplicate_and_rank_journeys(
         results.remove(primary_candidate)
         results.insert(0, primary_candidate)
 
-    return results[:max_results]
+    return (results + blocked_missions)[:max_results]
