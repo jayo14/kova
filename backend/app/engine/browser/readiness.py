@@ -36,6 +36,7 @@ __all__ = [
     "UrlIntegrity",
     "assess_url_integrity",
     "classify_page",
+    "is_infrastructure_control",
 ]
 
 
@@ -142,6 +143,21 @@ _WAKE_LANGUAGE: tuple[str, ...] = (
     "deployment in progress",
     "building your",
     "please wait",
+    "incoming http request",
+    "service waking up",
+    "service is waking",
+    "service is starting",
+    "allocating compute",
+    "allocating compute resources",
+    "preparing instance",
+    "preparing instance for initialization",
+    "container starting",
+    "spinning up",
+    "resuming service",
+    "server is starting",
+    "server waking up",
+    "free instance",
+    "spin down due to inactivity",
 )
 
 _LOADING_LANGUAGE: tuple[str, ...] = (
@@ -183,6 +199,12 @@ _INFRA_CONTROL_LANGUAGE: tuple[str, ...] = (
     "view logs",
     "render dashboard",
     "open dashboard",
+    "start building on",
+    "start building",
+    "cloud dashboard",
+    "service dashboard",
+    "view deployment",
+    "infrastructure status",
 )
 
 _ACCESS_DENIED_LANGUAGE: tuple[str, ...] = (
@@ -473,6 +495,21 @@ def providers_text(signals: PageSignals) -> str:
     return f"{_normalize(signals.title)} {_normalize(signals.body_text[:4000])}"
 
 
+def is_infrastructure_control(label: str, surrounding_text: str = "") -> bool:
+    """Return True if a control text belongs to infrastructure/hosting provider rather than application."""
+    norm = _normalize(label)
+    if not norm:
+        return False
+    if any(ctrl in norm for ctrl in _INFRA_CONTROL_LANGUAGE):
+        return True
+    has_provider = any(p in norm for p in _PROVIDER_TOKENS)
+    if has_provider and any(action in norm for action in ("start", "build", "dashboard", "console", "logs", "docs", "deploy", "status", "host", "cloud")):
+        return True
+    if any(action in norm for action in ("start building on", "powered by", "deployed with", "hosted by")):
+        return True
+    return False
+
+
 def _looks_like_hosting_interstitial(
     signals: PageSignals, text: str, title: str
 ) -> tuple[bool, str]:
@@ -484,6 +521,8 @@ def _looks_like_hosting_interstitial(
 
     if provider_branded and wake and (low_controls or no_app_nav):
         return True, "Hosting provider page describes a sleeping or waking application"
+    if wake and (low_controls or no_app_nav):
+        return True, "Page describes a waking or sleeping infrastructure container"
     if provider_branded and short_body and no_app_nav and low_controls:
         return True, "Hosting provider page with no application navigation or controls"
     if provider_control and (signals.http_status or 0) >= 500:
