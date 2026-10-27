@@ -37,13 +37,13 @@ export function RunSummaryStats({
   const active = segments.filter((s) => s.count > 0);
 
   return (
-    <div className="space-y-2.5 pt-2 border-t border-border/40">
-      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-muted-foreground font-medium">
-        <span>
-          Overall Progress ({progress}%)
-        </span>
-        <span>
-          {completed} of {summary.total} missions completed
+    <section className="rounded-[20px] border border-border/70 bg-card p-5 shadow-[0_1px_2px_rgba(42,23,13,0.04)]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">
+          Overall Progress <span className="text-muted-foreground">({progress}%)</span>
+        </h2>
+        <span className="font-mono text-xs tabular-nums text-muted-foreground">
+          {completed}/{summary.total}
         </span>
       </div>
 
@@ -54,42 +54,46 @@ export function RunSummaryStats({
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label="Overall run progress"
-        className="flex w-full h-2.5 gap-[2px] bg-muted/60 rounded-full overflow-hidden"
+        className="mt-3 flex h-2.5 w-full overflow-hidden rounded-full bg-[var(--sand)]"
       >
         {active.map((segment) => (
           <span
             key={segment.key}
             title={`${segment.label}: ${segment.count}`}
             style={{
-              width: `${(segment.count / summary.total) * 100}%`,
+              width: `${(segment.count / Math.max(summary.total, 1)) * 100}%`,
               minWidth: "4px",
             }}
             className={cn(
-                "h-full rounded-full",
-                segment.barClass,
-                segment.key === "running" && !isTerminalRun && "animate-pulse"
-              )}
+              "h-full",
+              segment.barClass,
+              segment.key === "running" && !isTerminalRun && "animate-pulse"
+            )}
           />
         ))}
       </div>
 
-      {/* Legend with counts */}
-      <ul className="flex flex-wrap items-center gap-x-4 gap-y-1.5 pt-1">
-        {active.length === 0 && (
-          <li className="text-xs text-muted-foreground">No missions in this run yet</li>
-        )}
-        {active.map((segment) => (
-          <li
-            key={segment.key}
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
-            aria-label={`${segment.label}: ${segment.count}`}
-          >
-            <span className={cn("h-2 w-2 rounded-full shrink-0", segment.dotClass)} />
-            <span className="font-medium text-foreground/90">{segment.count}</span>
-            <span>{segment.label}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <p className="text-xs text-muted-foreground">
+          {completed} of {summary.total} {summary.total === 1 ? "mission" : "missions"} completed
+        </p>
+        <ul className="flex flex-wrap items-center gap-1.5">
+          {active.length === 0 && (
+            <li className="text-xs text-muted-foreground">No missions in this run yet</li>
+          )}
+          {active.map((segment) => (
+            <li
+              key={segment.key}
+              className="inline-flex items-center gap-1.5 rounded-full bg-secondary/70 px-2 py-0.5 text-[11px] text-muted-foreground"
+              aria-label={`${segment.label}: ${segment.count}`}
+            >
+              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", segment.dotClass)} />
+              <span className="font-medium text-foreground/90">{segment.count}</span>
+              <span>{segment.label}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }

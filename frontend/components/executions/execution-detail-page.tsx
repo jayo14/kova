@@ -268,7 +268,7 @@ export function ExecutionDetailPage({
   const isTerminal = terminalStatuses.includes(execution.status);
 
   return (
-    <div className="w-full space-y-5">
+    <div className="w-full space-y-5 p-5 sm:p-6">
       {/* Header with Live Indicator */}
       <ExecutionHeader
         execution={reportExecution}
@@ -311,18 +311,18 @@ export function ExecutionDetailPage({
       <Tabs defaultValue="timeline">
         <TabsList
           variant="line"
-          className="w-full justify-start border-b border-border pb-1 rounded-none"
+          className="w-full justify-start gap-5 rounded-none border-b border-border pb-0"
         >
-          <TabsTrigger value="timeline" className="px-3">
+          <TabsTrigger value="timeline" className="h-9 flex-none px-0.5 text-body-sm font-medium">
             Timeline
           </TabsTrigger>
           {isTerminal && (
-            <TabsTrigger value="evidence" className="px-3">
+            <TabsTrigger value="evidence" className="h-9 flex-none px-0.5 text-body-sm font-medium">
               Evidence
             </TabsTrigger>
           )}
           {isTerminal && (
-            <TabsTrigger value="report" className="px-3">
+            <TabsTrigger value="report" className="h-9 flex-none px-0.5 text-body-sm font-medium">
               Report
             </TabsTrigger>
           )}
@@ -419,7 +419,7 @@ export function ExecutionDetailPage({
             );
           })()}
 
-          <ExecutionActivity activities={activities} />
+          <ExecutionActivity activities={activities} className="xl:hidden" />
 
           {(() => {
             const outcomeEvent = events.find((e) => e.eventType === "agent.loop_outcome");

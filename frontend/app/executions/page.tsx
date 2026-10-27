@@ -27,7 +27,7 @@ export default async function ExecutionsPage({ searchParams }: ExecutionsPagePro
     const initialRun = await getRun(runId, token).catch(() => null);
     return (
       <AppShell user={user} organizationName={organization.name}>
-        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 py-8 md:py-12 animate-in fade-in duration-300">
+        <div className="mx-auto w-full max-w-[1600px] animate-in px-4 py-6 fade-in duration-300 sm:px-6">
           <RunOverview runId={runId} initialRun={initialRun ?? undefined} />
         </div>
       </AppShell>
@@ -38,7 +38,7 @@ export default async function ExecutionsPage({ searchParams }: ExecutionsPagePro
 
   return (
     <AppShell user={user} organizationName={organization.name}>
-      <div className="w-full max-w-5xl mx-auto px-6 py-10 md:py-14 animate-in fade-in duration-300">
+      <div className="mx-auto w-full max-w-5xl animate-in px-6 py-10 fade-in duration-300 md:py-14">
         <div className="mb-8">
           <h1 className="text-display sm:text-[2.25rem] font-bold text-foreground mb-1.5 tracking-tight">
             Runs &amp; Visual Proof

@@ -30,10 +30,10 @@ export function AppShell({ children, user, organizationName }: AppShellProps) {
 
   return (
     <div className="min-h-screen bg-background">
-      <AppSidebar />
+      <AppSidebar organizationName={activeWorkspaceName} />
       <MobileNav open={mobileNavOpen} onOpenChange={setMobileNavOpen} />
 
-      <div className="lg:pl-56">
+      <div className="lg:pl-60">
         <AppHeader
           user={user}
           organizationName={activeWorkspaceName}

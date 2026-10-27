@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 interface ExecutionActivityProps {
   activities: ActivityItem[];
   className?: string;
+  variant?: "default" | "rail";
 }
 
 function formatTime(iso?: string): string {
@@ -28,7 +29,9 @@ function formatTime(iso?: string): string {
 export function ExecutionActivity({
   activities,
   className,
+  variant = "default",
 }: ExecutionActivityProps) {
+  const isRail = variant === "rail";
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -39,7 +42,7 @@ export function ExecutionActivity({
     return (
       <div
         className={cn(
-          "rounded-2xl border border-border/80 bg-card/60 p-6 text-center flex items-center justify-center h-[480px]",
+          "flex h-[480px] items-center justify-center rounded-[20px] border border-border/70 bg-card p-6 text-center shadow-[0_1px_2px_rgba(42,23,13,0.04)]",
           className
         )}
       >
@@ -54,24 +57,28 @@ export function ExecutionActivity({
     <section
       aria-label="Activity timeline"
       className={cn(
-        "rounded-2xl border border-border/80 bg-card/60 p-5 shadow-xs flex flex-col h-[480px]",
+        "flex h-[480px] flex-col rounded-[20px] border border-border/70 bg-card shadow-[0_1px_2px_rgba(42,23,13,0.04)]",
+        isRail ? "p-4" : "p-5",
         className
       )}
     >
-      <div className="flex items-center justify-between pb-3 border-b border-border/40 shrink-0">
-        <h2 className="text-body-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-1 pb-3">
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">
           Activity stream
         </h2>
-        <span className="inline-flex items-center rounded-full bg-secondary/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+        <span className="inline-flex items-center rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
           {activities.length} {activities.length === 1 ? "event" : "events"}
         </span>
       </div>
 
       <div className="flex-1 min-h-0 overflow-hidden mt-1">
-        <ScrollArea className="h-full w-full pr-3">
+        <ScrollArea className={cn("h-full w-full", isRail ? "pr-2" : "pr-3")}>
           <div
             aria-live="polite"
-            className="relative space-y-2 py-2 before:absolute before:left-3 before:top-2 before:bottom-2 before:w-[1px] before:bg-border/60"
+            className={cn(
+              "relative py-2 before:absolute before:bottom-3 before:top-3 before:w-px before:bg-border/70",
+              isRail ? "space-y-1 before:left-[19px]" : "space-y-2 before:left-[22px]"
+            )}
           >
         {activities.map((item) => {
           const formattedTime = formatTime(item.timestamp);
@@ -80,46 +87,51 @@ export function ExecutionActivity({
             <div
               key={item.id}
               className={cn(
-                "group relative flex items-start gap-3 rounded-xl px-2.5 py-1.5 transition-colors",
+                "group relative flex items-start gap-2.5 rounded-xl px-1 py-1.5 transition-colors",
                 item.status === "active" && "bg-primary/5",
                 item.status === "failed" && "bg-destructive/5"
               )}
             >
-              <div className="relative z-10 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-card">
+              <div
+                className={cn(
+                  "relative z-10 flex shrink-0 items-center justify-center rounded-lg bg-card ring-1 ring-border/60",
+                  isRail ? "h-6 w-6" : "h-7 w-7"
+                )}
+              >
                 {item.status === "completed" && (
                   <MaterialIcon
                     name={item.icon ?? "check_circle"}
-                    size={16}
+                    size={isRail ? 14 : 16}
                     className="text-emerald-600 dark:text-emerald-400"
                   />
                 )}
                 {item.status === "active" && (
                   <MaterialIcon
                     name="progress_activity"
-                    size={15}
+                    size={isRail ? 14 : 15}
                     className="animate-spin text-primary"
                   />
                 )}
                 {item.status === "pending" && (
                   <MaterialIcon
                     name={item.icon ?? "radio_button_unchecked"}
-                    size={15}
+                    size={isRail ? 13 : 15}
                     className="text-muted-foreground/40"
                   />
                 )}
                 {item.status === "failed" && (
                   <MaterialIcon
                     name="error"
-                    size={16}
+                    size={isRail ? 14 : 16}
                     className="text-destructive"
                   />
                 )}
               </div>
 
-              <div className="min-w-0 flex-1 pt-0.5 flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1">
+              <div className="flex min-w-0 flex-1 items-start justify-between gap-2 pt-0.5">
                 <span
                   className={cn(
-                    "text-body-sm leading-snug",
+                    isRail ? "text-xs leading-snug" : "text-body-sm leading-snug",
                     item.status === "completed" && "text-foreground/90",
                     item.status === "active" && "font-medium text-primary",
                     item.status === "pending" && "text-muted-foreground/80",
@@ -132,7 +144,7 @@ export function ExecutionActivity({
                 {formattedTime && (
                   <span
                     suppressHydrationWarning
-                    className="text-caption font-mono text-muted-foreground/80 shrink-0 text-right"
+                    className="shrink-0 pt-px font-mono text-[10px] tabular-nums text-muted-foreground/80"
                   >
                     {formattedTime}
                   </span>

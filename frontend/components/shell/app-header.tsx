@@ -18,7 +18,7 @@ export function AppHeader({
   onMobileNavOpen,
 }: AppHeaderProps) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/80 px-4 backdrop-blur-sm lg:px-6">
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border/80 bg-background/90 px-4 backdrop-blur-md lg:px-6">
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -34,10 +34,9 @@ export function AppHeader({
         </a>
 
         {organizationName && (
-          <div className="hidden lg:flex items-center gap-2 text-body-sm">
-            <span className="font-semibold text-foreground truncate max-w-[200px]">
-              {organizationName}
-            </span>
+          <div className="hidden items-center gap-2 text-[12px] text-muted-foreground lg:flex">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+            <span className="max-w-[240px] truncate font-medium">{organizationName}</span>
           </div>
         )}
       </div>

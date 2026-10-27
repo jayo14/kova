@@ -91,19 +91,6 @@ const RESULT_VARIANTS: Record<string, ResultVariant> = {
   },
 };
 
-function calculateDuration(startedAt?: string | null, completedAt?: string | null): string | null {
-  if (!startedAt || !completedAt) return null;
-  try {
-    const start = new Date(startedAt).getTime();
-    const end = new Date(completedAt).getTime();
-    const diff = end - start;
-    if (diff < 0) return null;
-    return `${(diff / 1000).toFixed(1)}s`;
-  } catch {
-    return null;
-  }
-}
-
 function humanizeCategory(category: string): string {
   return category.replaceAll("_", " ");
 }
@@ -113,7 +100,6 @@ export function ExecutionResult({
   report,
   className,
 }: ExecutionResultProps) {
-  const duration = calculateDuration(execution.startedAt, execution.completedAt);
   const variant = RESULT_VARIANTS[execution.status];
 
   if (!variant) return null;
@@ -137,7 +123,7 @@ export function ExecutionResult({
     <section
       aria-label="Execution result"
       className={cn(
-        "rounded-2xl p-5 shadow-xs space-y-3",
+        "space-y-2.5 rounded-xl p-4",
         variant.containerClass,
         className
       )}
@@ -147,14 +133,14 @@ export function ExecutionResult({
         <div className="flex items-start gap-3 min-w-0">
           <div
             className={cn(
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+              "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
               variant.iconBoxClass
             )}
           >
-            <MaterialIcon name={variant.icon} size={20} className={variant.iconClass} />
+            <MaterialIcon name={variant.icon} size={17} className={variant.iconClass} />
           </div>
           <div className="min-w-0">
-            <h3 className={cn("text-body-lg font-semibold tracking-tight", variant.titleClass)}>
+            <h3 className={cn("text-sm font-semibold tracking-tight", variant.titleClass)}>
               {variant.title}
             </h3>
 
@@ -176,28 +162,23 @@ export function ExecutionResult({
           </div>
         </div>
 
-        {duration && (
-          <span className="text-caption font-mono text-muted-foreground bg-background/60 px-2.5 py-1 rounded-md border border-border/60 shrink-0">
-            {duration}
-          </span>
-        )}
       </div>
 
       {/* Plain-language explanation */}
-      <p className={cn("text-body-sm leading-relaxed", variant.descriptionClass)}>
+      <p className={cn("text-xs leading-relaxed", variant.descriptionClass)}>
         {explanationText}
       </p>
 
       {/* Next step */}
       {nextMessage && nextMessage !== explanationText && (
-        <p className="text-body-sm font-medium text-foreground">
+        <p className="text-xs font-medium text-foreground">
           <span className="font-semibold">Next:</span>{" "}
           <span className="font-normal">{nextMessage}</span>
         </p>
       )}
 
       {reason && (
-        <p className="text-caption text-muted-foreground">{reason}</p>
+        <p className="text-[11px] text-muted-foreground">{reason}</p>
       )}
 
       {/* Raw error — collapsed by default so the verdict stays scannable */}

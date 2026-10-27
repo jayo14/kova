@@ -62,7 +62,7 @@ export function ExecutionHeader({
     : "/executions";
 
   return (
-    <div className="mb-6 space-y-3">
+    <div className="mb-5 space-y-3">
       {/* Breadcrumbs */}
       <Breadcrumbs parentHref={backHref} parentLabel="Flow" currentLabel="Proof Run" />
 
