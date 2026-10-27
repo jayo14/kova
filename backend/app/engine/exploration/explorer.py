@@ -3647,6 +3647,7 @@ class ExplorationEngine:
         is_matching = bool(matching_el)
         target_pattern = re.sub(r'[^a-zA-Z0-9]+', '.*', el_name.lower()) if el_name else ".*"
         success_condition = {
+            "url_changed_to": True,
             "url_matches": {"pattern": target_pattern if target_pattern != ".*" else ".*"},
         }
         return DiscoveredMission(
@@ -3656,7 +3657,7 @@ class ExplorationEngine:
             description=f"Attempt the goal '{goal}' and verify the application responds.",
             objective=f"Verify that {persona} can act on '{el_name}' and reach destination" if is_matching else goal,
             persona=persona,
-            category="feature" if is_matching else "navigation",
+            category="feature" if is_matching else "route_walk",
             journey=[
                 f"Access {title or 'application'}",
                 f"Click '{el_name}' to accomplish goal: {goal}",
