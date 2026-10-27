@@ -17,26 +17,38 @@ interface MissionCardProps {
 }
 
 function formatSuccessCondition(raw: Record<string, unknown>): string {
-  if (keys(raw).includes("auth_verified")) return "Authentication verified";
-  if (keys(raw).includes("url_changed_from")) return "URL changed from login page";
-  if (keys(raw).includes("element_visible")) return "Element visible on page";
-  if (keys(raw).includes("element_absent")) return "Element no longer visible";
+  if (keys(raw).includes("element_attribute")) {
+    const attrSpec = raw.element_attribute as Record<string, unknown> | undefined;
+    if (attrSpec) {
+      const attr = attrSpec.attribute || attrSpec.attr || "attribute";
+      const val = attrSpec.value !== undefined ? attrSpec.value : attrSpec.expected;
+      return `Target: ${String(attr)}="${String(val)}"`;
+    }
+    return "Target: Element attribute match";
+  }
+  if (keys(raw).includes("auth_verified")) return "Target: Authentication verified";
+  if (keys(raw).includes("url_changed_from")) return "Target: URL changed from login page";
+  if (keys(raw).includes("element_visible")) return "Target: Element visible on page";
+  if (keys(raw).includes("element_absent")) return "Target: Element no longer visible";
   if (keys(raw).includes("element_count")) {
     const ec = raw.element_count as Record<string, unknown> | undefined;
     if (ec && typeof ec.selector === "string") {
       const sel = ec.selector.toLowerCase();
-      if (sel.includes("report")) return "Report document rendered";
-      if (sel.includes("feedback") || sel.includes("score")) return "Evaluation feedback rendered";
-      if (sel.includes("alert-success") || sel.includes("status")) return "Submission confirmed";
-      if (sel.includes("h1") || sel.includes("h2")) return "Destination content rendered";
-      return "Result entries rendered";
+      if (sel.includes("report")) return "Target: Report document rendered";
+      if (sel.includes("feedback") || sel.includes("score")) return "Target: Evaluation feedback rendered";
+      if (sel.includes("alert-success") || sel.includes("status")) return "Target: Submission confirmed";
+      if (sel.includes("h1") || sel.includes("h2")) return "Target: Destination content rendered";
+      return "Target: Result entries rendered";
     }
-    return "Result entries rendered";
+    return "Target: Result entries rendered";
   }
-  if (keys(raw).includes("text_visible")) return `Shows "${String(raw.text_visible)}"`;
-  if (keys(raw).includes("url_matches")) return "Lands on expected page";
+  if (keys(raw).includes("text_visible")) return `Target: Shows "${String(raw.text_visible)}"`;
+  if (keys(raw).includes("url_matches")) {
+    const pat = (raw.url_matches as Record<string, unknown>)?.pattern || "";
+    return pat ? `Target: Navigate to ${String(pat)}` : "Target: Lands on expected page";
+  }
   const k = keys(raw);
-  return k.length > 0 ? k[0] : "Verified";
+  return k.length > 0 ? `Target: ${k[0]}` : "Defined assertion";
 }
 
 function keys(obj: Record<string, unknown>): string[] {
@@ -54,6 +66,9 @@ export function MissionCard({
 }: MissionCardProps) {
   const expectedOutcome: string | undefined = mission.expectedOutcome || mission.expected_outcome;
   const rankingRationale: string | undefined = mission.rankingRationale || mission.ranking_rationale;
+  const isBlocked = mission.runnable === false || mission.validationStatus === "blocked_by_prerequisites" || mission.validation_status === "blocked_by_prerequisites";
+  const isRejected = mission.validationStatus === "rejected_by_quality_gate" || mission.validation_status === "rejected_by_quality_gate";
+  const blockReason = mission.rejectionReasons?.[0] || mission.rejection_reasons?.[0];
 
   return (
     <div
@@ -94,7 +109,28 @@ export function MissionCard({
               <h3 className="text-body font-semibold text-foreground">
                 {mission.title}
               </h3>
-              {mission.recommended && (
+              {mission.kind && (
+                <span className="rounded-full bg-secondary/80 border border-border px-2 py-0.5 text-[10px] font-medium text-foreground/80">
+                  {mission.kind === "control_exploration"
+                    ? "Control Exploration"
+                    : mission.kind === "navigation_test"
+                    ? "Navigation Test"
+                    : mission.kind === "feature_test"
+                    ? "Feature Test"
+                    : "End-to-End"}
+                </span>
+              )}
+              {isBlocked && (
+                <span className="rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400">
+                  Blocked by prerequisites
+                </span>
+              )}
+              {isRejected && (
+                <span className="rounded-full bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 text-[10px] font-medium text-rose-700 dark:text-rose-400">
+                  Rejected by quality gate
+                </span>
+              )}
+              {mission.recommended && !isBlocked && !isRejected && (
                 <span className="rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-medium text-primary">
                   Recommended
                 </span>
@@ -116,6 +152,14 @@ export function MissionCard({
                 </span>
               )}
             </div>
+
+            {/* Block reason notice */}
+            {isBlocked && blockReason && (
+              <div className="mb-2.5 rounded-lg bg-amber-500/5 px-3 py-1.5 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2 border border-amber-500/20">
+                <MaterialIcon name="lock" size={14} className="text-amber-600 mt-0.5 shrink-0" />
+                <span>{blockReason}</span>
+              </div>
+            )}
 
             {/* Journey Steps — the meaningful user path */}
             {mission.journey && mission.journey.length > 0 && (
@@ -236,11 +280,15 @@ export function MissionCard({
           </Button>
           <Button
             size="sm"
+            disabled={isBlocked || isRejected}
             onClick={(e) => {
               e.stopPropagation();
-              onRun(mission.id);
+              if (!isBlocked && !isRejected) {
+                onRun(mission.id);
+              }
             }}
             className="h-8 px-3 text-caption font-medium"
+            title={isBlocked ? "Cannot run: prerequisites required" : isRejected ? "Cannot run: rejected by quality gate" : undefined}
           >
             Run
             <MaterialIcon name="arrow_forward" size={14} />

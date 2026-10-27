@@ -96,6 +96,19 @@ export interface SuggestedMission {
   classification?: "functional" | "workflow" | "auth" | "navigation";
   isCore?: boolean;
   is_core?: boolean;
+  kind?: "control_exploration" | "navigation_test" | "feature_test" | "end_to_end_journey";
+  runnable?: boolean;
+  validationStatus?: "eligible" | "blocked_by_prerequisites" | "rejected_by_quality_gate";
+  validation_status?: "eligible" | "blocked_by_prerequisites" | "rejected_by_quality_gate";
+  provenance?: {
+    observed_controls?: string[];
+    observed_routes?: string[];
+    preconditions?: string[];
+    unmet_preconditions?: string[];
+    [key: string]: unknown;
+  };
+  rejectionReasons?: string[];
+  rejection_reasons?: string[];
 }
 
 export interface CredentialRequest {

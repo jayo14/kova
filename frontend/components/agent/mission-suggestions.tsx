@@ -33,16 +33,34 @@ export function MissionSuggestions({
   onUpdateMission,
   onPromoteMission,
 }: MissionSuggestionsProps) {
-  // Default selection: recommended missions or first mission
+  const isMissionRunnable = (m: SuggestedMission) =>
+    m.runnable !== false &&
+    m.validationStatus !== "blocked_by_prerequisites" &&
+    m.validation_status !== "blocked_by_prerequisites" &&
+    m.validationStatus !== "rejected_by_quality_gate" &&
+    m.validation_status !== "rejected_by_quality_gate";
+
+  // Default selection: runnable recommended missions or first runnable mission
   const [selected, setSelected] = useState<Set<string>>(() => {
-    const recs = missions.filter((m) => m.recommended).map((m) => m.id);
-    return new Set(recs.length > 0 ? recs : missions.slice(0, 1).map((m) => m.id));
+    const recs = missions.filter((m) => m.recommended && isMissionRunnable(m)).map((m) => m.id);
+    if (recs.length > 0) return new Set(recs);
+    const firstRunnable = missions.find(isMissionRunnable);
+    return new Set(firstRunnable ? [firstRunnable.id] : []);
   });
 
   const [editingMission, setEditingMission] = useState<SuggestedMission | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [parallelExecution, setParallelExecution] = useState(true);
   const [promotingId, setPromotingId] = useState<string | null>(null);
+
+  const selectedRunnable = Array.from(selected).filter((id) => {
+    const m = missions.find((x) => x.id === id);
+    return m && isMissionRunnable(m);
+  });
+  const selectedBlocked = Array.from(selected).filter((id) => {
+    const m = missions.find((x) => x.id === id);
+    return m && !isMissionRunnable(m);
+  });
 
   const handlePromote = async (missionId: string) => {
     if (onPromoteMission) {
@@ -97,9 +115,8 @@ export function MissionSuggestions({
   };
 
   const handleRun = () => {
-    const missionIds = selected.size === 0
-      ? missions.slice(0, 1).map((m) => m.id)
-      : Array.from(selected);
+    const missionIds = selectedRunnable.length > 0 ? selectedRunnable : [];
+    if (missionIds.length === 0) return;
     onRun(missionIds, parallelExecution && missionIds.length > 1);
   };
 
@@ -183,11 +200,15 @@ export function MissionSuggestions({
               ? "Zero flows discovered"
               : selected.size === 0
               ? "No flow selected"
-              : `Ready to verify ${selected.size} flow${selected.size > 1 ? "s" : ""}`}
+              : selectedRunnable.length > 0
+              ? `Ready to verify ${selectedRunnable.length} flow${selectedRunnable.length > 1 ? "s" : ""}`
+              : `${selectedBlocked.length} flow${selectedBlocked.length > 1 ? "s" : ""} selected (blocked by prerequisites)`}
           </p>
           <p className="text-caption text-muted-foreground">
             {missions.length === 0
               ? "No executable workflows were discovered on this application."
+              : selectedRunnable.length === 0 && selectedBlocked.length > 0
+              ? "Selected flows require test credentials or external authentication before execution."
               : "Kova will run the steps autonomously and generate visual proof (screenshots & step logs)"}
           </p>
         </div>
@@ -235,10 +256,10 @@ export function MissionSuggestions({
             <Button
               size="default"
               onClick={handleRun}
-              disabled={selected.size === 0}
+              disabled={selectedRunnable.length === 0}
               className="flex-1 sm:flex-initial font-medium px-5"
             >
-              {selected.size > 1 ? `Run & verify ${selected.size} flows` : "Run & verify flow"}
+              {selectedRunnable.length > 1 ? `Run & verify ${selectedRunnable.length} flows` : "Run & verify flow"}
               <MaterialIcon name="arrow_forward" size={16} />
             </Button>
           )}
