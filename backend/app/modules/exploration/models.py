@@ -25,6 +25,7 @@ class ExplorationStatus(str, enum.Enum):
     EXECUTING = "EXECUTING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    BLOCKED = "BLOCKED"
     CANCELLED = "CANCELLED"
 
 
