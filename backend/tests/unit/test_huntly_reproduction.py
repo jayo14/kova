@@ -167,3 +167,111 @@ async def test_huntly_scenario_b_full_pipeline_unresolved_timeout(monkeypatch):
     # Fast-path generator must also return 0 missions from the interstitial
     fast_missions = explorer._generate_fast_path_missions(DummyPage(), interstitial_obs, None)
     assert len(fast_missions) == 0
+
+
+@pytest.mark.asyncio
+async def test_huntly_scenario_b_engine_run_end_to_end(monkeypatch):
+    """End-to-end explorer.run() for Scenario B: unresolved hosting startup produces BLOCKED with 0 missions."""
+    mock_browser = AsyncMock()
+    mock_browser.is_started = True
+    mock_page = AsyncMock()
+    mock_page.url = "https://huntly-0pgj.onrender.com/"
+    mock_page.title = AsyncMock(return_value="Render - Application loading")
+    mock_page.inner_text = AsyncMock(return_value="Incoming HTTP request detected. Service waking up. Allocating compute resources. START BUILDING ON RENDER TODAY")
+    mock_page.evaluate = AsyncMock(return_value={
+        "interactive": 1,
+        "forms": 0,
+        "links": 1,
+        "navs": 0,
+        "headings": 1,
+        "hasPassword": False,
+        "hasEmail": False,
+    })
+    mock_page.goto = AsyncMock(return_value=MagicMock(status=200))
+    mock_page.wait_for_load_state = AsyncMock()
+    mock_browser.page = mock_page
+
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://huntly-0pgj.onrender.com/",
+    )
+    explorer._browser = mock_browser
+
+    from app.config.settings import settings
+    monkeypatch.setattr(settings, "PAGE_READINESS_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(settings, "PAGE_READINESS_RETRY_INTERVALS", "0.01,0.01")
+
+    result = await explorer.explore()
+    assert result["status"] == ExplorationStatus.BLOCKED
+    assert len(result["candidate_missions"]) == 0
+    assert len(result["discoveries"]) == 0
+    assert "hosting" in result["error_message"].lower() or "ready" in result["error_message"].lower()
+    assert result["readiness"]["state"] == PageReadiness.HOSTING_INTERSTITIAL
+
+
+@pytest.mark.asyncio
+async def test_huntly_scenario_a_engine_run_end_to_end(monkeypatch):
+    """End-to-end explorer.explore() for Scenario A: startup recovers to Huntly, producing valid Huntly missions."""
+    mock_browser = AsyncMock()
+    mock_browser.is_started = True
+    mock_page = AsyncMock()
+    mock_page.url = "https://huntly-0pgj.onrender.com/"
+
+    probe_call = 0
+
+    async def fake_title():
+        nonlocal probe_call
+        probe_call += 1
+        return "Render - Application loading" if probe_call <= 1 else "Huntly - Bookmark & Insights"
+
+    async def fake_inner_text(sel="body"):
+        return (
+            "Incoming HTTP request detected. Service waking up. Allocating compute resources. START BUILDING ON RENDER TODAY"
+            if probe_call <= 1
+            else "Huntly. Discover, save and organize content. Search your bookmarks. Add new bookmark. Dashboard. Explore collections."
+        )
+
+    async def fake_evaluate(script):
+        if probe_call <= 1:
+            return {"interactive": 1, "forms": 0, "links": 1, "navs": 0, "headings": 1, "hasPassword": False, "hasEmail": False}
+        return {"interactive": 10, "forms": 1, "links": 12, "navs": 4, "headings": 3, "hasPassword": False, "hasEmail": False}
+
+    async def fake_goto(url, **kwargs):
+        return MagicMock(status=200)
+
+    mock_page.title = fake_title
+    mock_page.inner_text = fake_inner_text
+    mock_page.evaluate = fake_evaluate
+    mock_page.goto = fake_goto
+    mock_page.wait_for_load_state = AsyncMock()
+    mock_page.screenshot = AsyncMock(return_value=b"fake-png")
+    mock_browser.page = mock_page
+    mock_browser.observe = AsyncMock(return_value={
+        "title": "Huntly",
+        "elements": [
+            {"type": "button", "name": "Save Bookmark"},
+            {"type": "button", "name": "Search Collections"},
+        ],
+        "text": "Huntly helps teams curate knowledge and bookmarks.",
+    })
+
+    explorer = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://huntly-0pgj.onrender.com/",
+    )
+    explorer._browser = mock_browser
+
+    from app.config.settings import settings
+    monkeypatch.setattr(settings, "PAGE_READINESS_TIMEOUT_SECONDS", 0.5)
+    monkeypatch.setattr(settings, "PAGE_READINESS_RETRY_INTERVALS", "0.01,0.01")
+    monkeypatch.setattr(explorer, "_analyze_routes", lambda p, u, **kw: asyncio.sleep(0, result=[]))
+    monkeypatch.setattr(explorer, "_stream_page_exploration", lambda p: asyncio.sleep(0))
+    monkeypatch.setattr(explorer, "_capture_and_emit_screenshot", lambda p, **kw: asyncio.sleep(0))
+
+    result = await explorer.explore()
+    assert result["status"] == ExplorationStatus.READY
+    assert len(result["candidate_missions"]) >= 1
+    for m in result["candidate_missions"]:
+        assert "render" not in m["name"].lower()
+        assert "start building" not in m["name"].lower()
+    assert any("Bookmark" in m["name"] or "Search" in m["name"] for m in result["candidate_missions"])
