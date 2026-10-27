@@ -61,6 +61,7 @@ KNOWN_CONDITION_KEYS = frozenset({
     "element_enabled",
     "element_checked",
     "element_value",
+    "element_attribute",
     "page_loaded",
     "auth_verified",
     "record_persisted",
@@ -569,6 +570,26 @@ class Verifier:
                 check = await self._check_element_value(target, expected)
                 checks.append(check)
 
+        if "element_attribute" in condition:
+            attr_spec = condition["element_attribute"]
+            if isinstance(attr_spec, dict):
+                target = attr_spec.get("target") or attr_spec.get("selector")
+                attribute = attr_spec.get("attribute") or attr_spec.get("attr")
+                expected = attr_spec.get("value") or attr_spec.get("expected", "")
+            else:
+                target, attribute, expected = None, None, None
+            if not target or not attribute or expected is None:
+                checks.append(VerificationCheck(
+                    type="element_attribute",
+                    passed=False,
+                    expected="{\"target\": <target>, \"attribute\": <str>, \"value\": <string>}",
+                    actual=repr(attr_spec)[:100],
+                    message="element_attribute requires 'target', 'attribute', and 'value'",
+                ))
+            else:
+                check = await self._check_element_attribute(target, str(attribute), str(expected))
+                checks.append(check)
+
         if "page_loaded" in condition:
             if len(condition) == 1:
                 return VerificationResult(
@@ -897,6 +918,27 @@ class Verifier:
                 type="element_value",
                 passed=False,
                 expected=expected_value,
+                actual="error",
+                message=str(e),
+            )
+
+    async def _check_element_attribute(self, target: Any, attribute: str, expected_value: str) -> VerificationCheck:
+        """Check if target element has expected attribute value."""
+        try:
+            locator = await self._resolve_target(target)
+            actual_val = await locator.get_attribute(attribute)
+            passed = (actual_val or "") == expected_value
+            return VerificationCheck(
+                type="element_attribute",
+                passed=passed,
+                expected=f"{attribute}='{expected_value}'",
+                actual=f"{attribute}='{actual_val}'",
+            )
+        except Exception as e:
+            return VerificationCheck(
+                type="element_attribute",
+                passed=False,
+                expected=f"{attribute}='{expected_value}'",
                 actual="error",
                 message=str(e),
             )
