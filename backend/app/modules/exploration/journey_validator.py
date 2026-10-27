@@ -83,12 +83,33 @@ def is_navigation_only_workflow(mission: DiscoveredMission) -> bool:
     return False
 
 
+INFRA_MISSION_PATTERNS = [
+    re.compile(r"start building on render", re.I),
+    re.compile(r"wake up", re.I),
+    re.compile(r"render dashboard", re.I),
+    re.compile(r"view logs", re.I),
+]
+
+
 def validate_journey(
     mission: DiscoveredMission,
     capabilities: list[DiscoveredCapability] | None = None,
 ) -> JourneyValidationResult:
     """Programmatically inspect a candidate journey against quality requirements."""
     defects: list[QualityDefect] = []
+    mission_blob = " ".join([
+        mission.name or "",
+        mission.objective or "",
+        mission.expected_outcome or "",
+        str(mission.steps or ""),
+        str(mission.discovery_evidence or ""),
+    ]).lower()
+    if any(p.search(mission_blob) for p in INFRA_MISSION_PATTERNS):
+        defects.append(QualityDefect(
+            code="INFRASTRUCTURE_DEPENDENCY",
+            message="Journey depends on hosting provider infrastructure controls",
+            severity="error",
+        ))
 
     # 1. Goal clarity
     goal = (mission.user_goal or mission.objective or "").strip()
