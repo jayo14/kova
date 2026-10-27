@@ -66,12 +66,12 @@ function getCanvasRelativeCoords(
   };
 }
 
-function toWsUrl(path: string, token: string): string {
+function toWsUrl(path: string, param: string, paramName: "ticket" | "token" = "ticket"): string {
   const base = getApiBaseUrl();
   const httpUrl = base.startsWith("http") ? base : `http://${base}`;
   const u = new URL(httpUrl);
   const protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  const qs = token ? `?token=${encodeURIComponent(token)}` : "";
+  const qs = param ? `?${paramName}=${encodeURIComponent(param)}` : "";
   return `${protocol}//${u.host}${path}${qs}`;
 }
 
@@ -132,8 +132,22 @@ export function LiveViewport({
   const connect = useCallback(async () => {
     if (!executionId) return;
 
+    let wsUrl: string;
     const token = (await getBrowserSessionToken()) ?? "";
-    const wsUrl = toWsUrl(`/ws/viewport/${executionId}`, token);
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/viewport/ticket`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        wsUrl = toWsUrl(`/ws/viewport/${executionId}`, data.ticket, "ticket");
+      } else {
+        wsUrl = toWsUrl(`/ws/viewport/${executionId}`, token, "token");
+      }
+    } catch {
+      wsUrl = toWsUrl(`/ws/viewport/${executionId}`, token, "token");
+    }
 
     let ws: WebSocket;
     try {
