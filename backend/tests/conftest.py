@@ -15,6 +15,7 @@ import app.modules.organizations.models  # noqa: F401
 import app.modules.product_graph.models  # noqa: F401
 import app.modules.executions.evidence_model  # noqa: F401
 import app.modules.validation.models  # noqa: F401
+import app.modules.suites.models  # noqa: F401
 
 
 @pytest.fixture

@@ -42,6 +42,7 @@ def load_all_models() -> None:
     import app.modules.auth.models  # noqa: F401
     import app.modules.integrations.models  # noqa: F401
     import app.modules.validation.models  # noqa: F401
+    import app.modules.suites.models  # noqa: F401
 
 
 # Automatically populate registry on module load

@@ -22,6 +22,7 @@ from app.api.routes import (
     organizations,
     projects,
     runs,
+    suites,
     usage,
     viewport,
 )
@@ -278,6 +279,8 @@ app.include_router(flows.router, prefix="/api/v1")
 app.include_router(executions.router, prefix="/api/v1")
 app.include_router(executions.validations_router, prefix="/api/v1")
 app.include_router(executions.evidence_router, prefix="/api/v1")
+app.include_router(suites.suites_router, prefix="/api/v1")
+app.include_router(suites.suite_runs_router, prefix="/api/v1")
 app.include_router(integrations.router, prefix="/api/v1")
 app.include_router(integrations.project_integrations_router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
