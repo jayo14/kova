@@ -11,6 +11,10 @@ import os
 _DEV_FERNET_KEY = b"k9_8TqZfUvYx3W1eR7tL5mN2pQ4sA6dF8gH0jK2lM4o="
 
 
+ENCRYPTION_PREFIX = "v1:enc:"
+LEGACY_FERNET_PREFIX = "gAAAAA"
+
+
 def get_fernet() -> Fernet:
     key_str = settings.CREDENTIAL_ENCRYPTION_KEY
     if key_str and key_str.strip():
@@ -38,19 +42,41 @@ def get_fernet() -> Fernet:
 
 
 def encrypt_credential(plain_text: str) -> str:
-    """Encrypt a plaintext credential string using Fernet."""
+    """Encrypt a plaintext credential string using versioned Fernet format."""
     if not plain_text:
         return plain_text
     f = get_fernet()
-    return f.encrypt(plain_text.encode("utf-8")).decode("utf-8")
+    token = f.encrypt(plain_text.encode("utf-8")).decode("utf-8")
+    return f"{ENCRYPTION_PREFIX}{token}"
 
 
 def decrypt_credential(cipher_text: str) -> str:
-    """Decrypt a Fernet-encrypted credential string.
+    """Decrypt a versioned Fernet-encrypted credential string.
 
-    Raises InvalidToken if the token is invalid or cannot be decrypted.
+    Fails closed: raises InvalidToken if token is unencrypted or cannot be decrypted.
     """
     if not cipher_text:
         return cipher_text
+
+    if cipher_text.startswith(ENCRYPTION_PREFIX):
+        raw_token = cipher_text[len(ENCRYPTION_PREFIX):]
+    elif cipher_text.startswith("v1:"):
+        raw_token = cipher_text[len("v1:"):]
+    elif cipher_text.startswith(LEGACY_FERNET_PREFIX):
+        raw_token = cipher_text
+    else:
+        raise InvalidToken("Credential is not stored in an encrypted format")
+
     f = get_fernet()
-    return f.decrypt(cipher_text.encode("utf-8")).decode("utf-8")
+    return f.decrypt(raw_token.encode("utf-8")).decode("utf-8")
+
+
+def is_encrypted_credential(value: str) -> bool:
+    """Check if a string matches versioned or legacy encrypted credential formats."""
+    if not value or not isinstance(value, str):
+        return False
+    return (
+        value.startswith(ENCRYPTION_PREFIX)
+        or value.startswith("v1:")
+        or value.startswith(LEGACY_FERNET_PREFIX)
+    )

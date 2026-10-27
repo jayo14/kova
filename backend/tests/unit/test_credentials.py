@@ -172,6 +172,35 @@ def test_decrypt_credential_raises_invalid_token():
     with pytest.raises(InvalidToken):
         decrypt_credential("gAAAAABcorruptedTokenHere1234567890=")
 
+    # Fails closed on plaintext
+    with pytest.raises(InvalidToken):
+        decrypt_credential("plaintext_unencrypted_secret")
+
+    # Fails closed on corrupted versioned token
+    with pytest.raises(InvalidToken):
+        decrypt_credential("v1:enc:corrupted_payload")
+
+
+def test_versioned_encryption_format():
+    """encrypt_credential must store values using versioned format v1:enc: and decrypt them cleanly."""
+    from cryptography.fernet import Fernet
+    from app.modules.credentials.crypto import (
+        encrypt_credential,
+        decrypt_credential,
+        get_fernet,
+        ENCRYPTION_PREFIX,
+    )
+
+    secret = "SuperSecretPassword123!"
+    encrypted = encrypt_credential(secret)
+    assert encrypted.startswith(ENCRYPTION_PREFIX)
+    assert decrypt_credential(encrypted) == secret
+
+    # Legacy token without v1 prefix decrypts cleanly for backwards compatibility
+    legacy_fernet = get_fernet().encrypt(secret.encode()).decode()
+    assert legacy_fernet.startswith("gAAAAA")
+    assert decrypt_credential(legacy_fernet) == secret
+
 
 def test_invalid_configured_key_fails_closed(monkeypatch):
     from app.config.settings import settings
