@@ -3505,7 +3505,7 @@ class ExplorationEngine:
                         {"type": "navigate", "url": current_url},
                         {"type": "wait", "value": "500"},
                         {"type": "click", "target": selector},
-                        {"type": "wait", "value": "800"},
+                        {"type": "wait", "value": "500"},
                     ],
                     successCondition={
                         "element_count": {
