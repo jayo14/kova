@@ -83,12 +83,51 @@ def is_navigation_only_workflow(mission: DiscoveredMission) -> bool:
     return False
 
 
-INFRA_MISSION_PATTERNS = [
-    re.compile(r"start building on render", re.I),
-    re.compile(r"wake up", re.I),
-    re.compile(r"render dashboard", re.I),
-    re.compile(r"view logs", re.I),
-]
+from app.engine.browser.readiness import (
+    _INFRA_CONTROL_LANGUAGE,
+    _PROVIDER_TOKENS,
+    _WAKE_LANGUAGE,
+    is_infrastructure_control,
+)
+
+
+def is_infrastructure_mission(mission: DiscoveredMission) -> bool:
+    """Return True if mission depends on infrastructure, hosting interstitial, or cloud provider controls."""
+    if is_infrastructure_control(mission.name or ""):
+        return True
+    if is_infrastructure_control(mission.objective or ""):
+        return True
+    if is_infrastructure_control(mission.user_goal or ""):
+        return True
+
+    # Check steps
+    for step in mission.steps or []:
+        if isinstance(step, dict):
+            for k, val in step.items():
+                if k in ("target", "selector", "value") and isinstance(val, str) and is_infrastructure_control(val):
+                    return True
+
+    # Check evidence
+    for ev in mission.discovery_evidence or []:
+        if isinstance(ev, dict):
+            state = ev.get("readiness_state") or ev.get("state")
+            if state in ("hosting_interstitial", "proxy_or_gateway_error", "browser_error"):
+                return True
+
+    # Check text blob
+    blob = " ".join([
+        mission.name or "",
+        mission.objective or "",
+        mission.expected_outcome or "",
+        str(mission.journey or ""),
+    ]).lower()
+
+    if any(wake in blob for wake in _WAKE_LANGUAGE):
+        return True
+    if any(ctrl in blob for ctrl in _INFRA_CONTROL_LANGUAGE):
+        return True
+
+    return False
 
 
 def validate_journey(
@@ -97,17 +136,11 @@ def validate_journey(
 ) -> JourneyValidationResult:
     """Programmatically inspect a candidate journey against quality requirements."""
     defects: list[QualityDefect] = []
-    mission_blob = " ".join([
-        mission.name or "",
-        mission.objective or "",
-        mission.expected_outcome or "",
-        str(mission.steps or ""),
-        str(mission.discovery_evidence or ""),
-    ]).lower()
-    if any(p.search(mission_blob) for p in INFRA_MISSION_PATTERNS):
+
+    if is_infrastructure_mission(mission):
         defects.append(QualityDefect(
             code="INFRASTRUCTURE_DEPENDENCY",
-            message="Journey depends on hosting provider infrastructure controls",
+            message="Journey depends on hosting provider infrastructure controls or interstitial content",
             severity="error",
         ))
 
@@ -140,7 +173,7 @@ def validate_journey(
             keys = list(mission.successCondition.keys())
             if keys == ["element_count"]:
                 sel = mission.successCondition.get("element_count", {}).get("selector", "")
-                if sel in ("a, button", "a[href], button", "div, section, p", "h1, h2, [role='heading']", "main, [role='main'], header, footer, body"):
+                if sel in ("a, button", "a[href], button", "div, section, p", "h1, h2, [role='heading']", "main, [role='main'], header, footer, body", "main, [role='main'], form, table, [role='dialog'], [role='region'], article, h1, h2, h3, button, input"):
                     defects.append(QualityDefect(
                         code="VAGUE_OUTCOME",
                         message="Journey has vague, non-specific verification outcome",
@@ -156,6 +189,16 @@ def validate_journey(
             defects.append(QualityDefect(
                 code="VAGUE_OUTCOME",
                 message="Expected outcome is empty or generic placeholder",
+                severity="error",
+            ))
+
+    # Generic ungrounded action check
+    if mission.journey and len(mission.journey) <= 3:
+        journey_text = " ".join(mission.journey).lower()
+        if "verify visible feedback or navigation" in journey_text:
+            defects.append(QualityDefect(
+                code="GENERIC_ACTION",
+                message="Journey contains only generic navigation/feedback steps without observable application outcome",
                 severity="error",
             ))
 
