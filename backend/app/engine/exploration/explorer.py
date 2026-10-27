@@ -1095,7 +1095,10 @@ class ExplorationEngine:
                     }
 
             # Fast-path candidate missions (emitted immediately from initial DOM observation in <3s)
-            fast_missions = self._generate_fast_path_missions(page, observation, self.goal)
+            if getattr(self, "_readiness", None) and not self._readiness.is_ready and self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING, PageReadiness.PROXY_OR_GATEWAY_ERROR, PageReadiness.BROWSER_ERROR, PageReadiness.UNKNOWN_PAGE):
+                fast_missions = []
+            else:
+                fast_missions = self._generate_fast_path_missions(page, observation, self.goal)
             if fast_missions:
                 await self._emit("missions", {
                     "missions": [m.model_dump() for m in fast_missions],
