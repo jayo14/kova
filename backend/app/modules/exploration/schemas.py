@@ -40,7 +40,12 @@ class DiscoveredMission(BaseModel):
     verification_methods: list[dict] = Field(default_factory=list)
     ranking_rationale: str | None = None
     classification: str = "functional"  # functional, setup, navigation
+    kind: str = "feature_test"  # control_exploration, navigation_test, feature_test, end_to_end_journey
     discovery_status: str = "discovered"  # observed, inferred, partially_explored, verified
+    validation_status: str = "eligible"  # eligible, blocked_by_prerequisites, rejected_by_quality_gate, inferred_review_required
+    runnable: bool = True
+    provenance: dict | None = None  # {observed_controls, observed_routes, inferred_expectations, preconditions, unmet_preconditions}
+    rejection_reasons: list[str] = Field(default_factory=list)
     capability_id: str | None = None
     is_core: bool = False
 
