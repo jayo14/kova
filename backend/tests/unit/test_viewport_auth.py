@@ -202,3 +202,52 @@ async def test_viewport_stream_production_no_token(db_session: AsyncSession, mon
     await viewport_stream(ws, str(execution.id), token="", db=db_session)
     assert ws.accepted is False
     assert ws.closed_code == 4001
+
+
+@pytest.mark.asyncio
+async def test_viewport_stream_single_use_ticket(db_session: AsyncSession):
+    from app.api.routes.viewport import create_ws_ticket, consume_ws_ticket
+    owner = User(id=uuid.uuid4(), email="owner-ticket@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+    db_session.add_all([owner, project, flow, execution])
+    await db_session.commit()
+
+    ticket = create_ws_ticket(str(owner.id), ttl_seconds=30)
+    assert ticket is not None
+
+    ws = DummyWebSocket()
+    with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
+         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
+        try:
+            await viewport_stream(ws, str(execution.id), ticket=ticket, db=db_session)
+        except Exception:
+            pass
+
+    assert ws.accepted is True
+    assert ws.closed_code is None
+
+    # Single-use check: same ticket used a second time must fail immediately
+    ws2 = DummyWebSocket()
+    await viewport_stream(ws2, str(execution.id), ticket=ticket, db=db_session)
+    assert ws2.accepted is False
+    assert ws2.closed_code == 4001
+
+
+@pytest.mark.asyncio
+async def test_viewport_stream_expired_ticket(db_session: AsyncSession):
+    from app.api.routes.viewport import create_ws_ticket
+    owner = User(id=uuid.uuid4(), email="owner-expired-ticket@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+    db_session.add_all([owner, project, flow, execution])
+    await db_session.commit()
+
+    # Create ticket with -1 second TTL so it is already expired
+    ticket = create_ws_ticket(str(owner.id), ttl_seconds=-1)
+    ws = DummyWebSocket()
+    await viewport_stream(ws, str(execution.id), ticket=ticket, db=db_session)
+    assert ws.accepted is False
+    assert ws.closed_code == 4001

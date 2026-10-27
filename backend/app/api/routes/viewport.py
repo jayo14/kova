@@ -14,12 +14,17 @@ Architecture:
 import asyncio
 import json
 import logging
+import secrets
+import time
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
+from app.api import get_current_user
+from app.modules.users.models import User
 from app.engine.execution.control import (
     ControlState,
     acquire_human_takeover,
@@ -41,6 +46,48 @@ router = APIRouter()
 
 # Active viewport connections: execution_id → WebSocket
 _viewport_connections: dict[str, WebSocket] = {}
+
+# Short-lived, single-use ticket store for WebSocket authentication
+_ws_tickets: dict[str, dict[str, Any]] = {}
+
+
+def create_ws_ticket(user_id: str, ttl_seconds: int = 30) -> str:
+    """Issue a short-lived, single-use ticket for WebSocket authentication."""
+    _clean_expired_tickets()
+    ticket = secrets.token_urlsafe(32)
+    _ws_tickets[ticket] = {
+        "user_id": user_id,
+        "expires_at": time.time() + ttl_seconds,
+    }
+    return ticket
+
+
+def consume_ws_ticket(ticket: str) -> str | None:
+    """Consume a single-use ticket. Returns user_id if valid, else None."""
+    _clean_expired_tickets()
+    if not ticket or ticket not in _ws_tickets:
+        return None
+    ticket_data = _ws_tickets.pop(ticket)
+    if time.time() > ticket_data.get("expires_at", 0):
+        return None
+    return ticket_data.get("user_id")
+
+
+def _clean_expired_tickets() -> None:
+    now = time.time()
+    expired = [t for t, data in _ws_tickets.items() if data.get("expires_at", 0) < now]
+    for t in expired:
+        _ws_tickets.pop(t, None)
+
+
+@router.post("/viewport/ticket")
+@router.post("/ws/ticket")
+async def issue_viewport_ticket(
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Issue a short-lived (~30s), single-use ticket for WebSocket authentication."""
+    ticket = create_ws_ticket(str(user.id), ttl_seconds=30)
+    return {"ticket": ticket, "expires_in": 30}
 
 
 async def broadcast_frame(execution_id: str, frame_bytes: bytes, state: str = "observing"):
@@ -135,9 +182,7 @@ async def _authenticate_ws_token(token: str, db: AsyncSession | None = None) -> 
     from app.modules.auth.dependencies import _get_jwt_secret
 
     if not token:
-        if settings.is_production or settings.OIDC_ISSUER_URL:
-            return None
-        return str(uuid.UUID("00000000-0000-0000-0000-000000000001"))
+        return None
 
     if token.startswith("kova_"):
         from app.infrastructure.database.session import async_session_factory
@@ -262,12 +307,13 @@ async def get_optional_session() -> AsyncSession | None:
 async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
+    ticket: str = Query(default=""),
     token: str = Query(default=""),
     db: AsyncSession | None = Depends(get_optional_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 
-    Auth: Requires valid session token via query parameter.
+    Auth: Requires short-lived single-use ticket or valid session token.
     Ownership: Verifies user owns the execution's project.
 
     Protocol:
@@ -281,7 +327,15 @@ async def viewport_stream(
     - Client → Server: {"type": "input", "kind": "type", "text": "hello"}
     - Client → Server: {"type": "nav", "kind": "back"|"forward"|"reload"}
     """
-    user_id = await _authenticate_ws_token(token, db=db)
+    raw_ticket = ticket if isinstance(ticket, str) else ""
+    raw_token = token if isinstance(token, str) else ""
+
+    user_id = None
+    if raw_ticket:
+        user_id = consume_ws_ticket(raw_ticket)
+    elif raw_token:
+        user_id = await _authenticate_ws_token(raw_token, db=db)
+
     if not user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return
