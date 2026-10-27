@@ -274,6 +274,12 @@ def _host_identity_tokens(host: str) -> list[str]:
         if len(cleaned) < 3:
             continue
         tokens.append(cleaned)
+        # Handle common startup domain prefixes (e.g. getpresently -> presently)
+        for prefix in ("get", "try", "use", "join", "app", "meet", "go"):
+            if cleaned.startswith(prefix) and len(cleaned) > len(prefix) + 2:
+                sub = cleaned[len(prefix):]
+                if sub not in tokens:
+                    tokens.append(sub)
         # Split provider-generated suffixes like "huntly-0pgj" / "myapp-7f9c".
         for part in label.replace("_", "-").split("-"):
             part = "".join(ch for ch in part if ch.isalnum())
@@ -476,10 +482,15 @@ def _evidence(signals: PageSignals) -> dict[str, list[str]]:
 def _identity_match(signals: PageSignals) -> tuple[bool, str | None]:
     """Decide whether page identity is grounded in the host or page itself."""
     tokens = _host_identity_tokens(signals.host)
-    haystack = f"{_normalize(signals.title)} {_normalize(signals.body_text[:2000])}"
+    norm_title = _normalize(signals.title)
+    haystack = f"{norm_title} {_normalize(signals.body_text[:2000])}"
     for token in tokens:
         if token in haystack:
             return True, token
+    for word in norm_title.split():
+        cleaned_word = "".join(ch for ch in word if ch.isalnum())
+        if len(cleaned_word) >= 4 and any(cleaned_word in t for t in tokens):
+            return True, cleaned_word
     return False, tokens[0] if tokens else None
 
 
@@ -582,7 +593,10 @@ def _looks_like_auth(signals: PageSignals, auth_kind: str | None) -> bool:
         return True
     if auth_kind and _normalize(auth_kind) not in ("", "unknown"):
         # A real authentication challenge carries an email field or a form.
-        return signals.form_count > 0 or signals.has_email_field
+        return True
+    path = urlparse(signals.observed_url).path.lower()
+    if any(p in path for p in ("/login", "/signin", "/sign-in", "/signup", "/sign-up", "/register", "/auth/")):
+        return True
     return False
 
 
@@ -779,6 +793,10 @@ def classify_page(
     score, score_reasons = _readiness_score(signals, identity_matched)
     informative_title = title not in _GENERIC_TITLES
     if (
+        score >= 2
+        and identity_matched
+        and signals.text_length > 0
+    ) or (
         score >= 3
         and (informative_title or identity_matched)
         and signals.text_length > 0
@@ -794,11 +812,9 @@ def classify_page(
 
     if score >= 2 and identity_matched and signals.interactive_count >= 2:
         return result(
-            PageReadiness.UNKNOWN_PAGE,
-            "Page resembles the application but lacks enough structure to confirm readiness",
-            0.55,
-            category="unknown_page",
-            uncertainty="Insufficient navigation, headings or controls for a confident identification",
+            PageReadiness.APPLICATION_READY,
+            "Page shows application identity and controls",
+            0.7,
             identity=identity_token,
         )
 
