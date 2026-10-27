@@ -604,7 +604,7 @@ export function ExplorePage() {
   const activeUrl = state.url || initialUrl;
   const showSplitBrowser =
     Boolean(activeUrl) &&
-    !["idle", "failed", "cancelled", "mission_created", "mission_selected"].includes(state.state);
+    !["idle", "failed", "blocked", "cancelled", "mission_created", "mission_selected"].includes(state.state);
 
   const showScreenshotOverlay = SCREENSHOT_STATES.has(state.state) && state.screenshots.length > 0;
   const latestScreenshot = state.screenshots.length > 0 ? state.screenshots[state.screenshots.length - 1].url : null;
@@ -698,6 +698,45 @@ export function ExplorePage() {
         </div>
       );
     })()}
+
+      {/* ── STATE: BLOCKED (INFRASTRUCTURE OR READINESS TIMEOUT) ────────── */}
+      {state.state === "blocked" && (
+        <div className="flex flex-1 flex-col items-center justify-center px-6 py-16 animate-in fade-in duration-300">
+          <div className="w-full max-w-md text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-500/10 border border-amber-500/20">
+              <MaterialIcon name="hourglass_disabled" size={28} className="text-amber-500" />
+            </div>
+            <h2 className="text-h3 text-foreground font-semibold mb-2">
+              Application is not ready
+            </h2>
+            <p className="text-body-sm text-muted-foreground mb-6 leading-relaxed">
+              {state.error || "The target hosting service did not become ready within the allowed wait window. The deployment may still be waking up or sleeping."}
+            </p>
+            <div className="flex items-center justify-center gap-3">
+              <Button variant="outline" onClick={handleBack}>
+                Change URL
+              </Button>
+              <Button
+                onClick={() => {
+                  if (state.url) {
+                    abortRef.current?.abort();
+                    const controller = new AbortController();
+                    abortRef.current = controller;
+                    startedUrlRef.current = state.url;
+                    startExploration(state.url, state.intent, (ev) => handleEventRef.current(ev), controller.signal).catch((err) => {
+                      if (err?.name !== "AbortError") {
+                        console.error("Exploration retry error:", err);
+                      }
+                    });
+                  }
+                }}
+              >
+                Retry readiness
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── STATE: CANCELLED ────────────────────────────────────────── */}
       {state.state === "cancelled" && (

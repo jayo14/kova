@@ -100,6 +100,11 @@ const stateConfig: Record<ExploreState, StateConfig> = {
     label: "Exploration failed",
     description: "Kova couldn't finish exploring this product",
   },
+  blocked: {
+    icon: "hourglass_disabled",
+    label: "Application unavailable",
+    description: "Target application did not become ready",
+  },
   cancelled: {
     icon: "stop",
     label: "Exploration stopped",
