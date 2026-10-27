@@ -156,14 +156,26 @@ class ExplorationEngine:
         browser_error = None
 
         try:
-            title = await page.title()
+            if hasattr(page, "title"):
+                t = page.title()
+                if asyncio.iscoroutine(t) or hasattr(t, "__await__"):
+                    title = await t
+                elif isinstance(t, str):
+                    title = t
         except Exception as e:
-            browser_error = browser_error or str(e)
+            if not isinstance(e, (TypeError, AttributeError)):
+                browser_error = browser_error or str(e)
 
         try:
-            body_text = await page.inner_text("body")
+            if hasattr(page, "inner_text"):
+                it = page.inner_text("body")
+                if asyncio.iscoroutine(it) or hasattr(it, "__await__"):
+                    body_text = await it
+                elif isinstance(it, str):
+                    body_text = it
         except Exception as e:
-            browser_error = browser_error or str(e)
+            if not isinstance(e, (TypeError, AttributeError)):
+                browser_error = browser_error or str(e)
 
         elements = []
         forms = []
@@ -175,35 +187,41 @@ class ExplorationEngine:
         has_password = False
         has_email = False
 
+        data = None
         try:
-            data = await page.evaluate(
-                """() => {
-                    const elements = Array.from(document.querySelectorAll('button, [role="button"], input, select, textarea, a[href]'));
-                    const forms = Array.from(document.querySelectorAll('form'));
-                    const links = Array.from(document.querySelectorAll('a[href]'));
-                    const navs = Array.from(document.querySelectorAll('nav, [role="navigation"] a, header a'));
-                    const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]'));
-                    let hasPassword = false;
-                    let hasEmail = false;
-                    elements.forEach(el => {
-                        const tag = el.tagName.toLowerCase();
-                        if (tag === 'input') {
-                            const type = (el.getAttribute('type') || 'text').toLowerCase();
-                            if (type === 'password') hasPassword = true;
-                            if (type === 'email') hasEmail = true;
-                        }
-                    });
-                    return {
-                        interactive: elements.length,
-                        forms: forms.length,
-                        links: links.length,
-                        navs: navs.length,
-                        headings: headings.length,
-                        hasPassword,
-                        hasEmail
-                    };
-                }"""
-            )
+            if hasattr(page, "evaluate"):
+                ev = page.evaluate(
+                    """() => {
+                        const elements = Array.from(document.querySelectorAll('button, [role="button"], input, select, textarea, a[href]'));
+                        const forms = Array.from(document.querySelectorAll('form'));
+                        const links = Array.from(document.querySelectorAll('a[href]'));
+                        const navs = Array.from(document.querySelectorAll('nav, [role="navigation"] a, header a'));
+                        const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]'));
+                        let hasPassword = false;
+                        let hasEmail = false;
+                        elements.forEach(el => {
+                            const tag = el.tagName.toLowerCase();
+                            if (tag === 'input') {
+                                const type = (el.getAttribute('type') || 'text').toLowerCase();
+                                if (type === 'password') hasPassword = true;
+                                if (type === 'email') hasEmail = true;
+                            }
+                        });
+                        return {
+                            interactive: elements.length,
+                            forms: forms.length,
+                            links: links.length,
+                            navs: navs.length,
+                            headings: headings.length,
+                            hasPassword,
+                            hasEmail
+                        };
+                    }"""
+                )
+                if asyncio.iscoroutine(ev) or hasattr(ev, "__await__"):
+                    data = await ev
+                elif isinstance(ev, dict):
+                    data = ev
             if isinstance(data, dict):
                 interactive_count = int(data.get("interactive") or 0)
                 form_count = int(data.get("forms") or 0)
@@ -213,9 +231,36 @@ class ExplorationEngine:
                 has_password = bool(data.get("hasPassword"))
                 has_email = bool(data.get("hasEmail"))
             else:
+                interactive_count = 0
+                form_count = 0
                 link_count = 0
                 nav_item_count = 0
                 heading_count = 0
+                if hasattr(self, "_browser") and self._browser and hasattr(self._browser, "observe"):
+                    try:
+                        obs = await self._browser.observe()
+                        if isinstance(obs, dict):
+                            if not body_text and isinstance(obs.get("text"), str):
+                                body_text = obs["text"]
+                            if not title and isinstance(obs.get("title"), str):
+                                title = obs["title"]
+                            obs_elements = obs.get("elements", [])
+                            if isinstance(obs_elements, list):
+                                interactive_count = len(obs_elements)
+                                link_count = sum(1 for el in obs_elements if isinstance(el, dict) and el.get("type") == "link")
+                                heading_count = sum(1 for el in obs_elements if isinstance(el, dict) and el.get("type") == "heading")
+                                for el in obs_elements:
+                                    if isinstance(el, dict):
+                                        name = (el.get("name") or "").lower()
+                                        if "password" in name:
+                                            has_password = True
+                                        if "email" in name:
+                                            has_email = True
+                            forms = obs.get("forms", [])
+                            if isinstance(forms, list):
+                                form_count = len(forms)
+                    except Exception:
+                        pass
         except Exception:
             interactive_count = 0
             form_count = 0
