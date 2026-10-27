@@ -44,6 +44,8 @@ describe("Exploration Session and Sandboxed Credential Management", () => {
     assert.equal(normalizeExploreStatus("AUTHENTICATING"), "authenticating");
     assert.equal(normalizeExploreStatus("READY"), "ready");
     assert.equal(normalizeExploreStatus("FAILED"), "failed");
+    assert.equal(normalizeExploreStatus("BLOCKED"), "blocked");
+    assert.equal(normalizeExploreStatus("blocked"), "blocked");
   });
 
   it("normalizes target URLs", () => {
