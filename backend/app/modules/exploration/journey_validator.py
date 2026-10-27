@@ -267,7 +267,9 @@ def repair_journey(
 
     # Ground success conditions in discovered workflow types
     name_lower = (mission.name + " " + (mission.objective or "")).lower()
-    if any(k in name_lower for k in ("login", "sign in", "signin", "auth")):
+    if not mission.steps or "needs credentials" in name_lower:
+        pass
+    elif any(k in name_lower for k in ("login", "sign in", "signin", "auth")):
         mission.successCondition = {"auth_verified": {"auth_path": "/login"}}
     elif any(k in name_lower for k in ("search", "filter", "find records")):
         if not isinstance(mission.successCondition, dict) or "search_results" not in mission.successCondition:

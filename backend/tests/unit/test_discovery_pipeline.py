@@ -53,24 +53,30 @@ async def test_discovery_crawler_bfs_and_depth_budget():
 
 
 @pytest.mark.asyncio
-async def test_auth_detector_mapping():
+async def test_auth_detector_mapping(monkeypatch):
+    from app.engine.browser.auth import AuthSignalBundle
+    from app.engine.exploration.discovery import auth_detector as auth_detector_module
+
+    async def fake_observe(page, url=None):
+        return AuthSignalBundle(
+            url_path_is_auth=False,
+            visible_password_input_count=1,
+            visible_email_input_count=1,
+            visible_otp_input_count=0,
+            has_remember_me_checkbox=False,
+            has_forgot_password_link=False,
+        )
+
+    monkeypatch.setattr(auth_detector_module, "observe_auth_signals", fake_observe)
     detector = AuthDetector()
-    page = Page(project_id=uuid.uuid4(), url_pattern="/dashboard")
+    page = Page(project_id=uuid.uuid4(), url_pattern="/login")
 
     mock_browser_page = AsyncMock()
-    mock_browser_page.evaluate = AsyncMock(return_value={
-        "has_password": False,
-        "has_username": False,
-        "forms": [],
-        "auth_endpoints": [],
-    })
-
     await detector.inspect_page_auth(mock_browser_page, page)
-    # /dashboard is recognized as protected
     assert page.requires_auth is True
     assert len(page.required_state) == 1
     assert page.required_state[0].key == "authenticated"
-    assert page.required_state[0].value is True
+    assert page.required_state[0].value is False
 
 
 @pytest.mark.asyncio
