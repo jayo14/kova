@@ -51,6 +51,7 @@ VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
         ExplorationStatus.EXPLORING.value,
         ExplorationStatus.UNDERSTANDING.value,
         ExplorationStatus.FAILED.value,
+        ExplorationStatus.BLOCKED.value,
         ExplorationStatus.CANCELLED.value,
     },
     ExplorationStatus.EXPLORING.value: {
@@ -60,6 +61,7 @@ VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
         ExplorationStatus.DISCOVERING.value,
         ExplorationStatus.READY.value,
         ExplorationStatus.FAILED.value,
+        ExplorationStatus.BLOCKED.value,
         ExplorationStatus.CANCELLED.value,
     },
     ExplorationStatus.UNDERSTANDING.value: {
@@ -122,6 +124,9 @@ VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
     },
     ExplorationStatus.COMPLETED.value: set(),
     ExplorationStatus.FAILED.value: {
+        ExplorationStatus.CONNECTING.value,
+    },
+    ExplorationStatus.BLOCKED.value: {
         ExplorationStatus.CONNECTING.value,
     },
     ExplorationStatus.CANCELLED.value: set(),
