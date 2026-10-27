@@ -51,7 +51,7 @@ class SuiteRead(BaseModel):
 
 class SuiteDetail(SuiteRead):
     version: SuiteVersionRead
-    last_run: "SuiteRunRead | None" = None
+    last_run: SuiteRunRead | None = None
 
 
 class SuiteRunRequest(BaseModel):

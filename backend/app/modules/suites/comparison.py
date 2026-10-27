@@ -22,7 +22,11 @@ def normalize_assertions(raw: list[dict] | None) -> list[dict[str, Any]]:
             base = str(raw_key)
         else:
             expected = item.get("expected")
-            expected_text = json.dumps(expected, sort_keys=True, default=str) if expected is not None else ""
+            expected_text = (
+                json.dumps(expected, sort_keys=True, default=str)
+                if expected is not None
+                else ""
+            )
             base = f"{check_type}:{expected_text}"
         occurrence = seen.get(base, 0)
         seen[base] = occurrence + 1
@@ -120,7 +124,8 @@ def _compare_assertions(
                     "type": after["type"],
                     "baseline_passed": True,
                     "current_passed": False,
-                    "message": after.get("message") or "Previously passing assertion failed",
+                    "message": after.get("message")
+                    or "Previously passing assertion failed",
                 }
             )
             classification = "new_failure"
@@ -148,9 +153,13 @@ def compare_runs(
     current_items: list[dict[str, Any]],
 ) -> dict[str, Any]:
     baseline_by_flow = {
-        str(item.get("flow_id")): item for item in (baseline_items or []) if item.get("flow_id")
+        str(item.get("flow_id")): item
+        for item in (baseline_items or [])
+        if item.get("flow_id")
     }
-    current_ids = {str(item.get("flow_id")) for item in current_items if item.get("flow_id")}
+    current_ids = {
+        str(item.get("flow_id")) for item in current_items if item.get("flow_id")
+    }
 
     flows: list[dict[str, Any]] = []
     counts = {
@@ -176,7 +185,9 @@ def compare_runs(
         else:
             baseline_status = str(baseline.get("status") or "error")
             before_assertions = normalize_assertions(baseline.get("assertions"))
-            category, details = _compare_assertions(before_assertions, current_assertions)
+            category, details = _compare_assertions(
+                before_assertions, current_assertions
+            )
             before_class = _status_class(baseline_status)
             after_class = _status_class(current_status)
             if category is None:
@@ -190,7 +201,10 @@ def compare_runs(
                     category = "persistent_failure"
                 else:
                     category = "stable"
-            elif category in ("new_failure", "recovered_failure") and after_class == "inconclusive":
+            elif (
+                category in ("new_failure", "recovered_failure")
+                and after_class == "inconclusive"
+            ):
                 category = "inconclusive"
 
         counts[category] += 1
@@ -236,7 +250,9 @@ def compare_runs(
     if counts["new_failure"]:
         explanation.append(f"{counts['new_failure']} flow(s) newly failing")
     if counts["persistent_failure"]:
-        explanation.append(f"{counts['persistent_failure']} flow(s) already failing in baseline")
+        explanation.append(
+            f"{counts['persistent_failure']} flow(s) already failing in baseline"
+        )
     if counts["recovered_failure"]:
         explanation.append(f"{counts['recovered_failure']} flow(s) recovered")
     if counts["new_coverage"]:

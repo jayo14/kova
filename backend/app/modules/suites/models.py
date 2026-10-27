@@ -32,8 +32,12 @@ class TestSuite(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
-    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
+    current_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -41,14 +45,19 @@ class TestSuite(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
     )
 
 
 class TestSuiteVersion(Base):
     __tablename__ = "test_suite_versions"
     __table_args__ = (
-        UniqueConstraint("suite_id", "version", name="uq_test_suite_versions_suite_id_version"),
+        UniqueConstraint(
+            "suite_id", "version", name="uq_test_suite_versions_suite_id_version"
+        ),
         Index("ix_test_suite_versions_suite_id", "suite_id"),
     )
 
@@ -57,7 +66,9 @@ class TestSuiteVersion(Base):
         ForeignKey("test_suites.id", ondelete="CASCADE"), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
-    flow_snapshot: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    flow_snapshot: Mapped[list] = mapped_column(
+        JSONCompat, nullable=False, default=list
+    )
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
@@ -84,7 +95,9 @@ class SuiteRun(Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
     suite_version: Mapped[int] = mapped_column(Integer, nullable=False)
-    suite_snapshot: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    suite_snapshot: Mapped[list] = mapped_column(
+        JSONCompat, nullable=False, default=list
+    )
     mode: Mapped[str] = mapped_column(String(32), nullable=False, default="full")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
     baseline_run_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -92,7 +105,9 @@ class SuiteRun(Base):
     )
     baseline_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     comparison: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
-    changed_files: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
+    changed_files: Mapped[list] = mapped_column(
+        JSONCompat, nullable=False, default=list
+    )
     commit_sha: Mapped[str | None] = mapped_column(String(128), nullable=True)
     branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     summary: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
@@ -100,8 +115,12 @@ class SuiteRun(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -122,16 +141,22 @@ class SuiteRunItem(Base):
         ForeignKey("flows.id", ondelete="SET NULL"), nullable=True
     )
     flow_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    position: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
-    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     execution_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("executions.id", ondelete="SET NULL"), nullable=True
     )
     assertions: Mapped[list] = mapped_column(JSONCompat, nullable=False, default=list)
     failure_signature: Mapped[str | None] = mapped_column(String(255), nullable=True)
     classification: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    unstable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    unstable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

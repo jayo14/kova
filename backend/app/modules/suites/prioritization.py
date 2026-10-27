@@ -6,13 +6,62 @@ import re
 from typing import Any
 
 _STOP_WORDS = {
-    "app", "src", "lib", "libs", "test", "tests", "spec", "specs", "e2e",
-    "page", "pages", "component", "components", "view", "views", "route",
-    "routes", "api", "index", "main", "utils", "util", "helper", "helpers",
-    "layout", "styles", "style", "types", "type", "data", "server", "client",
-    "public", "static", "assets", "features", "feature", "module", "modules",
-    "tsx", "jsx", "ts", "js", "py", "css", "scss", "json", "yaml", "yml",
-    "md", "html", "sql", "test", "unit", "integration", "fixture", "fixtures",
+    "app",
+    "src",
+    "lib",
+    "libs",
+    "test",
+    "tests",
+    "spec",
+    "specs",
+    "e2e",
+    "page",
+    "pages",
+    "component",
+    "components",
+    "view",
+    "views",
+    "route",
+    "routes",
+    "api",
+    "index",
+    "main",
+    "utils",
+    "util",
+    "helper",
+    "helpers",
+    "layout",
+    "styles",
+    "style",
+    "types",
+    "type",
+    "data",
+    "server",
+    "client",
+    "public",
+    "static",
+    "assets",
+    "features",
+    "feature",
+    "module",
+    "modules",
+    "tsx",
+    "jsx",
+    "ts",
+    "js",
+    "py",
+    "css",
+    "scss",
+    "json",
+    "yaml",
+    "yml",
+    "md",
+    "html",
+    "sql",
+    "unit",
+    "integration",
+    "fixture",
+    "fixtures",
 }
 
 _CRITICALITY_WEIGHT = {
@@ -44,7 +93,11 @@ def _flow_terms(flow: dict[str, Any]) -> dict[str, set[str]]:
         elif isinstance(value, dict):
             value = " ".join(str(item) for item in value.values())
         cleaned = re.sub(r"[^a-zA-Z0-9]+", " ", str(value)).lower()
-        return {token for token in cleaned.split() if len(token) >= 4 and token not in _STOP_WORDS}
+        return {
+            token
+            for token in cleaned.split()
+            if len(token) >= 4 and token not in _STOP_WORDS
+        }
 
     routes: set[str] = set()
     for route in flow.get("routes") or []:
@@ -53,7 +106,9 @@ def _flow_terms(flow: dict[str, Any]) -> dict[str, set[str]]:
     dependency_terms: set[str] = set()
     for dependency in dependencies:
         if isinstance(dependency, dict):
-            dependency_terms |= words(dependency.get("flow_name") or dependency.get("name"))
+            dependency_terms |= words(
+                dependency.get("flow_name") or dependency.get("name")
+            )
             dependency_terms |= words(dependency.get("capability"))
         else:
             dependency_terms |= words(dependency)
@@ -124,11 +179,7 @@ def score_flow(
 
 
 def _strip_internal(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        k: v
-        for k, v in item.items()
-        if k not in ("_order", "priority_matched")
-    }
+    return {k: v for k, v in item.items() if k not in ("_order", "priority_matched")}
 
 
 def prioritize_flows(
@@ -156,5 +207,8 @@ def prioritize_flows(
         return [_strip_internal(item) for item in scored]
 
     matched = [item for item in scored if item["priority_matched"]]
-    ranked = sorted(matched if mode == "targeted" else scored, key=lambda item: (-item["priority_score"], item["_order"]))
+    ranked = sorted(
+        matched if mode == "targeted" else scored,
+        key=lambda item: (-item["priority_score"], item["_order"]),
+    )
     return [_strip_internal(item) for item in ranked]
