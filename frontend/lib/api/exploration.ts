@@ -93,6 +93,8 @@ export function normalizeExploreStatus(status: string): ExploreState {
       return "completed";
     case "failed":
       return "failed";
+    case "blocked":
+      return "blocked";
     case "cancelled":
       return "cancelled";
     default:
@@ -492,6 +494,21 @@ function handleStreamPayload(
       type: "state_change",
       state: "ready",
     });
+  } else if (type === "exploration.blocked" || type === "blocked") {
+    const reasonMsg =
+      typeof inner.reason === "string"
+        ? inner.reason
+        : typeof raw.reason === "string"
+        ? raw.reason
+        : "Target application did not become ready";
+    onEvent({
+      type: "error",
+      message: reasonMsg,
+    });
+    onEvent({
+      type: "state_change",
+      state: "blocked",
+    });
   } else if (type === "exploration.failed" || type === "error" || type === "auth.failed") {
     const errorMsg =
       typeof inner.error === "string"
@@ -573,7 +590,7 @@ export async function syncSessionState(
         missions: mapCandidateMissions(session.candidate_missions),
       });
     }
-    if (session.error_message && normalizedState === "failed") {
+    if (session.error_message && (normalizedState === "failed" || normalizedState === "blocked")) {
       onEvent({ type: "error", message: session.error_message });
     }
 

@@ -94,6 +94,7 @@ export function exploreReducer(
         action.state === "ready" ||
         action.state === "completed" ||
         action.state === "failed" ||
+        action.state === "blocked" ||
         action.state === "cancelled";
       const activities = isTerminalOrReady
         ? state.activities.map((a) =>

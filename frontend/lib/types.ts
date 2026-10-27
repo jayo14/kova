@@ -16,6 +16,7 @@ export type ExploreState =
   | "mission_selected"
   | "mission_created"
   | "failed"
+  | "blocked"
   | "cancelled";
 
 export interface Organization {

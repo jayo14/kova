@@ -126,7 +126,9 @@ export function MissionSuggestions({
         </div>
 
         <h2 className="text-h2 font-semibold text-foreground mb-2">
-          I mapped {missions.length} user flows.
+          {missions.length === 0
+            ? "No executable flows discovered."
+            : `I mapped ${missions.length} user flow${missions.length > 1 ? "s" : ""}.`}
         </h2>
 
         {recommendation ? (
@@ -177,12 +179,16 @@ export function MissionSuggestions({
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 bg-card border border-border p-4 rounded-2xl shadow-xs">
         <div>
           <p className="text-body-sm font-medium text-foreground">
-            {selected.size === 0
+            {missions.length === 0
+              ? "Zero flows discovered"
+              : selected.size === 0
               ? "No flow selected"
               : `Ready to verify ${selected.size} flow${selected.size > 1 ? "s" : ""}`}
           </p>
           <p className="text-caption text-muted-foreground">
-            Kova will run the steps autonomously and generate visual proof (screenshots &amp; step logs)
+            {missions.length === 0
+              ? "No executable workflows were discovered on this application."
+              : "Kova will run the steps autonomously and generate visual proof (screenshots & step logs)"}
           </p>
         </div>
 
@@ -225,14 +231,17 @@ export function MissionSuggestions({
             </Button>
           )}
 
-          <Button
-            size="default"
-            onClick={handleRun}
-            className="flex-1 sm:flex-initial font-medium px-5"
-          >
-            {selected.size > 1 ? `Run & verify ${selected.size} flows` : "Run & verify flow"}
-            <MaterialIcon name="arrow_forward" size={16} />
-          </Button>
+          {missions.length > 0 && (
+            <Button
+              size="default"
+              onClick={handleRun}
+              disabled={selected.size === 0}
+              className="flex-1 sm:flex-initial font-medium px-5"
+            >
+              {selected.size > 1 ? `Run & verify ${selected.size} flows` : "Run & verify flow"}
+              <MaterialIcon name="arrow_forward" size={16} />
+            </Button>
+          )}
         </div>
       </div>
 
