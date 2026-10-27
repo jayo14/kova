@@ -38,6 +38,7 @@ from app.engine.browser.readiness import (
     ReadinessWaiter,
     assess_url_integrity,
     classify_page,
+    is_infrastructure_control,
 )
 
 logger = logging.getLogger(__name__)
@@ -238,6 +239,11 @@ class ExplorationEngine:
             has_email_field=has_email,
             browser_error=browser_error,
         )
+
+    async def _probe_readiness(self, page, observed_url: str | None = None) -> ReadinessAssessment:
+        """Deterministically assess page readiness and identity against the authoritative requested URL."""
+        signals = await self._collect_page_signals(page, observed_url=observed_url)
+        return classify_page(signals)
 
 
     def cancel(self):
@@ -777,6 +783,14 @@ class ExplorationEngine:
                 )
 
                 initial_readiness = await self._probe_readiness(page)
+                if initial_readiness.retryable:
+                    await self._emit("state_change", {"status": "LOADING"})
+                    await self._emit("progress", {
+                        "id": "exp-readiness-wait",
+                        "message": f"Waiting for application to become available ({initial_readiness.reason})",
+                        "status": "active",
+                    })
+
                 self._readiness = await readiness_waiter.resolve(
                     initial_readiness,
                     is_cancelled=lambda: self._is_cancelled,
@@ -785,23 +799,29 @@ class ExplorationEngine:
 
                 await self._emit("page.readiness", self._readiness.to_dict())
 
+                if initial_readiness.retryable and self._readiness.is_ready:
+                    await self._emit("progress", {
+                        "id": "exp-readiness-wait",
+                        "message": "Application became ready",
+                        "status": "completed",
+                    })
+
                 if not self._readiness.is_ready and self._readiness.state not in (PageReadiness.AUTHENTICATION_REQUIRED,):
                     # If it's a hosting interstitial that never resolved, we must not discover from it
-                    if self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING, PageReadiness.PROXY_OR_GATEWAY_ERROR, PageReadiness.BROWSER_ERROR, PageReadiness.UNKNOWN_PAGE):
-                        # For hosting interstitials/loading that didn't resolve, stop here with clear message
-                        if self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING):
-                            error_msg = self._readiness.reason or "Hosting service did not become ready within the allowed window."
-                            await self._emit("state_change", {"status": "BLOCKED"})
-                            await self._emit("exploration.blocked", {"reason": error_msg, "readiness": self._readiness.to_dict()})
-                            return {
-                                "status": ExplorationStatus.BLOCKED if hasattr(ExplorationStatus, "BLOCKED") else "blocked",
-                                "error_message": error_msg,
-                                "discoveries": [],
-                                "candidate_missions": [],
-                                "readiness": self._readiness.to_dict(),
-                            }
-                        # Other non-ready states
-                        error_msg = self._readiness.reason or "Unable to identify the application reliably."
+                    if self._readiness.state in (PageReadiness.HOSTING_INTERSTITIAL, PageReadiness.APPLICATION_LOADING):
+                        error_msg = self._readiness.reason or "Hosting service did not become ready within the allowed window."
+                        await self._emit("state_change", {"status": "BLOCKED"})
+                        await self._emit("exploration.blocked", {"reason": error_msg, "readiness": self._readiness.to_dict()})
+                        return {
+                            "status": ExplorationStatus.BLOCKED,
+                            "error_message": error_msg,
+                            "discoveries": [],
+                            "candidate_missions": [],
+                            "readiness": self._readiness.to_dict(),
+                        }
+                    # Access denied
+                    if self._readiness.state == PageReadiness.ACCESS_DENIED:
+                        error_msg = self._readiness.reason or "Access denied by target host."
                         await self._emit("state_change", {"status": "FAILED"})
                         await self._emit("exploration.failed", {"error": error_msg, "readiness": self._readiness.to_dict()})
                         return {
@@ -811,6 +831,17 @@ class ExplorationEngine:
                             "candidate_missions": [],
                             "readiness": self._readiness.to_dict(),
                         }
+                    # Other non-ready states
+                    error_msg = self._readiness.reason or "Unable to identify the application reliably."
+                    await self._emit("state_change", {"status": "FAILED"})
+                    await self._emit("exploration.failed", {"error": error_msg, "readiness": self._readiness.to_dict()})
+                    return {
+                        "status": ExplorationStatus.FAILED,
+                        "error_message": error_msg,
+                        "discoveries": [],
+                        "candidate_missions": [],
+                        "readiness": self._readiness.to_dict(),
+                    }
 
                 # Emit page.loaded with title, brand metadata, and capture initial rendered screenshot
                 page_title = await page.title()
@@ -2808,6 +2839,8 @@ class ExplorationEngine:
             name = el.get("name", "").strip()
             if not name or len(name) < 3 or len(name) > 60:
                 continue
+            if is_infrastructure_control(name):
+                continue
             if name.lower() in {"sign out", "logout", "close", "cancel", "ok", "yes", "no", "back"}:
                 continue
             if name.lower() not in seen_labels:
@@ -3064,18 +3097,14 @@ class ExplorationEngine:
                     existing_names.add(mission.name.lower())
                     mission_count += 1
 
-        # If no missions were generated from routes or controls (e.g. SPAs, portfolios, single-page sites),
-        # synthesize robust structure-based journeys so the exploration always produces actionable flows
+        # If no missions were generated from routes or controls, do not synthesize fake fallback flows.
+        # Return an honest empty result with a truthful explanation per quality gate requirements.
         if len(missions) == 0:
-            fallback_missions = await self._synthesize_fallback_missions(
-                page, current_url, title, persona_name, observation
-            )
-            missions.extend(fallback_missions)
             if not discovered_areas:
                 discovered_areas.append(
                     DiscoveryItem(
-                        label="Application Interface Mapped",
-                        description=f"Mapped landing sections, interactive controls, and key workflows on {title or current_url}",
+                        label="No Actionable Flows Discovered",
+                        description=f"Explored {title or current_url} but found no executable user workflows",
                     )
                 )
 
@@ -3383,6 +3412,8 @@ class ExplorationEngine:
         for el in elements:
             name = (el.get("name") or "").strip()
             if not name or len(name) < 3 or len(name) > 50:
+                continue
+            if is_infrastructure_control(name):
                 continue
             name_lower = name.lower()
             if name_lower in seen_names or name_lower in {"sign out", "logout", "close", "cancel", "ok", "yes", "no", "back"}:
