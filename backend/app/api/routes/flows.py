@@ -166,7 +166,7 @@ async def update_flow(
 ):
     """Update a flow."""
     try:
-        flow = await _verify_flow_ownership(db, uuid.UUID(flow_id), user.id, min_role="admin")
+        flow = await _verify_flow_ownership(db, uuid.UUID(flow_id), user.id, min_role="tester")
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid flow ID")
     if flow is None:
