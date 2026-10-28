@@ -254,19 +254,19 @@ async def test_websocket_takeover_and_return_lifecycle():
     user_id = str(uuid.uuid4())
 
     ws = MockWebSocket([
+        {"type": "authenticate", "ticket": "valid-ticket"},
         {"type": "takeover"},
         {"type": "input", "kind": "click", "x": 100, "y": 200},
         {"type": "return_control"},
     ])
 
-    with patch("app.api.routes.viewport._authenticate_ws_token", return_value=user_id), \
+    with patch("app.api.routes.viewport.consume_ws_ticket", return_value=user_id), \
          patch("app.api.routes.viewport._verify_execution_access", return_value=True), \
          patch("app.api.routes.viewport._pump_loop", return_value=None):
 
         await viewport_stream(
             websocket=ws,
             execution_id=exec_id,
-            token="valid-token",
         )
 
     # Verify WS was accepted
