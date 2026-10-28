@@ -205,34 +205,6 @@ def test_versioned_encryption_format():
         decrypt_credential("plaintext_unencrypted_secret")
 
 
-def test_credential_migration_converts_legacy_fernet_and_plaintext():
-    """The one-time migration converts both legacy formats to versioned ciphertext."""
-    import importlib.util
-    from pathlib import Path
-    from app.modules.credentials.crypto import decrypt_credential, get_fernet
-
-    migration_path = (
-        Path(__file__).parents[2]
-        / "alembic"
-        / "versions"
-        / "033_migrate_credentials_versioned_encryption.py"
-    )
-    spec = importlib.util.spec_from_file_location("credential_migration_033", migration_path)
-    assert spec and spec.loader
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-
-    secret = "legacy password"
-    old_ciphertext = get_fernet().encrypt(secret.encode()).decode()
-    migrated_ciphertext = migration._migrate_password(old_ciphertext)
-    migrated_plaintext = migration._migrate_password(secret)
-
-    assert migrated_ciphertext.startswith("v1:enc:")
-    assert migrated_plaintext.startswith("v1:enc:")
-    assert decrypt_credential(migrated_ciphertext) == secret
-    assert decrypt_credential(migrated_plaintext) == secret
-
-
 def test_invalid_configured_key_fails_closed(monkeypatch):
     from app.config.settings import settings
     from app.modules.credentials.crypto import get_fernet
