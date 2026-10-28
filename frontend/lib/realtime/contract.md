@@ -36,33 +36,11 @@ Execution UI (Activity Timeline + Status Badge)
 
 ## 3. Authentication & Security
 
-Native browser `EventSource` cannot send custom `Authorization: Bearer <token>` headers. To prevent leaking long-lived access tokens into URLs, query parameters, proxy logs, or browser histories:
-
-### Preferred Option A: Same-Origin Cookie Authentication
-- Frontend issues request with `withCredentials: true`.
-- Backend validates HTTP-only session cookie (`sb-access-token` or custom session cookie).
-
-### Preferred Option B: Short-Lived Stream Ticket
-- Frontend requests a single-use, short-lived (e.g., 30–60 second) ticket:
-  ```http
-  POST /api/v1/executions/{execution_id}/stream-ticket
-  Authorization: Bearer <supabase_access_token>
-  ```
-  Response:
-  ```json
-  {
-    "ticket": "st_9b1deb4d3b7d4b89",
-    "expires_in": 30
-  }
-  ```
-- Browser connects using:
-  ```
-  GET /api/v1/executions/{execution_id}/events/stream?ticket=st_9b1deb4d3b7d4b89
-  ```
-- Backend consumes the ticket once and verifies it belongs to the authenticated user and execution.
-
-### Explicit Security Rule
-- **NEVER** accept or allow long-lived Supabase JWTs in the query string (`?token=eyJ...`).
+The frontend uses `fetch` with a `ReadableStream`, not native `EventSource`, so
+it can send `Authorization: Bearer <token>` in the request header. The backend
+authenticates the request and verifies execution ownership before streaming.
+Authentication credentials must not be placed in the URL, including short-lived
+tickets, because URLs can enter proxy logs and browser history.
 
 ---
 
