@@ -30,16 +30,17 @@ def upgrade() -> None:
         sa.select(credentials_table.c.id, credentials_table.c.password)
     ).fetchall()
 
-    from app.modules.credentials.crypto import encrypt_credential, decrypt_credential, ENCRYPTION_PREFIX
+    from app.modules.credentials.crypto import encrypt_credential, ENCRYPTION_PREFIX, get_fernet
 
     for row in rows:
         cred_id, raw_pass = row[0], row[1]
         if raw_pass and not str(raw_pass).startswith(ENCRYPTION_PREFIX):
-            try:
-                decrypted = decrypt_credential(raw_pass)
-                enc = encrypt_credential(decrypted)
-            except Exception:
-                enc = encrypt_credential(raw_pass)
+            value = str(raw_pass)
+            # Legacy Fernet tokens must decrypt successfully before migration;
+            # malformed ciphertext is never reinterpreted as a plaintext secret.
+            if value.startswith("gAAAA"):
+                value = get_fernet().decrypt(value.encode("utf-8")).decode("utf-8")
+            enc = encrypt_credential(value)
             conn.execute(
                 credentials_table.update()
                 .where(credentials_table.c.id == cred_id)

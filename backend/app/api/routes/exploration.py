@@ -116,24 +116,6 @@ async def list_exploration_credentials(
             if creds:
                 return creds
 
-    # Fallback: check if other projects with the same host have credentials,
-    # strictly restricted to projects where caller has verified access.
-    if session.url:
-        import re
-        from urllib.parse import urlparse
-        parsed = urlparse(session.url)
-        clean_host = re.sub(r"^www\d*\.", "", (parsed.hostname or "").lower())
-        user_projects = await proj_repo.list_by_user(user.id, limit=50)
-        for p in user_projects:
-            p_accessible = await proj_repo.get_by_id_and_user(p.id, user.id)
-            if not p_accessible:
-                continue
-            p_host = re.sub(r"^www\d*\.", "", (urlparse(p.base_url).hostname or "").lower())
-            if p_host == clean_host:
-                creds = await service.list_credentials(p.id)
-                if creds:
-                    return creds
-
     return []
 
 
