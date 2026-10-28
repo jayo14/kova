@@ -731,7 +731,6 @@ async def get_execution_trace(
 ):
     """Download Playwright trace zip recording directly or via signed URL."""
     import os
-    from app.config.settings import settings
     from app.modules.executions.evidence_model import Evidence
 
     try:
@@ -767,31 +766,12 @@ async def get_execution_trace(
     if trace_url and (trace_url.startswith("http://") or trace_url.startswith("https://")):
         return RedirectResponse(url=trace_url, status_code=302)
 
-    # 3. If it's a local file path
+    # 3. If it's a local file path recorded against this execution
     local_path = None
     if trace_url:
         cleaned = trace_url.replace("file://", "").strip()
         if os.path.exists(cleaned):
             local_path = cleaned
-
-    # 4. Search trace directories strictly by execution ID if not resolved yet
-    if not local_path:
-        search_dirs = [
-            getattr(settings, "EVIDENCE_VIDEO_DIR", "/tmp/kova_traces"),
-            "/tmp/kova_traces",
-        ]
-        hex_id = exec_uuid.hex
-        str_id = str(exec_uuid)
-        for d in search_dirs:
-            if not os.path.isdir(d):
-                continue
-            for fname in [f"trace_{str_id}.zip", f"trace_{hex_id}.zip", f"{str_id}.zip", f"{hex_id}.zip"]:
-                candidate = os.path.join(d, fname)
-                if os.path.isfile(candidate):
-                    local_path = candidate
-                    break
-            if local_path:
-                break
 
     if not local_path or not os.path.exists(local_path):
         raise HTTPException(
