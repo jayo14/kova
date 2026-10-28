@@ -725,11 +725,10 @@ async def refresh_evidence_url(
 @router.get("/{execution_id}/trace/download")
 async def get_execution_trace(
     execution_id: str,
-    signature: str | None = None,
     user: User | None = Depends(get_optional_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Download Playwright trace zip recording directly or via signed URL."""
+    """Download a trace only for an authenticated owner of its execution."""
     import os
     from app.modules.executions.evidence_model import Evidence
 
@@ -738,19 +737,11 @@ async def get_execution_trace(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid execution ID")
 
-    if signature:
-        if not _verify_report_signature(exec_uuid, signature):
-            raise HTTPException(status_code=401, detail="Invalid signature")
-        from app.modules.executions.repository import ExecutionRepository
-        execution = await ExecutionRepository(db).get_by_id(exec_uuid)
-        if not execution:
-            raise HTTPException(status_code=404, detail="Execution not found")
-    else:
-        if not user:
-            raise HTTPException(status_code=401, detail="Not authenticated")
-        execution = await _verify_execution_ownership(db, exec_uuid, user.id)
-        if not execution:
-            raise HTTPException(status_code=404, detail="Execution not found")
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    execution = await _verify_execution_ownership(db, exec_uuid, user.id)
+    if not execution:
+        raise HTTPException(status_code=404, detail="Execution not found")
 
     # 1. Query evidence table for any recorded trace_url
     ev_stmt = (

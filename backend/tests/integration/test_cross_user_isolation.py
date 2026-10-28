@@ -404,6 +404,12 @@ async def test_trace_download_resolved_by_execution_id_and_authorized(
                 f"/api/v1/executions/{exec_a.id}/trace", headers=headers_b
             )
             assert res_b.status_code in (403, 404)
+            # A report signature must not bypass trace ownership checks.
+            signed_bypass = await client_b.get(
+                f"/api/v1/executions/{exec_a.id}/trace?signature=not-a-user-session",
+                headers=headers_b,
+            )
+            assert signed_bypass.status_code in (403, 404)
         finally:
             await client_b.aclose()
     finally:
