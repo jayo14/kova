@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
-import { getTraceDownloadUrl, type Evidence } from "@/lib/api/evidence";
+import { downloadExecutionTrace, type Evidence } from "@/lib/api/evidence";
 
 interface EvidenceViewerProps {
   evidence: Evidence | null;
@@ -12,7 +12,6 @@ interface EvidenceViewerProps {
   onClose: () => void;
   onRefreshUrl?: (evidenceId: string) => Promise<string | null>;
   executionId?: string;
-  traceSignature?: string | null;
 }
 
 type TabType = "screenshot" | "dom" | "a11y" | "network" | "video" | "trace" | "verification" | "visual_diff";
@@ -24,12 +23,12 @@ export function EvidenceViewer({
   onClose,
   onRefreshUrl,
   executionId,
-  traceSignature,
 }: EvidenceViewerProps) {
   const [activeTab, setActiveTab] = useState<TabType>("screenshot");
   const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [traceDownloadError, setTraceDownloadError] = useState(false);
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const retriedRef = useRef(false);
 
@@ -481,15 +480,21 @@ export function EvidenceViewer({
                         Inspect recorded browser actions, console messages, network events, and DOM snapshots in Playwright Trace Viewer.
                       </p>
                     </div>
-                    <a
-                      href={executionId ? getTraceDownloadUrl(executionId, traceSignature) : (evidence.traceUrl ?? undefined)}
-                      download
+                    <button
+                      type="button"
+                      disabled={!executionId}
+                      onClick={() => {
+                        if (!executionId) return;
+                        setTraceDownloadError(false);
+                        void downloadExecutionTrace(executionId).catch(() => setTraceDownloadError(true));
+                      }}
                       className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90 transition-colors"
                     >
                       <MaterialIcon name="download" size={16} />
                       Download Trace
-                    </a>
+                    </button>
                   </div>
+                  {traceDownloadError && <p role="alert" className="text-caption text-destructive">Trace download failed.</p>}
 
                   <div className="p-4 rounded-xl border border-border/80 bg-secondary/10 space-y-2 text-caption">
                     <div className="font-semibold text-foreground">How to inspect locally:</div>

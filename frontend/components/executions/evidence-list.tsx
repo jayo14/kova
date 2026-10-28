@@ -1,14 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { cn } from "@/lib/utils";
-import { getTraceDownloadUrl, type Evidence } from "@/lib/api/evidence";
+import { downloadExecutionTrace, type Evidence } from "@/lib/api/evidence";
 
 interface EvidenceListProps {
   evidence: Evidence[];
   onEvidenceClick?: (evidence: Evidence) => void;
   executionId?: string;
-  traceSignature?: string | null;
 }
 
 const typeLabels: Record<string, string> = {
@@ -44,7 +44,8 @@ const statusColors: Record<string, string> = {
   FAILED: "text-destructive",
 };
 
-export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSignature }: EvidenceListProps) {
+export function EvidenceList({ evidence, onEvidenceClick, executionId }: EvidenceListProps) {
+  const [traceDownloadError, setTraceDownloadError] = useState(false);
   const isDev = process.env.NODE_ENV !== "production";
   const orphanScreenshots = evidence.filter(
     (item) => item.type === "SCREENSHOT" && !item.stepId && !item.purpose && item.purpose !== "legacy"
@@ -104,9 +105,6 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
       {(() => {
         const traceItem = validEvidence.find((e) => e.traceUrl);
         if (!traceItem?.traceUrl) return null;
-        const traceHref = executionId
-          ? getTraceDownloadUrl(executionId, traceSignature)
-          : traceItem.traceUrl;
         return (
           <div className="flex items-center justify-between gap-3 p-3 rounded-xl border border-border bg-card/80 text-body-sm">
             <div className="flex min-w-0 items-center gap-2 text-foreground">
@@ -116,14 +114,20 @@ export function EvidenceList({ evidence, onEvidenceClick, executionId, traceSign
                 <p className="text-caption text-muted-foreground">Full replay of every browser action, network call, and DOM snapshot.</p>
               </div>
             </div>
-            <a
-              href={traceHref ?? undefined}
-              download
+            <button
+              type="button"
+              disabled={!executionId}
+              onClick={() => {
+                if (!executionId) return;
+                setTraceDownloadError(false);
+                void downloadExecutionTrace(executionId).catch(() => setTraceDownloadError(true));
+              }}
               className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-caption font-medium hover:bg-primary/20 transition-colors"
             >
               <MaterialIcon name="download" size={14} />
               <span>Download .zip</span>
-            </a>
+            </button>
+            {traceDownloadError && <span role="alert" className="text-caption text-destructive">Trace download failed.</span>}
           </div>
         );
       })()}
