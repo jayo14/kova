@@ -1,0 +1,5 @@
+description: The primary action appears after 3.5 seconds of client hydration.
+journeys:
+  - name: Save changes after loading
+    outcome: The delayed action becomes available and changes its state.
+planted_defects: []

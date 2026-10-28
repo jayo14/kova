@@ -1,0 +1,8 @@
+description: The UI shows a success message while the server confirms no record was saved.
+journeys:
+  - name: Save a record
+    outcome: A persisted record must be returned by reading the record collection.
+planted_defects:
+  - id: save_not_persisted
+    type: functional
+    proof: API response reports saved false and record count remains zero.

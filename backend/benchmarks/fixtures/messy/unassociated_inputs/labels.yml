@@ -1,0 +1,8 @@
+description: Inputs expose placeholders but have no associated labels.
+journeys:
+  - name: Update profile details
+    outcome: The form reports the updated state after activation.
+planted_defects:
+  - id: input_labels_missing
+    type: accessibility
+    proof: Inputs have no programmatically associated label.

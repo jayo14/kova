@@ -1,0 +1,5 @@
+description: The save action persists a record and confirms success only with a toast.
+journeys:
+  - name: Save a record
+    outcome: The API confirms a persisted record even though the UI only shows a toast.
+planted_defects: []

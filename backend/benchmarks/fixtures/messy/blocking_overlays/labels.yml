@@ -1,0 +1,5 @@
+description: Cookie consent and newsletter overlays cover the primary action.
+journeys:
+  - name: Save workspace changes
+    outcome: Save confirmation appears after both overlays are dismissed.
+planted_defects: []

@@ -1,0 +1,5 @@
+description: Actions trigger native alert and confirm dialogs.
+journeys:
+  - name: Acknowledge notice and confirm action
+    outcome: Dialogs are handled and the action displays Confirmed.
+planted_defects: []

@@ -1,0 +1,7 @@
+description: A link and a button each open a new browser page.
+journeys:
+  - name: Open the report
+    outcome: A new page displays the report content.
+  - name: Open the summary
+    outcome: A new page displays the report content.
+planted_defects: []

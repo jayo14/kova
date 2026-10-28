@@ -1,0 +1,5 @@
+description: A two-step wizard uses required fields and native validation.
+journeys:
+  - name: Complete setup
+    outcome: Required fields are accepted and Setup complete is displayed.
+planted_defects: []
