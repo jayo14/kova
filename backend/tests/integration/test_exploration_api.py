@@ -66,11 +66,11 @@ async def client(db_session):
 
 @pytest.mark.asyncio
 async def test_create_and_get_exploration_session(client, monkeypatch):
-    # Mock background exploration execution so it doesn't try to open a real browser in unit test
+    # Mock task enqueueing so this API test doesn't start a real browser worker.
     from app.modules.exploration.service import ExplorationService
     async def mock_execute(*args, **kwargs):
         pass
-    monkeypatch.setattr(ExplorationService, "_execute_exploration_flow", mock_execute)
+    monkeypatch.setattr(ExplorationService, "_enqueue_exploration", mock_execute)
 
     response = await client.post(
         "/api/v1/exploration/",
@@ -180,13 +180,13 @@ async def test_exploration_list_and_use_existing_credentials(client, db_session,
     )
     await db_session.commit()
 
-    # Mock exploration flow execution
+    # Mock exploration task enqueueing.
     executed_creds = {}
 
-    async def mock_execute(self, session_id, user_id, url, credential=None, **kwargs):
+    async def mock_enqueue(self, session_id, credential=None, **kwargs):
         executed_creds["credential"] = credential
 
-    monkeypatch.setattr(ExplorationService, "_execute_exploration_flow", mock_execute)
+    monkeypatch.setattr(ExplorationService, "_enqueue_exploration", mock_enqueue)
 
     # 2. Start an exploration session for the same domain
     start_res = await client.post(
@@ -303,7 +303,7 @@ async def test_exploration_project_resolution_with_extended_fields(client, db_se
 
     async def mock_execute(*args, **kwargs):
         pass
-    monkeypatch.setattr(ExplorationService, "_execute_exploration_flow", mock_execute)
+    monkeypatch.setattr(ExplorationService, "_enqueue_exploration", mock_execute)
 
     from app.modules.users.models import User
     from sqlalchemy import select
