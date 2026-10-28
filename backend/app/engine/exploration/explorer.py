@@ -112,6 +112,7 @@ class ExplorationEngine:
         self._pages_visited_count = 0
         self._actions_count = 0
         self._model_calls = 0
+        self._budget_cutoff_reason: str | None = None
         self._start_time = None
         self._bg_tasks: set[asyncio.Task] = set()
         self._ai_recommendation_reason: str | None = None
@@ -174,6 +175,16 @@ class ExplorationEngine:
         if used["model_calls"] >= limits["max_model_calls"]:
             return False, f"max model calls ({limits['max_model_calls']}) reached"
         return True, None
+
+    async def _mark_budget_cutoff(self, reason: str) -> None:
+        if self._budget_cutoff_reason is not None:
+            return
+        self._budget_cutoff_reason = reason
+        await self._emit("budget.exceeded", {
+            "reason": reason,
+            "budget_used": self._get_budget_used(),
+            "limits": self._get_budget_limits(),
+        })
 
     async def drain_background(self) -> None:
         if self._bg_tasks:
@@ -749,9 +760,10 @@ class ExplorationEngine:
                 await self._emit("state_change", {"status": "LOADING"})
                 navigation_error = None
                 response = None
-                max_retries = 2
+                max_retries = min(2, self._get_budget_limits()["max_pages"] - 1)
                 for attempt in range(max_retries + 1):
                     try:
+                        self._pages_visited_count += 1
                         response = await page.goto(self.url, wait_until="load", timeout=NAVIGATION_TIMEOUT_MS)
                         # Wait for network idle with reasonable bound
                         try:
@@ -1091,7 +1103,13 @@ class ExplorationEngine:
                     "status": "active",
                 })
 
-                auth_success, auth_detail = await self._perform_login(page, credential, is_signup=create_account)
+                allowed, budget_reason = await self._check_budget()
+                if allowed:
+                    self._actions_count += 1
+                    auth_success, auth_detail = await self._perform_login(page, credential, is_signup=create_account)
+                else:
+                    await self._mark_budget_cutoff(budget_reason or "max_actions")
+                    auth_success, auth_detail = False, "Action budget reached before authentication"
                 if not auth_success:
                     should_close_browser = False
                     error_msg = auth_detail or "Authentication failed with provided credentials."
@@ -1309,6 +1327,12 @@ class ExplorationEngine:
         """
         if not self._browser or not self._browser.page:
             return {"error": "No active browser session"}
+
+        allowed, budget_reason = await self._check_budget()
+        if not allowed:
+            await self._mark_budget_cutoff(budget_reason or "max_actions")
+            return {"error": "Exploration action budget reached"}
+        self._actions_count += 1
 
         page = self._browser.page
 
@@ -2470,7 +2494,13 @@ class ExplorationEngine:
         # Step 4: Probe top routes via API request (exclude DOM buttons from HTTP probe)
         network_targets = [r for r in prioritized if not r.get("is_button")][:6]
         button_targets = [r for r in prioritized if r.get("is_button")][:8]
+        page_budget = self._get_budget_limits()["max_pages"]
+        remaining_pages = max(0, page_budget - self._pages_visited_count)
+        if len(network_targets) > remaining_pages:
+            await self._mark_budget_cutoff("max_pages")
+            network_targets = network_targets[:remaining_pages]
         if network_targets:
+            self._pages_visited_count += len(network_targets)
             results = await asyncio.gather(
                 *(self._probe_route(page, route) for route in network_targets),
                 return_exceptions=True,
@@ -3015,6 +3045,13 @@ class ExplorationEngine:
         ai_provider = get_ai_provider()
         ai_reasoner = AgentReasoner(ai_provider) if ai_provider else None
 
+        model_limit = self._get_budget_limits()["max_model_calls"]
+        if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
+            if self._model_calls >= model_limit:
+                await self._mark_budget_cutoff("max_model_calls")
+                ai_reasoner = None
+            else:
+                self._model_calls += 1
         if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
                 # Prune and compact page summary tokens to keep LLM response fast

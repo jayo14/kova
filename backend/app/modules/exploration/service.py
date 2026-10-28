@@ -28,6 +28,8 @@ from app.modules.exploration.schemas import (
 from app.modules.projects.repository import ProjectRepository
 from app.modules.projects.schemas import ProjectCreate
 from app.engine.execution.control import request_cancel, publish_command
+from app.engine.execution.control import queue_worker_input
+from app.engine.execution.control import publish_worker_command
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +79,6 @@ class ExplorationService:
     async def _enqueue_exploration(
         self,
         session_id: uuid.UUID,
-        credential: dict | None = None,
-        selected_role: str | None = None,
-        create_account: bool = False,
     ) -> None:
         """Enqueue the exploration session on the Celery worker."""
         from app.workers.tasks.exploration import run_exploration
@@ -87,9 +86,6 @@ class ExplorationService:
         await asyncio.to_thread(
             run_exploration.delay,
             str(session_id),
-            credential,
-            selected_role,
-            create_account,
         )
         logger.info("Enqueued exploration %s to Celery worker", session_id)
 
@@ -209,18 +205,19 @@ class ExplorationService:
             except Exception:
                 logger.warning("Could not save credential to project")
 
+        # Keep secrets out of broker task arguments and persist the resume
+        # signal in the shared control queue consumed by the worker.
+        await queue_worker_input(
+            str(session_id),
+            {"kind": "credentials", "email": email, "password": password},
+        )
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
             clear_credential_request=True,
         )
         await self.db.commit()
-
-        await self._enqueue_exploration(
-            session_id,
-            credential={"email": email, "password": password},
-            selected_role=session.selected_role,
-        )
+        await self._enqueue_exploration(session_id)
 
         return updated_session or session
 
@@ -256,19 +253,22 @@ class ExplorationService:
             except Exception:
                 logger.warning("Could not save created credential to project")
 
+        await queue_worker_input(
+            str(session_id),
+            {
+                "kind": "credentials",
+                "email": email,
+                "password": password,
+                "create_account": True,
+            },
+        )
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
             clear_credential_request=True,
         )
         await self.db.commit()
-
-        await self._enqueue_exploration(
-            session_id,
-            credential={"email": email, "password": password},
-            selected_role=session.selected_role,
-            create_account=True,
-        )
+        await self._enqueue_exploration(session_id)
 
         return updated_session or session
 
@@ -284,6 +284,9 @@ class ExplorationService:
 
         role_selected = data.answer
 
+        await queue_worker_input(
+            str(session_id), {"kind": "answer", "selected_role": role_selected}
+        )
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.DISCOVERING,
@@ -292,7 +295,7 @@ class ExplorationService:
         )
         await self.db.commit()
 
-        await self._enqueue_exploration(session_id, selected_role=role_selected)
+        await self._enqueue_exploration(session_id)
 
         return updated_session or session
 
@@ -316,6 +319,42 @@ class ExplorationService:
         await self.db.commit()
         return session
 
+    async def pause_session(
+        self, session_id: uuid.UUID, user_id: uuid.UUID
+    ) -> ExplorationSession | None:
+        session = await self.repo.get_by_id_and_user(session_id, user_id)
+        if not session:
+            return None
+        if session.status in {
+            ExplorationStatus.READY.value,
+            ExplorationStatus.AUTH_REQUIRED.value,
+            ExplorationStatus.ASKING.value,
+        }:
+            return session
+        await self.repo.update_status(session_id, ExplorationStatus.PAUSED)
+        await self.db.commit()
+        await publish_command(str(session_id), "pause")
+        return await self.repo.get_by_id(session_id)
+
+    async def resume_session(
+        self, session_id: uuid.UUID, user_id: uuid.UUID
+    ) -> ExplorationSession | None:
+        session = await self.repo.get_by_id_and_user(session_id, user_id)
+        if not session:
+            return None
+        if session.status != ExplorationStatus.PAUSED.value:
+            raise ValueError("Only paused explorations can be resumed.")
+        await queue_worker_input(str(session_id), {"kind": "resume"})
+        updated = await self.repo.update_status(
+            session_id,
+            ExplorationStatus.DISCOVERING,
+            clear_question=True,
+            clear_credential_request=True,
+        )
+        await self.db.commit()
+        await self._enqueue_exploration(session_id)
+        return updated
+
     async def navigate_browser(
         self,
         session_id: uuid.UUID,
@@ -330,48 +369,17 @@ class ExplorationService:
             ExplorationStatus.COMPLETED.value,
             ExplorationStatus.FAILED.value,
             ExplorationStatus.CANCELLED.value,
+            ExplorationStatus.READY.value,
+            ExplorationStatus.AUTH_REQUIRED.value,
+            ExplorationStatus.ASKING.value,
         }
         if session.status in terminal_states:
             return {"error": "No active browser session. Exploration has finished."}
 
-        await publish_command(str(session_id), "navigate", action=action)
+        await publish_worker_command(str(session_id), "navigate", action=action)
         return {"action": action, "status": "queued", "session_id": str(session_id)}
 
     async def cleanup_browser_session(self, session_id: uuid.UUID):
         from app.engine.execution.control import cleanup_control
 
         await cleanup_control(str(session_id))
-
-
-EXPLORATION_TIMEOUT_SECONDS = 300
-
-
-# Legacy compatibility shims removed by new architecture; provide no-op shims
-# to avoid breaking imports in old tests if present.
-_active_browser_sessions = {}
-_active_exploration_tasks = {}
-
-
-def _register_exploration_task(session_id, coro):
-    import asyncio
-
-    # Cancel previous task if exists
-    prev = _active_exploration_tasks.get(session_id)
-    if prev and not prev.done():
-        try:
-            prev.cancel()
-        except Exception:
-            pass
-
-    task = asyncio.create_task(coro)
-    _active_exploration_tasks[session_id] = task
-
-    def _cleanup(t):
-        try:
-            if _active_exploration_tasks.get(session_id) is t:
-                _active_exploration_tasks.pop(session_id, None)
-        except Exception:
-            pass
-
-    task.add_done_callback(_cleanup)
-    return task

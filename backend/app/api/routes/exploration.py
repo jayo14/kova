@@ -181,6 +181,32 @@ async def cancel_exploration(
     )
 
 
+@router.post("/{session_id}/pause", response_model=ExplorationRead)
+async def pause_exploration(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    await _get_authorized_session(session_id, user.id, db)
+    service = ExplorationService(db)
+    paused = await service.pause_session(uuid.UUID(session_id), user.id)
+    return paused
+
+
+@router.post("/{session_id}/resume", response_model=ExplorationRead)
+async def resume_exploration(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    await _get_authorized_session(session_id, user.id, db)
+    service = ExplorationService(db)
+    try:
+        return await service.resume_session(uuid.UUID(session_id), user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 @router.post("/{session_id}/navigate/{action}")
 async def navigate_exploration(
     session_id: str,

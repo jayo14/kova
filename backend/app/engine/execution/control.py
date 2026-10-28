@@ -565,6 +565,16 @@ async def queue_user_input(execution_id: str, input_msg: dict[str, Any]) -> None
     _memory_inputs[execution_id].append(input_msg)
 
 
+async def queue_worker_input(execution_id: str, input_msg: dict[str, Any]) -> None:
+    """Queue a durable worker signal; fail closed if shared Redis is unavailable."""
+    r = await _get_redis()
+    if r is None:
+        raise RuntimeError("Shared worker control channel is unavailable")
+    key = _input_key(execution_id)
+    await r.rpush(key, json.dumps(input_msg))
+    await r.expire(key, 600)
+
+
 async def get_pending_input(execution_id: str) -> list[dict[str, Any]]:
     """Pop and return all queued human interaction messages."""
     items: list[dict[str, Any]] = []
@@ -656,6 +666,17 @@ async def publish_command(execution_id: str, command: str, **data: Any) -> None:
             await r.publish(f"{COMMAND_CHANNEL}:{execution_id}", payload_str)
         except Exception as e:
             logger.debug("Redis publish_command failed: %s", e)
+
+
+async def publish_worker_command(execution_id: str, command: str, **data: Any) -> None:
+    """Publish commands that must reach a remote worker; do not use local fallback."""
+    r = await _get_redis()
+    if r is None:
+        raise RuntimeError("Shared worker control channel is unavailable")
+    await r.publish(
+        f"{COMMAND_CHANNEL}:{execution_id}",
+        json.dumps({"command": command, **data}),
+    )
 
 
 async def subscribe_commands(execution_id: str) -> AsyncIterator[dict[str, Any]]:
