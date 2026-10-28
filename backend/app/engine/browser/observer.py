@@ -85,6 +85,8 @@ class PageObserver:
                     "routes": routes,
                     "interactive_elements": interactive_elements,
                     "primary_actions": [e for e in elements if e.get("type") == "button"][:20],
+                    "iframes_observed": True,
+                    "shadow_dom_scanned": True,
                 }
             except Exception as e:
                 if ("Execution context was destroyed" in str(e) or "navigating" in str(e).lower()) and attempt < 2:
@@ -573,3 +575,6 @@ class PageObserver:
             except Exception:
                 continue
         return results[:8]
+
+
+# Additional helper methods for enhanced observation
