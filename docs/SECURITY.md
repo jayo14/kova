@@ -36,7 +36,7 @@ lockfiles are regenerated. Re-run both commands before release.
 | Flow update | Nested update validates flow/project association and tester role on the path project. | Existing checks retained. |
 | Trace download | Confirmed: a report signature bypassed caller ownership. | Trace download now requires an authenticated execution owner and resolves evidence by execution ID. |
 | Viewport WebSocket | Confirmed: the single-use ticket was still in the query string. | Ticket now arrives in the first WebSocket message, after connection acceptance; the ticket endpoint remains authenticated and expires tickets in 30 seconds. |
-| Credential decryption | Confirmed: migration could treat malformed legacy ciphertext as plaintext and encrypt it again. | Legacy Fernet tokens must decrypt successfully; decryption errors fail closed and are not logged with exception details. |
+| Credential decryption | Service plaintext fallback: not present; it already required the versioned encrypted format. Migration handling: confirmed; malformed legacy Fernet data could be treated as plaintext and re-encrypted. | Migration now decrypts legacy Fernet values or fails closed, while migrating historical plaintext values into the versioned format. Credential errors no longer include exception contents in logs. |
 | Credential reuse | Confirmed: exploration credentials could be sourced from another same-host project. | Removed host-based fallback; credentials are limited to the exploration session's project. |
 | Budget migration | Confirmed: migration 034 referenced a filename instead of a revision ID. | Migration now follows revision 033, allowing the budget columns to be applied. |
 
