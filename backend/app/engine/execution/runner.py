@@ -415,6 +415,23 @@ class FlowRunner:
             safety_restrictions=safety_restrictions,
         )
 
+        try:
+            from app.engine.verification.expectation import derive_expectation_from_objective
+            pre_state = {}
+            try:
+                if browser.page:
+                    pre_state = {
+                        "url": browser.page.url,
+                        "title": await browser.page.title(),
+                    }
+            except Exception:
+                pass
+            pre_reg = derive_expectation_from_objective(objective, pre_state)
+            ctx.record_event("expectation.preregistered", pre_reg.to_dict())
+            await self._emit_events(ctx, event_recorder)
+        except Exception:
+            pass
+
         outcome = await agent_executor.run(
             browser=browser,
             target_url=target_url,
