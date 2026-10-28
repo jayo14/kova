@@ -143,7 +143,7 @@ export function LiveViewport({
         throw new Error(`ticket endpoint returned ${res.status}`);
       }
       const data = await res.json();
-      wsUrl = toWsUrl(`/ws/viewport/${executionId}`, data.ticket, "ticket");
+      wsUrl = toWsUrl(`/ws/viewport/${executionId}`, data.ticket);
     } catch {
       setState("disconnected");
       return;
