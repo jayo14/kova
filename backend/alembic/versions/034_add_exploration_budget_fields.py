@@ -1,7 +1,7 @@
 """Add exploration budget fields to exploration_sessions
 
 Revision ID: 034_add_exploration_budget_fields
-Revises: 7d26c7ea9a91_add_password_hash_to_users.py
+Revises: 033
 Create Date: 2026-10-28 10:00:00.000000
 
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "034_add_exploration_budget_fields"
-down_revision: Union[str, Sequence[str], None] = "7d26c7ea9a91_add_password_hash_to_users.py"
+down_revision: Union[str, Sequence[str], None] = "033"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
