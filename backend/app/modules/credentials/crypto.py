@@ -12,7 +12,6 @@ _DEV_FERNET_KEY = b"k9_8TqZfUvYx3W1eR7tL5mN2pQ4sA6dF8gH0jK2lM4o="
 
 
 ENCRYPTION_PREFIX = "v1:enc:"
-LEGACY_FERNET_PREFIX = "gAAAAA"
 
 
 def get_fernet() -> Fernet:
@@ -53,30 +52,22 @@ def encrypt_credential(plain_text: str) -> str:
 def decrypt_credential(cipher_text: str) -> str:
     """Decrypt a versioned Fernet-encrypted credential string.
 
-    Fails closed: raises InvalidToken if token is unencrypted or cannot be decrypted.
+    Strict: only the versioned "v1:enc:" format is accepted. Plaintext,
+    legacy Fernet tokens, and corrupted ciphertext fail closed with
+    InvalidToken — nothing is ever returned as-is.
     """
     if not cipher_text:
         return cipher_text
 
-    if cipher_text.startswith(ENCRYPTION_PREFIX):
-        raw_token = cipher_text[len(ENCRYPTION_PREFIX):]
-    elif cipher_text.startswith("v1:"):
-        raw_token = cipher_text[len("v1:"):]
-    elif cipher_text.startswith(LEGACY_FERNET_PREFIX):
-        raw_token = cipher_text
-    else:
+    if not cipher_text.startswith(ENCRYPTION_PREFIX):
         raise InvalidToken("Credential is not stored in an encrypted format")
 
     f = get_fernet()
-    return f.decrypt(raw_token.encode("utf-8")).decode("utf-8")
+    return f.decrypt(cipher_text[len(ENCRYPTION_PREFIX):].encode("utf-8")).decode("utf-8")
 
 
 def is_encrypted_credential(value: str) -> bool:
-    """Check if a string matches versioned or legacy encrypted credential formats."""
+    """Check if a string is stored in the versioned encrypted format."""
     if not value or not isinstance(value, str):
         return False
-    return (
-        value.startswith(ENCRYPTION_PREFIX)
-        or value.startswith("v1:")
-        or value.startswith(LEGACY_FERNET_PREFIX)
-    )
+    return value.startswith(ENCRYPTION_PREFIX)
