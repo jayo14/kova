@@ -206,8 +206,8 @@ class ExplorationService:
                     project_id=session.project_id,
                     data=CredentialCreate(name=cred_name, email=email, password=password),
                 )
-            except Exception as e:
-                logger.warning("Could not save credential to project: %s", e)
+            except Exception:
+                logger.warning("Could not save credential to project")
 
         updated_session = await self.repo.update_status(
             session_id=session_id,
@@ -253,8 +253,8 @@ class ExplorationService:
                     project_id=session.project_id,
                     data=CredentialCreate(name=cred_name, email=email, password=password),
                 )
-            except Exception as e:
-                logger.warning("Could not save created credential to project: %s", e)
+            except Exception:
+                logger.warning("Could not save created credential to project")
 
         updated_session = await self.repo.update_status(
             session_id=session_id,
