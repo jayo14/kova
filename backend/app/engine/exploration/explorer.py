@@ -31,6 +31,7 @@ from app.modules.exploration.journey_validator import deduplicate_and_rank_journ
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
 from app.config.settings import get_settings
+from app.engine.execution import control as exec_control
 from app.engine.browser.readiness import (
     PageReadiness,
     PageSignals,
@@ -108,6 +109,10 @@ class ExplorationEngine:
         self._browser: BrowserSession | None = existing_browser
         self._is_cancelled = False
         self._visited_urls: set[str] = set()
+        self._pages_visited_count = 0
+        self._actions_count = 0
+        self._model_calls = 0
+        self._start_time = None
         self._bg_tasks: set[asyncio.Task] = set()
         self._ai_recommendation_reason: str | None = None
         self._last_route_map: list[dict] = []
@@ -132,9 +137,67 @@ class ExplorationEngine:
         for task in list(self._bg_tasks):
             task.cancel()
 
+    def _get_budget_limits(self):
+        try:
+            settings = get_settings()
+            return {
+                "max_wall_clock": getattr(settings, "EXPLORATION_MAX_WALL_CLOCK_SECONDS", 600),
+                "max_pages": getattr(settings, "EXPLORATION_MAX_PAGES", 50),
+                "max_actions": getattr(settings, "EXPLORATION_MAX_ACTIONS", 200),
+                "max_model_calls": getattr(settings, "EXPLORATION_MAX_MODEL_CALLS", 100),
+            }
+        except Exception:
+            return {"max_wall_clock": 600, "max_pages": 50, "max_actions": 200, "max_model_calls": 100}
+
+    def _get_budget_used(self):
+        if self._start_time is None:
+            import time
+            self._start_time = time.time()
+        import time
+        wall_clock = int(time.time() - self._start_time) if self._start_time else 0
+        return {
+            "pages_visited": self._pages_visited_count,
+            "actions": self._actions_count,
+            "model_calls": self._model_calls,
+            "wall_clock_seconds": wall_clock,
+        }
+
+    async def _check_budget(self) -> tuple[bool, str | None]:
+        limits = self._get_budget_limits()
+        used = self._get_budget_used()
+        if used["wall_clock_seconds"] >= limits["max_wall_clock"]:
+            return False, f"max wall-clock ({limits['max_wall_clock']}s) reached"
+        if used["pages_visited"] >= limits["max_pages"]:
+            return False, f"max pages visited ({limits['max_pages']}) reached"
+        if used["actions"] >= limits["max_actions"]:
+            return False, f"max actions ({limits['max_actions']}) reached"
+        if used["model_calls"] >= limits["max_model_calls"]:
+            return False, f"max model calls ({limits['max_model_calls']}) reached"
+        return True, None
+
     async def drain_background(self) -> None:
         if self._bg_tasks:
             await asyncio.gather(*list(self._bg_tasks), return_exceptions=True)
+
+    async def _observe_current_page(self, page=None):
+        try:
+            p = page or (self._browser.page if getattr(self, '_browser', None) else None)
+            if not p:
+                return {"url": self.url}
+            try:
+                from app.engine.browser.observer import PageObserver
+                obs = PageObserver(p)
+                result = await obs.observe()
+                return result
+            except Exception:
+                try:
+                    url = p.url
+                    title = await p.title()
+                    return {"url": url, "title": title}
+                except Exception:
+                    return {"url": self.url}
+        except Exception:
+            return {"url": self.url}
 
     async def _emit(self, event_type: str, payload: dict):
         if self.event_emitter:

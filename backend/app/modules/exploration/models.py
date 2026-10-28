@@ -168,6 +168,12 @@ class ExplorationSession(Base):
     credential_request: Mapped[dict | None] = mapped_column(JSONCompat, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict] = mapped_column("metadata", JSONCompat, nullable=False, default=dict)
+    # Budget tracking stored outside process memory (Postgres). budget_used holds
+    # pages, actions, model_calls, and wall_clock_seconds consumed so far.
+    budget_used: Mapped[dict] = mapped_column(JSONCompat, nullable=False, default=dict)
+    budget_cutoff: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

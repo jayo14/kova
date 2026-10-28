@@ -66,6 +66,12 @@ class PageObserver:
                 from app.engine.browser.auth import observe_auth_signals
                 auth_signals = await observe_auth_signals(self.page, url)
 
+                # Build routes/interactive summaries for exploration
+                routes = []
+                for el in elements:
+                    if el.get("type") == "link":
+                        routes.append({"href": el.get("href"), "text": el.get("name") or el.get("label")})
+                interactive_elements = [e for e in elements if e.get("type") in ("button", "link", "input")]
                 return {
                     "url": url,
                     "title": title,
@@ -76,6 +82,9 @@ class PageObserver:
                     "dialogs": dialogs,
                     "alerts": alerts,
                     "auth_signals": auth_signals,
+                    "routes": routes,
+                    "interactive_elements": interactive_elements,
+                    "primary_actions": [e for e in elements if e.get("type") == "button"][:20],
                 }
             except Exception as e:
                 if ("Execution context was destroyed" in str(e) or "navigating" in str(e).lower()) and attempt < 2:
