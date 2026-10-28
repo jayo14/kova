@@ -1,4 +1,4 @@
-"""Recover execution records left behind by API or worker process failures."""
+"""Recover execution and exploration records left behind by API or worker process failures."""
 
 import asyncio
 import logging
@@ -10,6 +10,11 @@ from app.infrastructure.database.session import async_session_factory
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.repository import ExecutionRepository
 from app.modules.executions.state_machine import InvalidTransitionError, TERMINAL_STATES
+from app.modules.exploration.models import (
+    ExplorationSession,
+    ExplorationStatus,
+)
+from app.modules.exploration.repository import ExplorationRepository
 
 logger = logging.getLogger(__name__)
 _dispatch_tasks: set[asyncio.Task] = set()
@@ -17,6 +22,16 @@ _dispatch_tasks: set[asyncio.Task] = set()
 RECOVERY_INTERVAL_SECONDS = 30
 DISPATCH_GRACE_SECONDS = 45
 ABANDONED_EXECUTION_SECONDS = 660  # worker hard limit (600s) plus cleanup grace
+
+EXPLORATION_DISPATCH_GRACE_SECONDS = 45
+EXPLORATION_ABANDONED_SECONDS = 660
+
+EXPLORATION_TERMINAL_STATES = {
+    ExplorationStatus.COMPLETED.value,
+    ExplorationStatus.FAILED.value,
+    ExplorationStatus.CANCELLED.value,
+    ExplorationStatus.BLOCKED.value,
+}
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -110,13 +125,98 @@ async def reconcile_executions() -> dict[str, int]:
     return {"redispatched": len(dispatch_ids), "timed_out": timed_out}
 
 
+async def reconcile_explorations() -> dict[str, int]:
+    """Redispatch stale pending exploration rows and terminalize abandoned worker leases."""
+    now = datetime.now(timezone.utc)
+    dispatch_ids: list[str] = []
+    timed_out = 0
+
+    async with async_session_factory() as db:
+        result = await db.execute(
+            select(ExplorationSession).where(
+                ExplorationSession.status.not_in(EXPLORATION_TERMINAL_STATES)
+            )
+        )
+        sessions = list(result.scalars().all())
+        repo = ExplorationRepository(db)
+
+        for session in sessions:
+            age = (now - _as_utc(session.updated_at)).total_seconds()
+            if (
+                session.status == ExplorationStatus.CREATED.value
+                and age >= EXPLORATION_DISPATCH_GRACE_SECONDS
+            ):
+                dispatch_ids.append(str(session.id))
+            elif (
+                session.status not in EXPLORATION_TERMINAL_STATES
+                and age >= EXPLORATION_ABANDONED_SECONDS
+            ):
+                try:
+                    await repo.update_status(
+                        session.id,
+                        ExplorationStatus.FAILED,
+                        error_code="WORKER_LOST",
+                        error_message="worker_lost",
+                    )
+                    timed_out += 1
+                except Exception:
+                    await db.rollback()
+                    logger.exception(
+                        "Failed to expire stale exploration %s", session.id
+                    )
+            elif (
+                session.status in (
+                    ExplorationStatus.CONNECTING.value,
+                    ExplorationStatus.LOADING.value,
+                    ExplorationStatus.VALIDATING_PAGE.value,
+                    ExplorationStatus.EXPLORING.value,
+                    ExplorationStatus.UNDERSTANDING.value,
+                    ExplorationStatus.AUTHENTICATING.value,
+                    ExplorationStatus.DISCOVERING.value,
+                    ExplorationStatus.PLANNING.value,
+                )
+                and age >= EXPLORATION_ABANDONED_SECONDS
+            ):
+                try:
+                    await repo.update_status(
+                        session.id,
+                        ExplorationStatus.FAILED,
+                        error_code="WORKER_LOST",
+                        error_message="worker_lost",
+                    )
+                    timed_out += 1
+                except Exception:
+                    await db.rollback()
+                    logger.exception(
+                        "Failed to expire stale exploration %s", session.id
+                    )
+        await db.commit()
+
+    for session_id in dispatch_ids:
+        try:
+            from app.workers.tasks.exploration import run_exploration
+
+            task = asyncio.create_task(
+                asyncio.to_thread(run_exploration.delay, session_id)
+            )
+            _dispatch_tasks.add(task)
+            task.add_done_callback(_dispatch_tasks.discard)
+        except Exception:
+            logger.exception(
+                "Failed to schedule recovery for exploration %s", session_id
+            )
+
+    return {"redispatched": len(dispatch_ids), "timed_out": timed_out}
+
+
 async def recovery_loop() -> None:
     """Run reconciliation until application shutdown."""
     while True:
         try:
             await reconcile_executions()
+            await reconcile_explorations()
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Execution reconciliation failed")
+            logger.exception("Recovery reconciliation failed")
         await asyncio.sleep(RECOVERY_INTERVAL_SECONDS)

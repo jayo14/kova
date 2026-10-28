@@ -9,12 +9,9 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.engine.exploration.explorer import ExplorationEngine
-from app.engine.browser.session import BrowserSession
 from app.modules.credentials.schemas import CredentialCreate
 from app.modules.credentials.service import CredentialService
 from app.modules.exploration.models import (
-    ExplorationEvent,
     ExplorationSession,
     ExplorationStatus,
 )
@@ -28,33 +25,11 @@ from app.modules.exploration.schemas import (
     ExplorationCredentialSubmit,
     ExplorationAnswerSubmit,
 )
-from app.modules.projects.models import Project
 from app.modules.projects.repository import ProjectRepository
 from app.modules.projects.schemas import ProjectCreate
+from app.engine.execution.control import request_cancel, publish_command
 
 logger = logging.getLogger(__name__)
-
-# Maximum time an exploration can run before being forcibly timed out
-EXPLORATION_TIMEOUT_SECONDS = 180
-
-# Active browser sessions keyed by exploration session ID
-_active_browser_sessions: dict[uuid.UUID, BrowserSession] = {}
-
-# Active exploration asyncio tasks keyed by exploration session ID
-_active_exploration_tasks: dict[uuid.UUID, asyncio.Task] = {}
-
-
-def _register_exploration_task(session_id: uuid.UUID, coro) -> asyncio.Task:
-    """Create and track an exploration background task."""
-    # Cancel any previous task for this session (e.g. before re-auth)
-    old_task = _active_exploration_tasks.pop(session_id, None)
-    if old_task and not old_task.done():
-        old_task.cancel()
-
-    task = asyncio.create_task(coro)
-    _active_exploration_tasks[session_id] = task
-    task.add_done_callback(lambda t: _active_exploration_tasks.pop(session_id, None) if _active_exploration_tasks.get(session_id) is t else None)
-    return task
 
 
 def extract_project_name(hostname: str) -> str:
@@ -68,7 +43,6 @@ def extract_project_name(hostname: str) -> str:
     if ":" in clean_host:
         clean_host = clean_host.split(":")[0]
 
-    # Strip leading www.
     clean_host = re.sub(r"^www\d*\.", "", clean_host)
 
     if not clean_host:
@@ -88,7 +62,6 @@ def extract_project_name(hostname: str) -> str:
     if brand_part.lower() == "summastudy":
         return "SummaStudy"
 
-    # Handle kebab-case or snake_case: "my-study-tool" -> "My Study Tool"
     words = [w for w in re.split(r"[-_]", brand_part) if w]
     if len(words) > 1:
         return " ".join(w.capitalize() for w in words)
@@ -103,17 +76,35 @@ class ExplorationService:
         self.event_repo = ExplorationEventRepository(db)
         self.project_repo = ProjectRepository(db)
 
+    async def _enqueue_exploration(
+        self,
+        session_id: uuid.UUID,
+        credential: dict | None = None,
+        selected_role: str | None = None,
+        create_account: bool = False,
+    ) -> None:
+        """Enqueue the exploration session on the Celery worker."""
+        from app.workers.tasks.exploration import run_exploration
+
+        await asyncio.to_thread(
+            run_exploration.delay,
+            str(session_id),
+            credential,
+            selected_role,
+            create_account,
+        )
+        logger.info("Enqueued exploration %s to Celery worker", session_id)
+
     async def create_and_start_exploration(
         self,
         data: ExplorationCreate,
         user_id: uuid.UUID,
     ) -> ExplorationSession:
-        """Finds or creates a project for the target URL, creates session, and begins background exploration."""
+        """Finds or creates a project for the target URL, creates session, and enqueues exploration."""
         target_url = data.url.strip()
         parsed = urlparse(target_url)
         hostname = parsed.hostname or target_url
 
-        # 1. Deduplicate/find project for user by domain / base_url (normalized without www)
         projects = await self.project_repo.list_by_user(user_id, limit=100)
         matched_project = None
         current_norm_host = re.sub(r"^www\d*\.", "", (hostname or "").lower())
@@ -131,17 +122,24 @@ class ExplorationService:
             project_name = extract_project_name(hostname)
             base_url = f"{parsed.scheme or 'https'}://{hostname}"
             clean_host = re.sub(r"^www\d*\.", "", (hostname or "").lower())
-            default_favicon = f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128" if clean_host else None
+            default_favicon = (
+                f"https://www.google.com/s2/favicons?domain={clean_host}&sz=128"
+                if clean_host
+                else None
+            )
 
             matched_project = await self.project_repo.create(
                 user_id=user_id,
                 name=project_name,
                 base_url=base_url,
                 description=f"Automated project for {base_url}",
-                env_config={"logo_url": default_favicon, "favicon_url": default_favicon} if default_favicon else {},
+                env_config=(
+                    {"logo_url": default_favicon, "favicon_url": default_favicon}
+                    if default_favicon
+                    else {}
+                ),
             )
 
-        # 2. Create exploration session
         session = await self.repo.create(
             user_id=user_id,
             url=target_url,
@@ -150,17 +148,7 @@ class ExplorationService:
         )
         await self.db.commit()
 
-        # 3. Launch exploration in background task
-        _register_exploration_task(
-            session.id,
-            self._execute_exploration_flow(
-                session_id=session.id,
-                user_id=user_id,
-                url=target_url,
-                goal=data.goal,
-                project_id=matched_project.id,
-            ),
-        )
+        await self._enqueue_exploration(session.id)
 
         return session
 
@@ -193,7 +181,6 @@ class ExplorationService:
             if not cred:
                 raise ValueError("Selected credential not found.")
 
-            # Verify ownership: check that credential's project belongs to user
             project = await self.project_repo.get_by_id_and_user(cred.project_id, user_id)
             if not project:
                 raise ValueError("Unauthorized access to credential.")
@@ -206,28 +193,24 @@ class ExplorationService:
                 password = decrypt_credential(raw_pass)
             except Exception as ex:
                 logger.error("Failed to decrypt stored credential: %s", ex)
-                raise ValueError("Failed to decrypt stored credential; stored value is corrupt or invalid.") from ex
+                raise ValueError(
+                    "Failed to decrypt stored credential; stored value is corrupt or invalid."
+                ) from ex
 
         if not email or not password:
             raise ValueError("Email and password are required.")
 
-        # Optionally save credential for the project
         if data.save and session.project_id and not data.credential_id:
             try:
                 cred_service = CredentialService(self.db)
                 cred_name = f"explore-cred-{uuid.uuid4().hex[:6]}"
                 await cred_service.create_credential(
                     project_id=session.project_id,
-                    data=CredentialCreate(
-                        name=cred_name,
-                        email=email,
-                        password=password,
-                    ),
+                    data=CredentialCreate(name=cred_name, email=email, password=password),
                 )
             except Exception as e:
                 logger.warning("Could not save credential to project: %s", e)
 
-        # Transition status to AUTHENTICATING and clear pending credential_request
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
@@ -235,18 +218,10 @@ class ExplorationService:
         )
         await self.db.commit()
 
-        # Run authenticated exploration in background
-        _register_exploration_task(
+        await self._enqueue_exploration(
             session_id,
-            self._execute_exploration_flow(
-                session_id=session_id,
-                user_id=user_id,
-                url=session.url,
-                goal=session.goal,
-                credential={"email": email, "password": password},
-                selected_role=session.selected_role,
-                project_id=session.project_id,
-            ),
+            credential={"email": email, "password": password},
+            selected_role=session.selected_role,
         )
 
         return updated_session or session
@@ -257,16 +232,12 @@ class ExplorationService:
         user_id: uuid.UUID,
         data: ExplorationCreateAccount,
     ) -> ExplorationSession | None:
-        """Attempt to create an account on the target site automatically.
-
-        If email/password are provided, use them; otherwise generate random credentials.
-        """
         session = await self.repo.get_by_id_and_user(session_id, user_id)
         if not session:
             return None
 
-        # Generate credentials if not provided
         import secrets
+
         email = data.email
         password = data.password
         if not email:
@@ -276,23 +247,17 @@ class ExplorationService:
             random_suffix = secrets.token_hex(4)
             password = f"KovaPass!{random_suffix}"
 
-        # Save credential for the project
         if session.project_id:
             try:
                 cred_service = CredentialService(self.db)
                 cred_name = f"auto-created-{uuid.uuid4().hex[:6]}"
                 await cred_service.create_credential(
                     project_id=session.project_id,
-                    data=CredentialCreate(
-                        name=cred_name,
-                        email=email,
-                        password=password,
-                    ),
+                    data=CredentialCreate(name=cred_name, email=email, password=password),
                 )
             except Exception as e:
                 logger.warning("Could not save created credential to project: %s", e)
 
-        # Transition status to AUTHENTICATING and clear pending credential_request
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.AUTHENTICATING,
@@ -300,19 +265,11 @@ class ExplorationService:
         )
         await self.db.commit()
 
-        # Run account creation exploration in background
-        _register_exploration_task(
+        await self._enqueue_exploration(
             session_id,
-            self._execute_exploration_flow(
-                session_id=session_id,
-                user_id=user_id,
-                url=session.url,
-                goal=session.goal,
-                credential={"email": email, "password": password},
-                selected_role=session.selected_role,
-                create_account=True,
-                project_id=session.project_id,
-            ),
+            credential={"email": email, "password": password},
+            selected_role=session.selected_role,
+            create_account=True,
         )
 
         return updated_session or session
@@ -329,7 +286,6 @@ class ExplorationService:
 
         role_selected = data.answer
 
-        # Transition status to DISCOVERING and clear resolved question
         updated_session = await self.repo.update_status(
             session_id=session_id,
             status=ExplorationStatus.DISCOVERING,
@@ -338,18 +294,7 @@ class ExplorationService:
         )
         await self.db.commit()
 
-        # Continue exploration with selected role
-        _register_exploration_task(
-            session_id,
-            self._execute_exploration_flow(
-                session_id=session_id,
-                user_id=user_id,
-                url=session.url,
-                goal=session.goal,
-                selected_role=role_selected,
-                project_id=session.project_id,
-            ),
-        )
+        await self._enqueue_exploration(session_id, selected_role=role_selected)
 
         return updated_session or session
 
@@ -362,16 +307,9 @@ class ExplorationService:
         if not session:
             return None
 
-        # Cancel any active background task
-        task = _active_exploration_tasks.pop(session_id, None)
-        if task and not task.done():
-            task.cancel()
+        await request_cancel(str(session_id), reason="User requested cancellation")
 
-        await self.cleanup_browser_session(session_id)
-        await self.repo.update_status(
-            session_id=session_id,
-            status=ExplorationStatus.CANCELLED,
-        )
+        await self.repo.update_status(session_id=session_id, status=ExplorationStatus.CANCELLED)
         await self.event_repo.create(
             exploration_id=session_id,
             event_type="exploration.cancelled",
@@ -386,388 +324,56 @@ class ExplorationService:
         user_id: uuid.UUID,
         action: str,
     ) -> dict[str, Any]:
-        """Navigate the browser (back, forward, or reload) for an active exploration.
-
-        Args:
-            session_id: Exploration session ID
-            user_id: User ID for authorization
-            action: One of 'back', 'forward', 'reload'
-
-        Returns:
-            dict with url, path, title, or error
-        """
         session = await self.repo.get_by_id_and_user(session_id, user_id)
         if not session:
             return {"error": "Session not found"}
 
-        browser = _active_browser_sessions.get(session_id)
-        if not browser or not browser.page:
-            return {"error": "No active browser session. Exploration may have finished."}
+        terminal_states = {
+            ExplorationStatus.COMPLETED.value,
+            ExplorationStatus.FAILED.value,
+            ExplorationStatus.CANCELLED.value,
+        }
+        if session.status in terminal_states:
+            return {"error": "No active browser session. Exploration has finished."}
 
-        page = browser.page
-
-        from app.infrastructure.database.session import async_session_factory
-
-        try:
-            if action == "back":
-                await page.go_back(wait_until="domcontentloaded")
-            elif action == "forward":
-                await page.go_forward(wait_until="domcontentloaded")
-            elif action == "reload":
-                await page.reload(wait_until="domcontentloaded")
-            else:
-                return {"error": f"Unknown navigation action: {action}"}
-
-            # Wait for page to settle
-            try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                pass
-
-            # Emit URL change event
-            current_url = page.url
-            async with async_session_factory() as event_db:
-                event_repo = ExplorationEventRepository(event_db)
-                await event_repo.create(
-                    exploration_id=session_id,
-                    event_type="page.url_changed",
-                    payload={
-                        "url": current_url,
-                        "path": urlparse(current_url).path,
-                    },
-                )
-                await event_db.commit()
-
-            # Capture screenshot
-            from app.engine.browser.screenshot_storage import ScreenshotStorage
-            storage = ScreenshotStorage()
-            screenshot_bytes = await page.screenshot()
-            storage_meta = await asyncio.to_thread(
-                storage.save, str(session_id), screenshot_bytes, current_url
-            )
-
-            async with async_session_factory() as event_db:
-                event_repo = ExplorationEventRepository(event_db)
-                screenshot_event = {"url": current_url}
-                if storage_meta.get("screenshot_url"):
-                    screenshot_event["screenshot_url"] = storage_meta["screenshot_url"]
-                elif storage_meta.get("screenshot_key"):
-                    screenshot_event["screenshot_key"] = storage_meta["screenshot_key"]
-                await event_repo.create(
-                    exploration_id=session_id,
-                    event_type="browser.screenshot",
-                    payload=screenshot_event,
-                )
-                await event_db.commit()
-
-            return {
-                "url": current_url,
-                "path": urlparse(current_url).path,
-                "title": await page.title(),
-            }
-
-        except Exception as e:
-            logger.warning("Browser navigation failed for session %s: %s", session_id, e)
-            return {"error": str(e)}
+        await publish_command(str(session_id), "navigate", action=action)
+        return {"action": action, "status": "queued", "session_id": str(session_id)}
 
     async def cleanup_browser_session(self, session_id: uuid.UUID):
-        """Close and remove an active browser session."""
-        browser = _active_browser_sessions.pop(session_id, None)
-        if browser:
-            try:
-                await browser.close()
-            except Exception as e:
-                logger.warning("Failed to close browser session %s: %s", session_id, e)
+        from app.engine.execution.control import cleanup_control
 
-    async def _execute_exploration_flow(
-        self,
-        session_id: uuid.UUID,
-        user_id: uuid.UUID,
-        url: str,
-        goal: str | None = None,
-        credential: dict | None = None,
-        selected_role: str | None = None,
-        create_account: bool = False,
-        project_id: uuid.UUID | None = None,
-    ):
-        """Runs the exploration engine with an isolated DB session."""
-        from app.infrastructure.database.session import async_session_factory
+        await cleanup_control(str(session_id))
 
-        async def _mark_failed_fresh(error_msg: str, reason: str | None = None) -> None:
-            """Write FAILED status on a fresh DB session (shared session may be stuck)."""
-            try:
-                async with async_session_factory() as fail_db:
-                    fail_event_repo = ExplorationEventRepository(fail_db)
-                    fail_repo = ExplorationRepository(fail_db)
-                    payload = {"error": error_msg}
-                    if reason:
-                        payload["reason"] = reason
-                    await fail_event_repo.create(
-                        exploration_id=session_id,
-                        event_type="exploration.failed",
-                        payload=payload,
-                    )
-                    await fail_repo.update_status(
-                        session_id=session_id,
-                        status=ExplorationStatus.FAILED,
-                        error_message=error_msg,
-                    )
-                    await fail_db.commit()
-            except Exception as ex:
-                logger.error("Failed to mark exploration %s FAILED: %s", session_id, ex)
 
-        async with async_session_factory() as db:
-            repo = ExplorationRepository(db)
-            event_repo = ExplorationEventRepository(db)
+EXPLORATION_TIMEOUT_SECONDS = 300
 
-            event_count = 0
-            emit_lock = asyncio.Lock()
 
-            async def event_emitter(event_type: str, payload: dict):
-                nonlocal event_count
-                async with emit_lock:
-                    try:
-                        from app.modules.executions.reporting import sanitize_payload
-                        sanitized_payload = sanitize_payload(payload) or {}
-                        await event_repo.create(
-                            exploration_id=session_id,
-                            event_type=event_type,
-                            payload=sanitized_payload,
-                        )
-                        event_count += 1
-                        # Commit immediately so SSE polling (separate DB session) can see events
-                        await db.commit()
+# Legacy compatibility shims removed by new architecture; provide no-op shims
+# to avoid breaking imports in old tests if present.
+_active_browser_sessions = {}
+_active_exploration_tasks = {}
 
-                        # Keep session status and data in sync so SSE polling and
-                        # frontend 3s safety-net poll see state changes live
-                        if event_type == "state_change" and isinstance(payload, dict):
-                            status_val = payload.get("status")
-                            if status_val:
-                                try:
-                                    status_enum = ExplorationStatus(status_val)
-                                    await repo.update_status(
-                                        session_id=session_id,
-                                        status=status_enum,
-                                    )
-                                    await db.commit()
-                                except ValueError:
-                                    logger.warning("Unknown exploration status: %s", status_val)
-                                except Exception as e:
-                                    logger.warning("Failed to update session status to %s: %s", status_val, e)
-                        elif event_type == "missions" and isinstance(payload, dict):
-                            raw_missions = payload.get("missions")
-                            if raw_missions is not None:
-                                try:
-                                    await repo.update_status(
-                                        session_id=session_id,
-                                        candidate_missions=raw_missions,
-                                    )
-                                    await db.commit()
-                                except Exception as e:
-                                    logger.warning("Failed to persist candidate missions for session %s: %s", session_id, e)
-                        elif event_type == "discovery" and isinstance(payload, dict):
-                            raw_discoveries = payload.get("discoveries")
-                            if raw_discoveries is not None:
-                                try:
-                                    await repo.update_status(
-                                        session_id=session_id,
-                                        discoveries=raw_discoveries,
-                                    )
-                                    await db.commit()
-                                except Exception as e:
-                                    logger.warning("Failed to persist discoveries for session %s: %s", session_id, e)
-                        elif event_type == "question" and isinstance(payload, dict):
-                            raw_q = payload.get("question")
-                            if raw_q is not None:
-                                try:
-                                    await repo.update_status(
-                                        session_id=session_id,
-                                        question=raw_q,
-                                    )
-                                    await db.commit()
-                                except Exception as e:
-                                    logger.warning("Failed to persist question for session %s: %s", session_id, e)
-                        elif event_type == "auth.required" and isinstance(payload, dict):
-                            raw_auth = payload.get("request") or payload
-                            try:
-                                await repo.update_status(
-                                    session_id=session_id,
-                                    credential_request=raw_auth,
-                                    )
-                                await db.commit()
-                            except Exception as e:
-                                logger.warning("Failed to persist credential request for session %s: %s", session_id, e)
-                        elif event_type == "brand.discovered" and isinstance(payload, dict):
-                            if resolved_project_id:
-                                try:
-                                    proj_to_update = await self.project_repo.get_by_id(resolved_project_id)
-                                    if proj_to_update:
-                                        cur_env = dict(proj_to_update.env_config or {})
-                                        new_logo = payload.get("logo_url")
-                                        if new_logo and cur_env.get("logo_url") != new_logo:
-                                            cur_env["logo_url"] = new_logo
-                                            if payload.get("favicon_url"):
-                                                cur_env["favicon_url"] = payload.get("favicon_url")
-                                            proj_to_update.env_config = cur_env
-                                            await db.commit()
-                                except Exception as be:
-                                    logger.debug("Could not update project brand on event: %s", be)
-                    except Exception as ex:
-                        logger.warning("Failed to record event %s: %s", event_type, ex)
-                        try:
-                            await db.rollback()
-                        except Exception:
-                            pass
 
-            existing_browser = _active_browser_sessions.get(session_id)
+def _register_exploration_task(session_id, coro):
+    import asyncio
 
-            # Resolve project ID if not explicitly passed
-            resolved_project_id = project_id
-            if resolved_project_id is None:
-                try:
-                    sess = await repo.get_by_id_and_user(session_id, user_id)
-                    if sess:
-                        resolved_project_id = sess.project_id
-                except Exception as e:
-                    logger.debug("Could not resolve session project_id: %s", e)
+    # Cancel previous task if exists
+    prev = _active_exploration_tasks.get(session_id)
+    if prev and not prev.done():
+        try:
+            prev.cancel()
+        except Exception:
+            pass
 
-            # Resolve a project credential so generated auth journeys can
-            # reference it by id instead of embedding secrets in steps.
-            # Also populate decrypted credential for progressive exploration if not provided.
-            credential_id: str | None = None
-            if resolved_project_id:
-                try:
-                    from app.modules.credentials.repository import CredentialRepository
-                    cred_repo = CredentialRepository(db)
-                    project_creds = await cred_repo.list_by_project(resolved_project_id, limit=1)
-                    if project_creds:
-                        cred_obj = project_creds[0]
-                        credential_id = cred_obj.name
-                        if credential is None and (getattr(cred_obj, "password", None) or getattr(cred_obj, "value", None)):
-                            from app.modules.credentials.crypto import decrypt_credential
-                            try:
-                                pass_to_decrypt = getattr(cred_obj, "password", None) or getattr(cred_obj, "value", None)
-                                decrypted_val = decrypt_credential(pass_to_decrypt)
-                                credential = {"email": getattr(cred_obj, "email", None) or cred_obj.name, "password": decrypted_val}
-                            except Exception as ex:
-                                logger.error("Could not decrypt project credential for exploration: %s", ex)
-                except Exception as e:
-                    logger.debug("Could not resolve project credential for exploration: %s", e)
+    task = asyncio.create_task(coro)
+    _active_exploration_tasks[session_id] = task
 
-            engine = ExplorationEngine(
-                exploration_id=session_id,
-                url=url,
-                goal=goal,
-                event_emitter=event_emitter,
-                existing_browser=existing_browser,
-                credential_id=credential_id,
-                project_id=resolved_project_id,
-                db_session=db,
-            )
+    def _cleanup(t):
+        try:
+            if _active_exploration_tasks.get(session_id) is t:
+                _active_exploration_tasks.pop(session_id, None)
+        except Exception:
+            pass
 
-            try:
-                # Run exploration with timeout
-                result = await asyncio.wait_for(
-                    engine.explore(
-                        credential=credential,
-                        selected_role=selected_role,
-                        create_account=create_account,
-                    ),
-                    timeout=EXPLORATION_TIMEOUT_SECONDS,
-                )
-
-                # Wait for background screenshot tasks before touching shared session
-                try:
-                    await asyncio.wait_for(engine.drain_background(), timeout=5.0)
-                except Exception:
-                    pass
-
-                # Store browser session for navigation if exploration succeeded or needs input
-                if engine._browser and result.get("status") in (
-                    ExplorationStatus.READY,
-                    ExplorationStatus.AUTH_REQUIRED,
-                    ExplorationStatus.ASKING,
-                ):
-                    _active_browser_sessions[session_id] = engine._browser
-                elif result.get("status") in (ExplorationStatus.FAILED, ExplorationStatus.CANCELLED):
-                    await self.cleanup_browser_session(session_id)
-
-                # Flush remaining events before final status update
-                await db.flush()
-
-                status = result.get("status", ExplorationStatus.READY)
-                # Engine already emitted state_change for terminal states;
-                # just persist the final session data
-                await repo.update_status(
-                    session_id=session_id,
-                    status=status,
-                    error_message=result.get("error_message"),
-                    discoveries=result.get("discoveries"),
-                    candidate_missions=result.get("candidate_missions"),
-                    question=result.get("question"),
-                    credential_request=result.get("credential_request"),
-                    selected_role=result.get("selected_role") or selected_role,
-                    goal=result.get("goal") or goal,
-                    clear_credential_request=(result.get("credential_request") is None and status != ExplorationStatus.AUTH_REQUIRED),
-                    clear_question=(result.get("question") is None and status != ExplorationStatus.ASKING),
-                )
-
-                if status == ExplorationStatus.READY and resolved_project_id:
-                    try:
-                        disc_data = result.get("discovery_result")
-                        if disc_data:
-                            from app.modules.product_graph.schemas import DiscoveryResult
-                            from app.modules.product_graph.service import ProductGraphService
-                            disc_obj = DiscoveryResult.model_validate(disc_data)
-                            pg_service = ProductGraphService(db)
-                            await pg_service.upsert_from_discovery(resolved_project_id, disc_obj)
-                            await event_emitter("product_graph.updated", {"project_id": str(resolved_project_id)})
-                    except Exception as pg_e:
-                        logger.warning("Could not persist discovery to Product Graph: %s", pg_e)
-
-                    brand_data = result.get("brand_metadata")
-                    if brand_data:
-                        try:
-                            proj_final = await self.project_repo.get_by_id(resolved_project_id)
-                            if proj_final:
-                                final_env = dict(proj_final.env_config or {})
-                                if brand_data.get("logo_url"):
-                                    final_env["logo_url"] = brand_data["logo_url"]
-                                if brand_data.get("favicon_url"):
-                                    final_env["favicon_url"] = brand_data["favicon_url"]
-                                proj_final.env_config = final_env
-                        except Exception as b_err:
-                            logger.debug("Could not save final brand metadata: %s", b_err)
-
-                await db.commit()
-
-            except asyncio.CancelledError:
-                logger.info("Exploration flow cancelled for session %s", session_id)
-                engine.cancel_background()
-                try:
-                    if engine._browser:
-                        await asyncio.shield(engine._browser.close())
-                except Exception:
-                    pass
-                raise
-
-            except asyncio.TimeoutError:
-                error_msg = f"Exploration timed out after {EXPLORATION_TIMEOUT_SECONDS}s"
-                logger.warning("Exploration %s timed out", session_id)
-                engine.cancel_background()
-                try:
-                    if engine._browser:
-                        await asyncio.shield(engine._browser.close())
-                except Exception:
-                    pass
-                await _mark_failed_fresh(error_msg, reason="timeout")
-
-            except Exception as e:
-                logger.exception("Exploration flow failed for session %s: %s", session_id, e)
-                engine.cancel_background()
-                try:
-                    if engine._browser:
-                        await asyncio.shield(engine._browser.close())
-                except Exception:
-                    pass
-                await _mark_failed_fresh(str(e))
+    task.add_done_callback(_cleanup)
+    return task

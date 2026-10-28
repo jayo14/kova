@@ -156,6 +156,36 @@ class Settings(BaseSettings):
         val = int(v) if v is not None else 50
         return min(max(val, 1), 200)
 
+    # Exploration budget: hard caps to prevent unbounded autonomous sessions
+    EXPLORATION_MAX_WALL_CLOCK_SECONDS: int = 600
+    EXPLORATION_MAX_PAGES: int = 50
+    EXPLORATION_MAX_ACTIONS: int = 200
+    EXPLORATION_MAX_MODEL_CALLS: int = 100
+
+    @field_validator("EXPLORATION_MAX_WALL_CLOCK_SECONDS", mode="before")
+    @classmethod
+    def cap_exploration_wall_clock(cls, v: Any) -> int:
+        val = int(v) if v is not None else 600
+        return min(max(val, 30), 3600)
+
+    @field_validator("EXPLORATION_MAX_PAGES", mode="before")
+    @classmethod
+    def cap_exploration_max_pages(cls, v: Any) -> int:
+        val = int(v) if v is not None else 50
+        return min(max(val, 1), 500)
+
+    @field_validator("EXPLORATION_MAX_ACTIONS", mode="before")
+    @classmethod
+    def cap_exploration_max_actions(cls, v: Any) -> int:
+        val = int(v) if v is not None else 200
+        return min(max(val, 1), 2000)
+
+    @field_validator("EXPLORATION_MAX_MODEL_CALLS", mode="before")
+    @classmethod
+    def cap_exploration_max_model_calls(cls, v: Any) -> int:
+        val = int(v) if v is not None else 100
+        return min(max(val, 1), 1000)
+
     # Page readiness: how long Kova waits for a slow / sleeping deployment to
     # serve the real application before reporting it as unresolved.
     PAGE_READINESS_TIMEOUT_SECONDS: float = 20.0
