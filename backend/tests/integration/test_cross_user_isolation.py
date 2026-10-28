@@ -378,6 +378,14 @@ async def test_trace_download_resolved_by_execution_id_and_authorized(
         res = await client.get(f"/api/v1/executions/{exec_a.id}/trace", headers=headers_a)
         assert res.status_code == 404
 
+        # Report sharing signatures do not grant access to the raw trace.
+        from app.api.routes.executions import _generate_report_signature
+        share_signature = _generate_report_signature(exec_a.id)
+        anonymous_trace = await client.get(
+            f"/api/v1/executions/{exec_a.id}/trace?signature={share_signature}"
+        )
+        assert anonymous_trace.status_code == 401
+
         # Now record the trace against the execution in the evidence table.
         db_session.add(
             Evidence(
