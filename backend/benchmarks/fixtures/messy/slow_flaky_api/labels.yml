@@ -1,0 +1,5 @@
+description: The API responds after three seconds and fails its first request.
+journeys:
+  - name: Retry a slow submission
+    outcome: The first request fails and a later request reports completion.
+planted_defects: []

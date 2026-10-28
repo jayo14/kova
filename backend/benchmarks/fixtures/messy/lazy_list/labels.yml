@@ -1,0 +1,5 @@
+description: A list appends additional records only when the page is scrolled.
+journeys:
+  - name: Browse loaded records
+    outcome: Scrolling reveals records beyond the initial ten.
+planted_defects: []

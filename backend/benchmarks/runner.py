@@ -126,7 +126,11 @@ class BenchmarkRunner:
         # Dynamically import fixture ASGI app
         try:
             mod = importlib.import_module(fixture.app_module)
-            app = getattr(mod, "app")
+            app = (
+                getattr(mod, "make_app")(fixture.app_factory)
+                if fixture.app_factory
+                else getattr(mod, "app")
+            )
         except Exception as e:
             logger.error("Failed to load fixture app %s: %s", fixture.app_module, e)
             return FixtureRunResult(
@@ -222,6 +226,9 @@ class BenchmarkRunner:
         auth_success = False
         flow_completed = False
         notes = ""
+        journeys_found = 0
+        false_journeys_proposed = 0
+        steps_executed = 0
 
         try:
             await browser.start()
@@ -278,6 +285,25 @@ class BenchmarkRunner:
                 flows, _ = await gen.generate(
                     GenerationRequest(project_id=project.id, target_capability=target_cap)
                 )
+                journeys_found = len(flows)
+                expected_names = {
+                    " ".join(name.casefold().split())
+                    for name in fixture.expected_scenarios
+                }
+                for flow in flows:
+                    flow_name = " ".join(str(getattr(flow, "name", "")).casefold().split())
+                    flow_tokens = set(flow_name.split())
+                    matches_label = any(
+                        flow_name == expected
+                        or (
+                            flow_tokens
+                            and len(flow_tokens & set(expected.split())) / len(flow_tokens) >= 0.5
+                        )
+                        for expected in expected_names
+                    )
+                    if not matches_label:
+                        false_journeys_proposed += 1
+                    steps_executed += len(getattr(flow, "steps", []) or [])
 
             # Stage D: Execute interactive workflow
             f_id = fixture.fixture_id
@@ -414,6 +440,9 @@ class BenchmarkRunner:
 
         expected = len(fixture.known_defects)
         false_negatives = max(0, expected - detected_defects)
+        false_passes = int(expected > 0 and flow_completed and detected_defects == 0)
+        false_fails = int(expected == 0 and (not flow_completed or detected_defects > 0))
+        unverified = not flow_completed or not evidence_valid
         duration = max(0.05, time.perf_counter() - start_time)
 
         return FixtureRunResult(
@@ -433,6 +462,14 @@ class BenchmarkRunner:
             flow_completed=flow_completed,
             evidence_completeness=evidence_completeness,
             tokens_used=tokens_used,
+            journeys_found=journeys_found,
+            journeys_labeled=len(fixture.expected_scenarios),
+            false_journeys_proposed=false_journeys_proposed,
+            steps_executed=steps_executed,
+            false_passes=false_passes,
+            false_fails=false_fails,
+            unverified=unverified,
+            success_without_evidence=flow_completed and not evidence_valid,
         )
 
     def _compute_report(
@@ -481,6 +518,8 @@ class BenchmarkRunner:
         avg_cost = total_cost / total_fixtures
         avg_time = total_duration / total_fixtures
         avg_calls = total_model_calls / total_fixtures
+        defective_fixtures = max(1, sum(r.expected_defects > 0 for r in self.results))
+        clean_fixtures = max(1, sum(r.expected_defects == 0 for r in self.results))
 
         metrics = BenchmarkMetrics(
             scenario_relevance=scenario_relevance,
@@ -496,6 +535,18 @@ class BenchmarkRunner:
             flow_completion_rate=flow_completion_rate,
             evidence_completeness=evidence_completeness,
             total_tokens=total_tokens,
+            journeys_found=sum(r.journeys_found for r in self.results),
+            journeys_labeled=sum(r.journeys_labeled for r in self.results),
+            false_journeys_proposed=sum(r.false_journeys_proposed for r in self.results),
+            completion_rate=flow_completion_rate,
+            avg_steps_per_journey=(
+                sum(r.steps_executed for r in self.results)
+                / max(1, sum(r.journeys_found for r in self.results))
+            ),
+            false_pass_rate=sum(r.false_passes for r in self.results) / defective_fixtures,
+            false_fail_rate=sum(r.false_fails for r in self.results) / clean_fixtures,
+            unverified_rate=sum(r.unverified for r in self.results) / total_fixtures,
+            success_without_evidence=sum(r.success_without_evidence for r in self.results),
         )
 
         return BenchmarkReport(

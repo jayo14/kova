@@ -1,0 +1,5 @@
+description: Generic controls with a click-only div, icon-only button, and one named button.
+journeys:
+  - name: Activate a control
+    outcome: The visible state changes from idle to an activated state.
+planted_defects: []

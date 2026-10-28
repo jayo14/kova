@@ -1,0 +1,5 @@
+description: A public information site has no login or authenticated workflow.
+journeys:
+  - name: Browse service information
+    outcome: Features and contact pages are reachable.
+planted_defects: []

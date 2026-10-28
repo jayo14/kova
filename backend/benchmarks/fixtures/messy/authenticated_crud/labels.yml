@@ -1,0 +1,5 @@
+description: A generic record management workflow is available after sign-in.
+journeys:
+  - name: Sign in and create a record
+    outcome: A newly created record appears in the record list.
+planted_defects: []

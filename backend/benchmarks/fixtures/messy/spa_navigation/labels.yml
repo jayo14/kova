@@ -1,0 +1,5 @@
+description: Client-side navigation changes history and view content without links.
+journeys:
+  - name: Open records and settings
+    outcome: The URL and rendered section change for both destinations.
+planted_defects: []

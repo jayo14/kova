@@ -1,0 +1,5 @@
+description: The page contains an open shadow root and an embedded form.
+journeys:
+  - name: Add item and submit feedback
+    outcome: The shadow control responds and the embedded form accepts input.
+planted_defects: []

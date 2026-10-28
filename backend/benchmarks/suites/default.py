@@ -16,6 +16,7 @@ class FixtureDef:
     expected_scenarios: list[str]
     app_module: str
     path: Path
+    app_factory: str | None = None
 
 
 @dataclass
@@ -57,6 +58,31 @@ def load_default_suite() -> BenchmarkSuite:
                 expected_scenarios=expected_scenarios,
                 app_module=f"benchmarks.fixtures.{item['path']}.app",
                 path=f_dir,
+            )
+        )
+    return suite
+
+
+def load_messy_suite() -> BenchmarkSuite:
+    """Load the local stress fixtures and their per-app proof/defect labels."""
+    manifest = FIXTURES_DIR / "tier_a_messy.yml"
+    with open(manifest, "r", encoding="utf-8") as stream:
+        items = yaml.safe_load(stream) or []
+    suite = BenchmarkSuite(name="tier-a-messy")
+    for item in items:
+        fixture_path = FIXTURES_DIR / item["path"]
+        with open(fixture_path / "labels.yml", "r", encoding="utf-8") as stream:
+            labels = yaml.safe_load(stream) or {}
+        journeys = labels.get("journeys", [])
+        suite.fixtures.append(
+            FixtureDef(
+                fixture_id=item["id"],
+                description=labels.get("description", ""),
+                known_defects=labels.get("planted_defects", []),
+                expected_scenarios=[journey["name"] for journey in journeys],
+                app_module="benchmarks.fixtures.messy_support",
+                path=fixture_path,
+                app_factory=item["factory"],
             )
         )
     return suite
