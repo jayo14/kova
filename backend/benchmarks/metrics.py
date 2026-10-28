@@ -29,6 +29,16 @@ class BenchmarkMetrics(BaseModel):
     flow_completion_rate: float = Field(default=1.0, ge=0.0, le=1.0)
     evidence_completeness: float = Field(default=1.0, ge=0.0, le=1.0)
     total_tokens: int = Field(default=0, ge=0)
+    # Reliability scorecard metrics use measured fixture-run observations.
+    journeys_found: int = Field(default=0, ge=0)
+    journeys_labeled: int = Field(default=0, ge=0)
+    false_journeys_proposed: int = Field(default=0, ge=0)
+    completion_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    avg_steps_per_journey: float = Field(default=0.0, ge=0.0)
+    false_pass_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    false_fail_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    unverified_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    success_without_evidence: int = Field(default=0, ge=0)
 
 
 def publish_benchmark_metrics(metrics: BenchmarkMetrics) -> None:
