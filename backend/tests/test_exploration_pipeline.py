@@ -246,15 +246,6 @@ class TestNormalizeExploreStatus:
         assert ExplorationStatus.PLANNING.value == "PLANNING"
 
 
-class TestExplorationTimeout:
-    """Test exploration timeout configuration."""
-
-    def test_timeout_constant_exists(self):
-        from app.modules.exploration.service import EXPLORATION_TIMEOUT_SECONDS
-        assert EXPLORATION_TIMEOUT_SECONDS > 0
-        assert EXPLORATION_TIMEOUT_SECONDS <= 300  # Reasonable upper bound
-
-
 class TestExecutionRunner:
     """Test execution runner step normalization and error handling."""
 
@@ -341,65 +332,11 @@ class TestExecutionRunner:
         assert expected.issubset(actual)
 
 
-class TestExplorationTaskLifecycle:
-    """Test background task tracking and cancellation in ExplorationService."""
+def test_exploration_service_has_no_process_local_browser_or_task_registry():
+    import app.modules.exploration.service as service_module
 
-    @pytest.mark.asyncio
-    async def test_register_and_cancel_task(self):
-        import asyncio
-        from app.modules.exploration.service import (
-            _register_exploration_task,
-            _active_exploration_tasks,
-        )
-
-        session_id = uuid.uuid4()
-        started = asyncio.Event()
-
-        async def dummy_flow():
-            started.set()
-            try:
-                await asyncio.sleep(10)
-            except asyncio.CancelledError:
-                pass
-
-        task = _register_exploration_task(session_id, dummy_flow())
-        await started.wait()
-
-        assert session_id in _active_exploration_tasks
-        assert _active_exploration_tasks[session_id] is task
-        assert not task.done()
-
-        # Cancel task
-        task.cancel()
-        await asyncio.sleep(0.05)
-
-        assert task.cancelled() or task.done()
-        assert session_id not in _active_exploration_tasks
-
-    @pytest.mark.asyncio
-    async def test_register_cancels_previous_task(self):
-        import asyncio
-        from app.modules.exploration.service import (
-            _register_exploration_task,
-            _active_exploration_tasks,
-        )
-
-        session_id = uuid.uuid4()
-
-        async def slow_flow():
-            await asyncio.sleep(10)
-
-        task1 = _register_exploration_task(session_id, slow_flow())
-        await asyncio.sleep(0.01)
-        assert not task1.done()
-
-        task2 = _register_exploration_task(session_id, slow_flow())
-        await asyncio.sleep(0.01)
-
-        assert task1.cancelled() or task1.done()
-        assert _active_exploration_tasks.get(session_id) is task2
-
-        task2.cancel()
+    assert not hasattr(service_module, "_active_browser_sessions")
+    assert not hasattr(service_module, "_active_exploration_tasks")
 
 
 class TestLoginResolution:

@@ -1,6 +1,8 @@
 """Unit tests for exploration recovery logic."""
 
 import pytest
+from datetime import datetime, timedelta, timezone
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.modules.exploration.models import ExplorationStatus
 from app.workers.recovery import (
@@ -71,3 +73,35 @@ def test_exploration_recovery_keeps_recent_non_terminal():
     if status not in EXPLORATION_TERMINAL_STATES and age >= EXPLORATION_ABANDONED_SECONDS:
         action = "timeout"
     assert action is None
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_abandoned_exploration_worker_lost(db_session, monkeypatch):
+    from app.modules.exploration.models import ExplorationSession
+    from app.modules.exploration.repository import ExplorationEventRepository
+    from app.modules.users.models import User
+    from app.workers import recovery
+
+    user = User(email="worker-lost@example.com")
+    db_session.add(user)
+    await db_session.flush()
+    session = ExplorationSession(
+        user_id=user.id,
+        url="https://example.com",
+        status=ExplorationStatus.EXPLORING.value,
+        updated_at=datetime.now(timezone.utc)
+        - timedelta(seconds=EXPLORATION_ABANDONED_SECONDS + 1),
+    )
+    db_session.add(session)
+    await db_session.commit()
+
+    factory = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    monkeypatch.setattr(recovery, "async_session_factory", factory)
+    result = await recovery.reconcile_explorations()
+
+    assert result["timed_out"] == 1
+    await db_session.refresh(session)
+    assert session.status == ExplorationStatus.FAILED.value
+    assert session.error_message == "worker_lost"
+    events = await ExplorationEventRepository(db_session).list_by_session(session.id)
+    assert events[-1].payload["reason"] == "worker_lost"

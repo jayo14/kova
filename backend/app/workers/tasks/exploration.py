@@ -19,25 +19,19 @@ import app.modules.credentials.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-TASK_HARD_TIMEOUT = 660
+TASK_HARD_TIMEOUT = 3660
 
 
 @celery_app.task(bind=True, name="run_exploration", max_retries=1, time_limit=TASK_HARD_TIMEOUT)
 def run_exploration(
     self,
     session_id: str,
-    credential: dict | None = None,
-    selected_role: str | None = None,
-    create_account: bool = False,
 ):
     try:
         asyncio.run(
             _run_exploration_async(
                 self,
                 session_id,
-                credential=credential,
-                selected_role=selected_role,
-                create_account=create_account,
             )
         )
     except SoftTimeLimitExceeded:
@@ -47,9 +41,6 @@ def run_exploration(
 async def _run_exploration_async(
     task,
     session_id: str,
-    credential: dict | None = None,
-    selected_role: str | None = None,
-    create_account: bool = False,
 ):
     from app.infrastructure.database.session import async_session_factory
     from app.modules.exploration.models import ExplorationStatus
@@ -59,7 +50,11 @@ async def _run_exploration_async(
     )
     from app.engine.exploration.explorer import ExplorationEngine
     from app.config.settings import get_settings
-    from app.engine.execution.control import is_cancel_requested
+    from app.engine.execution.control import (
+        is_cancel_requested,
+        get_pending_input,
+        subscribe_commands,
+    )
 
     settings = get_settings()
 
@@ -68,7 +63,7 @@ async def _run_exploration_async(
         event_repo = ExplorationEventRepository(db)
 
         session_uuid = uuid.UUID(session_id)
-        session = await repo.get_by_id(session_uuid)
+        session = await repo.get_by_id(session_uuid, for_update=True)
         if session is None:
             logger.error("Exploration session %s not found", session_id)
             raise ValueError(f"Exploration session {session_id} not found")
@@ -87,7 +82,11 @@ async def _run_exploration_async(
             )
             return {"status": "skipped", "reason": "already_terminal"}
 
-        if session.status not in (ExplorationStatus.CREATED.value,):
+        resumable_states = (
+            ExplorationStatus.AUTHENTICATING.value,
+            ExplorationStatus.DISCOVERING.value,
+        )
+        if session.status != ExplorationStatus.CREATED.value and session.status not in resumable_states:
             logger.info(
                 "Exploration %s is already claimed in %s", session_id, session.status
             )
@@ -95,6 +94,20 @@ async def _run_exploration_async(
 
         await repo.update_status(session_uuid, ExplorationStatus.CONNECTING)
         await db.commit()
+
+        # Resume material is delivered through the shared Redis-backed input
+        # queue; task arguments and broker logs never contain credentials.
+        pending_inputs = await get_pending_input(session_id)
+        credential = None
+        selected_role = session.selected_role
+        create_account = False
+        for item in pending_inputs:
+            kind = item.get("kind")
+            if kind == "credentials":
+                credential = {"email": item.get("email"), "password": item.get("password")}
+                create_account = bool(item.get("create_account"))
+            elif kind == "answer":
+                selected_role = item.get("selected_role") or selected_role
 
         event_count = 0
         emit_lock = asyncio.Lock()
@@ -178,6 +191,15 @@ async def _run_exploration_async(
                             await db.commit()
                         except Exception as e:
                             logger.warning("Failed to persist budget cutoff: %s", e)
+                    elif event_type == "budget.progress" and isinstance(payload, dict):
+                        try:
+                            await repo.update_status(
+                                session_id=session_uuid,
+                                budget_used=payload.get("budget_used"),
+                            )
+                            await db.commit()
+                        except Exception as e:
+                            logger.warning("Failed to persist budget progress: %s", e)
                 except Exception as ex:
                     logger.warning("Failed to record event %s: %s", event_type, ex)
                     try:
@@ -195,22 +217,49 @@ async def _run_exploration_async(
             db_session=db,
         )
 
-        try:
-            # Run agentic exploration loop if possible
-            try:
-                if not engine._browser:
-                    from app.engine.browser.session import BrowserSession
-                    engine._browser = BrowserSession()
-                if not getattr(engine._browser, 'is_started', False):
-                    await engine._browser.start()
-                page = engine._browser.page
-                from app.engine.exploration.agent import ExplorationAgent
-                agent = ExplorationAgent(engine, page, event_emitter=event_emitter)
-                agent_result = await agent.run(max_steps=50)
-                await event_emitter("exploration.agent.summary", agent_result)
-            except Exception as agent_err:
-                logger.debug("Agent exploration skipped/failed: %s", agent_err)
+        exploration_task: asyncio.Task | None = None
 
+        async def consume_control_commands():
+            """Apply live navigation and cancellation signals from Redis."""
+            async for message in subscribe_commands(session_id):
+                command = message.get("command")
+                if command == "navigate":
+                    await engine.navigate_browser(message.get("action", ""))
+                elif command == "pause" and exploration_task and not exploration_task.done():
+                    exploration_task.cancel()
+                elif command == "cancel" and exploration_task and not exploration_task.done():
+                    exploration_task.cancel()
+
+        async def report_budget_progress():
+            while True:
+                await asyncio.sleep(5)
+                await event_emitter("budget.progress", {
+                    "budget_used": engine._get_budget_used(),
+                    "limits": engine._get_budget_limits(),
+                })
+
+        async def monitor_session_control():
+            # Postgres is the durable fallback if a Redis pub/sub notification
+            # races worker subscription or Redis reconnects mid-session.
+            while True:
+                await asyncio.sleep(1)
+                async with async_session_factory() as control_db:
+                    current = await ExplorationRepository(control_db).get_by_id(
+                        session_uuid
+                    )
+                    if not current:
+                        return
+                    if current.status in (
+                        ExplorationStatus.CANCELLED.value,
+                        ExplorationStatus.PAUSED.value,
+                    ) and exploration_task and not exploration_task.done():
+                        exploration_task.cancel()
+                        return
+
+        control_task = asyncio.create_task(consume_control_commands())
+        budget_task = asyncio.create_task(report_budget_progress())
+        state_task = asyncio.create_task(monitor_session_control())
+        try:
             if await is_cancel_requested(session_id):
                 current = await repo.get_by_id(session_uuid)
                 if current and current.status not in terminal_states:
@@ -219,12 +268,17 @@ async def _run_exploration_async(
                 logger.info("Exploration %s cancelled before start", session_id)
                 return {"status": "cancelled", "session_id": session_id}
 
-            result = await asyncio.wait_for(
-                engine.explore(
+            await event_emitter("budget.progress", {
+                "budget_used": engine._get_budget_used(),
+                "limits": engine._get_budget_limits(),
+            })
+            exploration_task = asyncio.create_task(engine.explore(
                     credential=credential,
                     selected_role=selected_role,
                     create_account=create_account,
-                ),
+                ))
+            result = await asyncio.wait_for(
+                exploration_task,
                 timeout=settings.EXPLORATION_MAX_WALL_CLOCK_SECONDS,
             )
 
@@ -234,6 +288,17 @@ async def _run_exploration_async(
                 pass
 
             await db.flush()
+
+            current_state = await repo.get_by_id(session_uuid)
+            if current_state and current_state.status == ExplorationStatus.PAUSED.value:
+                return {"status": "paused", "session_id": session_id}
+
+            result["budget_used"] = engine._get_budget_used()
+            cutoff_reason = getattr(engine, "_budget_cutoff_reason", None)
+            if isinstance(cutoff_reason, str) and cutoff_reason:
+                result["error_message"] = (
+                    f"Exploration budget reached: {cutoff_reason}"
+                )
 
             status = result.get("status", ExplorationStatus.READY)
             await repo.update_status(
@@ -290,18 +355,29 @@ async def _run_exploration_async(
             return {"status": status.lower() if isinstance(status, str) else getattr(status, "value", str(status)), "session_id": session_id}
 
         except asyncio.CancelledError:
-            logger.info("Exploration flow cancelled for session %s", session_id)
             engine.cancel_background()
             try:
                 if engine._browser:
                     await asyncio.shield(engine._browser.close())
             except Exception:
                 pass
+            current = await repo.get_by_id(session_uuid)
+            if current and current.status == ExplorationStatus.PAUSED.value:
+                logger.info("Exploration %s paused; worker released its browser", session_id)
+                return {"status": "paused", "session_id": session_id}
+            if current and current.status == ExplorationStatus.CANCELLED.value:
+                logger.info("Exploration %s cancelled by its owner", session_id)
+                return {"status": "cancelled", "session_id": session_id}
+            logger.info("Exploration flow cancelled for session %s", session_id)
             raise
 
         except asyncio.TimeoutError:
-            error_msg = f"Exploration timed out after {settings.EXPLORATION_MAX_WALL_CLOCK_SECONDS}s"
-            logger.warning("Exploration %s timed out", session_id)
+            error_msg = f"Exploration budget reached at {settings.EXPLORATION_MAX_WALL_CLOCK_SECONDS}s; partial results retained"
+            logger.warning("Exploration %s reached its wall-clock budget", session_id)
+            has_partial_results = False
+            if exploration_task and not exploration_task.done():
+                exploration_task.cancel()
+                await asyncio.gather(exploration_task, return_exceptions=True)
             engine.cancel_background()
             try:
                 if engine._browser:
@@ -312,20 +388,42 @@ async def _run_exploration_async(
                 async with async_session_factory() as fail_db:
                     fail_repo = ExplorationRepository(fail_db)
                     fail_event_repo = ExplorationEventRepository(fail_db)
+                    current = await fail_repo.get_by_id(session_uuid)
+                    has_partial_results = bool(
+                        current and (current.discoveries or current.candidate_missions)
+                    )
+                    final_status = (
+                        ExplorationStatus.READY
+                        if has_partial_results
+                        else ExplorationStatus.FAILED
+                    )
+                    budget_used = engine._get_budget_used()
                     await fail_event_repo.create(
                         exploration_id=session_uuid,
-                        event_type="exploration.failed",
-                        payload={"error": error_msg, "reason": "timeout"},
+                        event_type="budget.exceeded",
+                        payload={
+                            "error": error_msg,
+                            "reason": "max_wall_clock",
+                            "budget_used": budget_used,
+                            "limits": engine._get_budget_limits(),
+                            "partial_results": has_partial_results,
+                        },
                     )
                     await fail_repo.update_status(
                         session_id=session_uuid,
-                        status=ExplorationStatus.FAILED,
+                        status=final_status,
                         error_message=error_msg,
+                        budget_used=budget_used,
+                        budget_cutoff=datetime.now(timezone.utc),
                     )
                     await fail_db.commit()
             except Exception as ex:
                 logger.error("Failed to mark exploration %s FAILED: %s", session_id, ex)
-            return {"status": "failed", "session_id": session_id, "reason": "timeout"}
+            return {
+                "status": "ready" if has_partial_results else "failed",
+                "session_id": session_id,
+                "reason": "budget_exhausted",
+            }
 
         except Exception as e:
             logger.exception("Exploration flow failed for session %s: %s", session_id)
@@ -354,6 +452,12 @@ async def _run_exploration_async(
                 logger.exception("Failed to persist exploration failure for %s", session_id)
             raise
         finally:
+            for background_task in (control_task, budget_task, state_task):
+                background_task.cancel()
+                try:
+                    await background_task
+                except asyncio.CancelledError:
+                    pass
             try:
                 if engine._browser and getattr(engine._browser, "is_started", False):
                     await engine._browser.close()

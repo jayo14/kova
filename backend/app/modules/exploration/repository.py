@@ -33,10 +33,13 @@ class ExplorationRepository:
         await self.db.flush()
         return session
 
-    async def get_by_id(self, session_id: uuid.UUID) -> ExplorationSession | None:
-        result = await self.db.execute(
-            select(ExplorationSession).where(ExplorationSession.id == session_id)
-        )
+    async def get_by_id(
+        self, session_id: uuid.UUID, *, for_update: bool = False
+    ) -> ExplorationSession | None:
+        query = select(ExplorationSession).where(ExplorationSession.id == session_id)
+        if for_update:
+            query = query.with_for_update()
+        result = await self.db.execute(query)
         return result.scalar_one_or_none()
 
     async def get_by_id_and_user(
@@ -76,6 +79,8 @@ class ExplorationRepository:
         goal: str | None = None,
         clear_credential_request: bool = False,
         clear_question: bool = False,
+        budget_used: dict | None = None,
+        budget_cutoff: datetime | None = None,
     ) -> ExplorationSession | None:
         session = await self.get_by_id(session_id)
         if session is None:
@@ -104,6 +109,10 @@ class ExplorationRepository:
             session.project_id = project_id
         if goal is not None and (session.goal is None or not session.goal.strip()):
             session.goal = goal
+        if budget_used is not None:
+            session.budget_used = budget_used
+        if budget_cutoff is not None:
+            session.budget_cutoff = budget_cutoff
 
         session.updated_at = datetime.now(timezone.utc)
         await self.db.flush()

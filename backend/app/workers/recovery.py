@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from app.config.settings import settings
 from app.infrastructure.database.session import async_session_factory
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.repository import ExecutionRepository
@@ -14,7 +15,10 @@ from app.modules.exploration.models import (
     ExplorationSession,
     ExplorationStatus,
 )
-from app.modules.exploration.repository import ExplorationRepository
+from app.modules.exploration.repository import (
+    ExplorationEventRepository,
+    ExplorationRepository,
+)
 
 logger = logging.getLogger(__name__)
 _dispatch_tasks: set[asyncio.Task] = set()
@@ -24,7 +28,9 @@ DISPATCH_GRACE_SECONDS = 45
 ABANDONED_EXECUTION_SECONDS = 660  # worker hard limit (600s) plus cleanup grace
 
 EXPLORATION_DISPATCH_GRACE_SECONDS = 45
-EXPLORATION_ABANDONED_SECONDS = 660
+EXPLORATION_ABANDONED_SECONDS = max(
+    660, settings.EXPLORATION_MAX_WALL_CLOCK_SECONDS + 60
+)
 
 EXPLORATION_TERMINAL_STATES = {
     ExplorationStatus.COMPLETED.value,
@@ -139,50 +145,39 @@ async def reconcile_explorations() -> dict[str, int]:
         )
         sessions = list(result.scalars().all())
         repo = ExplorationRepository(db)
+        event_repo = ExplorationEventRepository(db)
 
         for session in sessions:
             age = (now - _as_utc(session.updated_at)).total_seconds()
+            # These states are durable user checkpoints. Their worker has
+            # intentionally released Chromium and they remain resumable.
+            if session.status in (
+                ExplorationStatus.READY.value,
+                ExplorationStatus.AUTH_REQUIRED.value,
+                ExplorationStatus.ASKING.value,
+                ExplorationStatus.PAUSED.value,
+            ):
+                continue
             if (
-                session.status == ExplorationStatus.CREATED.value
+                session.status in (
+                    ExplorationStatus.CREATED.value,
+                    ExplorationStatus.AUTHENTICATING.value,
+                    ExplorationStatus.DISCOVERING.value,
+                )
                 and age >= EXPLORATION_DISPATCH_GRACE_SECONDS
             ):
                 dispatch_ids.append(str(session.id))
-            elif (
-                session.status not in EXPLORATION_TERMINAL_STATES
-                and age >= EXPLORATION_ABANDONED_SECONDS
-            ):
+            elif age >= EXPLORATION_ABANDONED_SECONDS:
                 try:
                     await repo.update_status(
                         session.id,
                         ExplorationStatus.FAILED,
-                        error_code="WORKER_LOST",
                         error_message="worker_lost",
                     )
-                    timed_out += 1
-                except Exception:
-                    await db.rollback()
-                    logger.exception(
-                        "Failed to expire stale exploration %s", session.id
-                    )
-            elif (
-                session.status in (
-                    ExplorationStatus.CONNECTING.value,
-                    ExplorationStatus.LOADING.value,
-                    ExplorationStatus.VALIDATING_PAGE.value,
-                    ExplorationStatus.EXPLORING.value,
-                    ExplorationStatus.UNDERSTANDING.value,
-                    ExplorationStatus.AUTHENTICATING.value,
-                    ExplorationStatus.DISCOVERING.value,
-                    ExplorationStatus.PLANNING.value,
-                )
-                and age >= EXPLORATION_ABANDONED_SECONDS
-            ):
-                try:
-                    await repo.update_status(
-                        session.id,
-                        ExplorationStatus.FAILED,
-                        error_code="WORKER_LOST",
-                        error_message="worker_lost",
+                    await event_repo.create(
+                        exploration_id=session.id,
+                        event_type="exploration.failed",
+                        payload={"reason": "worker_lost"},
                     )
                     timed_out += 1
                 except Exception:

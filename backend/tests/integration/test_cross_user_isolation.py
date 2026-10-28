@@ -204,6 +204,8 @@ async def test_user_a_cannot_modify_user_b_exploration_session(
             ("post", f"/api/v1/exploration/{session_b.id}/credentials", {"email": "x@y.com", "password": "p"}),
             ("post", f"/api/v1/exploration/{session_b.id}/answer", {"question_id": "q1", "answer": "a1"}),
             ("post", f"/api/v1/exploration/{session_b.id}/cancel", {}),
+            ("post", f"/api/v1/exploration/{session_b.id}/pause", {}),
+            ("post", f"/api/v1/exploration/{session_b.id}/resume", {}),
             ("post", f"/api/v1/exploration/{session_b.id}/navigate/back", {}),
         ):
             res = await getattr(client, method)(path, headers=headers_a, json=body)

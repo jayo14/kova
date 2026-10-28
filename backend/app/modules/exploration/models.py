@@ -18,6 +18,7 @@ class ExplorationStatus(str, enum.Enum):
     AUTH_REQUIRED = "AUTH_REQUIRED"
     AUTHENTICATING = "AUTHENTICATING"
     ASKING = "ASKING"
+    PAUSED = "PAUSED"
     DISCOVERING = "DISCOVERING"
     PLANNING = "PLANNING"
     READY = "READY"
@@ -92,6 +93,11 @@ VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
         ExplorationStatus.EXPLORING.value,
         ExplorationStatus.FAILED.value,
         ExplorationStatus.CANCELLED.value,
+    },
+    ExplorationStatus.PAUSED.value: {
+        ExplorationStatus.DISCOVERING.value,
+        ExplorationStatus.CANCELLED.value,
+        ExplorationStatus.FAILED.value,
     },
     ExplorationStatus.DISCOVERING.value: {
         ExplorationStatus.PLANNING.value,

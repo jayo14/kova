@@ -183,10 +183,17 @@ async def test_exploration_list_and_use_existing_credentials(client, db_session,
     # Mock exploration task enqueueing.
     executed_creds = {}
 
-    async def mock_enqueue(self, session_id, credential=None, **kwargs):
-        executed_creds["credential"] = credential
+    async def mock_enqueue(self, session_id):
+        executed_creds["task_args"] = (session_id,)
+
+    async def mock_queue_input(session_id, payload):
+        executed_creds["credential"] = {
+            "email": payload.get("email"),
+            "password": payload.get("password"),
+        }
 
     monkeypatch.setattr(ExplorationService, "_enqueue_exploration", mock_enqueue)
+    monkeypatch.setattr("app.modules.exploration.service.queue_worker_input", mock_queue_input)
 
     # 2. Start an exploration session for the same domain
     start_res = await client.post(
@@ -218,6 +225,7 @@ async def test_exploration_list_and_use_existing_credentials(client, db_session,
     assert executed_creds.get("credential") is not None
     assert executed_creds["credential"]["email"] == "existing-user@testplatform.io"
     assert executed_creds["credential"]["password"] == "StoredSecretPassword123!"
+    assert executed_creds["task_args"] == (uuid.UUID(session_id),)
 
 
 @pytest.mark.asyncio
