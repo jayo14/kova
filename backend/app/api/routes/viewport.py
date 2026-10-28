@@ -20,6 +20,8 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+
+from app.api import get_current_user, get_session
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.websockets import WebSocketState
 
@@ -249,6 +251,7 @@ async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
     ticket: str = Query(default=""),
+    db: AsyncSession = Depends(get_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 
@@ -275,7 +278,7 @@ async def viewport_stream(
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
-    if not await _verify_execution_access(execution_id, user_id):
+    if not await _verify_execution_access(execution_id, user_id, db=db):
         await websocket.close(code=4003, reason="Forbidden")
         return
 

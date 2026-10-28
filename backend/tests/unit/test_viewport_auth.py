@@ -1,31 +1,18 @@
 import uuid
 from unittest.mock import AsyncMock, patch
-import jwt
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config.settings import settings
-from app.modules.auth.dependencies import _get_jwt_secret
-from app.modules.auth.token_service import create_api_token
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.flows.models import Flow
 from app.modules.projects.models import Project
 from app.modules.users.models import User
 from app.api.routes.viewport import (
-    _authenticate_ws_token,
+    create_ws_ticket,
+    consume_ws_ticket,
     _verify_execution_access,
     viewport_stream,
 )
-
-
-def _make_token(sub: str, exp: int = 9999999999, secret: str | None = None) -> str:
-    payload = {
-        "sub": sub,
-        "aud": settings.OIDC_AUDIENCE or "authenticated",
-        "exp": exp,
-        "iss": settings.effective_jwt_issuer or "kova",
-    }
-    return jwt.encode(payload, secret or _get_jwt_secret(), algorithm="HS256")
 
 
 class DummyWebSocket:
@@ -52,47 +39,24 @@ class DummyWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_authenticate_ws_token_valid():
-    user_id = str(uuid.uuid4())
-    token = _make_token(user_id)
-    res = await _authenticate_ws_token(token)
-    assert res == user_id
+async def test_create_and_consume_ticket_single_use():
+    ticket = create_ws_ticket("user-1", ttl_seconds=30)
+    assert ticket is not None
+    assert consume_ws_ticket(ticket) == "user-1"
+    # Single-use: consumed ticket no longer valid
+    assert consume_ws_ticket(ticket) is None
 
 
 @pytest.mark.asyncio
-async def test_authenticate_ws_token_expired():
-    user_id = str(uuid.uuid4())
-    token = _make_token(user_id, exp=1000000000)
-    res = await _authenticate_ws_token(token)
-    assert res is None
+async def test_consume_ticket_unknown_returns_none():
+    assert consume_ws_ticket("does-not-exist") is None
+    assert consume_ws_ticket("") is None
 
 
 @pytest.mark.asyncio
-async def test_authenticate_ws_token_forged():
-    user_id = str(uuid.uuid4())
-    token = _make_token(user_id, secret="wrong-secret-that-does-not-match")
-    res = await _authenticate_ws_token(token)
-    assert res is None
-
-
-@pytest.mark.asyncio
-async def test_authenticate_ws_token_production_no_token(monkeypatch):
-    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
-    res = await _authenticate_ws_token("")
-    assert res is None
-
-
-@pytest.mark.asyncio
-async def test_authenticate_ws_token_api_token(db_session: AsyncSession):
-    user = User(id=uuid.uuid4(), email="ws-api-user@kova.local")
-    db_session.add(user)
-    await db_session.commit()
-
-    token_obj, raw_token = await create_api_token(db_session, user.id, name="WS API Token")
-    await db_session.commit()
-
-    res = await _authenticate_ws_token(raw_token, db=db_session)
-    assert res == str(user.id)
+async def test_consume_expired_ticket_returns_none():
+    ticket = create_ws_ticket("user-1", ttl_seconds=-1)
+    assert consume_ws_ticket(ticket) is None
 
 
 @pytest.mark.asyncio
@@ -105,130 +69,52 @@ async def test_verify_execution_access(db_session: AsyncSession):
     db_session.add_all([owner, other, project, flow, execution])
     await db_session.commit()
 
-    # Owner has access
     assert await _verify_execution_access(str(execution.id), str(owner.id), db=db_session) is True
-    # Other user denied access
     assert await _verify_execution_access(str(execution.id), str(other.id), db=db_session) is False
-    # Non-existent execution denied
     assert await _verify_execution_access(str(uuid.uuid4()), str(owner.id), db=db_session) is False
 
 
+async def _open_stream(db_session, execution_id, ticket, user_objs):
+    for u in user_objs:
+        db_session.add(u)
+    await db_session.commit()
+
+    ws = DummyWebSocket()
+    with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
+         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
+        try:
+            await viewport_stream(ws, str(execution_id), ticket=ticket, db=db_session)
+        except Exception:
+            pass
+    return ws
+
+
 @pytest.mark.asyncio
-async def test_viewport_stream_valid_token(db_session: AsyncSession):
+async def test_viewport_stream_valid_ticket(db_session: AsyncSession):
     owner = User(id=uuid.uuid4(), email="owner-ws@kova.local")
     project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
     flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
     execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
 
-    ws = DummyWebSocket()
-    token = _make_token(str(owner.id))
-
-    with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
-         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
-        try:
-            await viewport_stream(ws, str(execution.id), token=token, db=db_session)
-        except Exception:
-            pass
+    ticket = create_ws_ticket(str(owner.id), ttl_seconds=30)
+    ws = await _open_stream(db_session, execution.id, ticket, [owner, project, flow, execution])
 
     assert ws.accepted is True
     assert ws.closed_code is None
 
 
 @pytest.mark.asyncio
-async def test_viewport_stream_expired_token(db_session: AsyncSession):
-    owner = User(id=uuid.uuid4(), email="owner-ws2@kova.local")
-    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
-    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
-    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
-
-    ws = DummyWebSocket()
-    expired_token = _make_token(str(owner.id), exp=1000)
-
-    await viewport_stream(ws, str(execution.id), token=expired_token, db=db_session)
-    assert ws.accepted is False
-    assert ws.closed_code == 4001
-
-
-@pytest.mark.asyncio
-async def test_viewport_stream_forged_token(db_session: AsyncSession):
-    owner = User(id=uuid.uuid4(), email="owner-ws3@kova.local")
-    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
-    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
-    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
-
-    ws = DummyWebSocket()
-    forged_token = _make_token(str(owner.id), secret="attacker-forged-secret-123456789012")
-
-    await viewport_stream(ws, str(execution.id), token=forged_token, db=db_session)
-    assert ws.accepted is False
-    assert ws.closed_code == 4001
-
-
-@pytest.mark.asyncio
-async def test_viewport_stream_another_user_token(db_session: AsyncSession):
-    owner = User(id=uuid.uuid4(), email="owner-ws4@kova.local")
-    other_user = User(id=uuid.uuid4(), email="other-ws4@kova.local")
-    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
-    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
-    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, other_user, project, flow, execution])
-    await db_session.commit()
-
-    ws = DummyWebSocket()
-    other_token = _make_token(str(other_user.id))
-
-    await viewport_stream(ws, str(execution.id), token=other_token, db=db_session)
-    assert ws.accepted is False
-    assert ws.closed_code == 4003
-
-
-@pytest.mark.asyncio
-async def test_viewport_stream_production_no_token(db_session: AsyncSession, monkeypatch):
-    monkeypatch.setattr(settings, "ENVIRONMENT", "production")
-    owner = User(id=uuid.uuid4(), email="owner-ws5@kova.local")
-    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
-    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
-    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
-
-    ws = DummyWebSocket()
-    await viewport_stream(ws, str(execution.id), token="", db=db_session)
-    assert ws.accepted is False
-    assert ws.closed_code == 4001
-
-
-@pytest.mark.asyncio
-async def test_viewport_stream_single_use_ticket(db_session: AsyncSession):
-    from app.api.routes.viewport import create_ws_ticket, consume_ws_ticket
+async def test_viewport_stream_ticket_single_use(db_session: AsyncSession):
     owner = User(id=uuid.uuid4(), email="owner-ticket@kova.local")
     project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
     flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
     execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
 
     ticket = create_ws_ticket(str(owner.id), ttl_seconds=30)
-    assert ticket is not None
+    ws1 = await _open_stream(db_session, execution.id, ticket, [owner, project, flow, execution])
+    assert ws1.accepted is True
 
-    ws = DummyWebSocket()
-    with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
-         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
-        try:
-            await viewport_stream(ws, str(execution.id), ticket=ticket, db=db_session)
-        except Exception:
-            pass
-
-    assert ws.accepted is True
-    assert ws.closed_code is None
-
-    # Single-use check: same ticket used a second time must fail immediately
+    # Same ticket used a second time must fail immediately
     ws2 = DummyWebSocket()
     await viewport_stream(ws2, str(execution.id), ticket=ticket, db=db_session)
     assert ws2.accepted is False
@@ -237,17 +123,42 @@ async def test_viewport_stream_single_use_ticket(db_session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_viewport_stream_expired_ticket(db_session: AsyncSession):
-    from app.api.routes.viewport import create_ws_ticket
     owner = User(id=uuid.uuid4(), email="owner-expired-ticket@kova.local")
     project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
     flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
     execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
-    db_session.add_all([owner, project, flow, execution])
-    await db_session.commit()
 
-    # Create ticket with -1 second TTL so it is already expired
     ticket = create_ws_ticket(str(owner.id), ttl_seconds=-1)
-    ws = DummyWebSocket()
-    await viewport_stream(ws, str(execution.id), ticket=ticket, db=db_session)
+    ws = await _open_stream(db_session, execution.id, ticket, [owner, project, flow, execution])
+
     assert ws.accepted is False
     assert ws.closed_code == 4001
+
+
+@pytest.mark.asyncio
+async def test_viewport_stream_empty_ticket(db_session: AsyncSession):
+    owner = User(id=uuid.uuid4(), email="owner-empty@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+
+    ws = await _open_stream(db_session, execution.id, "", [owner, project, flow, execution])
+
+    assert ws.accepted is False
+    assert ws.closed_code == 4001
+
+
+@pytest.mark.asyncio
+async def test_viewport_stream_another_user_ticket(db_session: AsyncSession):
+    owner = User(id=uuid.uuid4(), email="owner-other@kova.local")
+    other_user = User(id=uuid.uuid4(), email="other-other@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.COMPLETED.value)
+
+    # Ticket issued to a different user
+    ticket = create_ws_ticket(str(other_user.id), ttl_seconds=30)
+    ws = await _open_stream(db_session, execution.id, ticket, [owner, other_user, project, flow, execution])
+
+    assert ws.accepted is False
+    assert ws.closed_code == 4003
