@@ -1,7 +1,7 @@
 """Unit tests for the ExplorationService layer (task enqueuing)."""
 
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from app.modules.exploration.schemas import (
     ExplorationAnswerSubmit,
 )
 from app.modules.exploration.service import ExplorationService
+from app.modules.credentials.service import CredentialService
 from app.modules.users.models import User
 
 
@@ -77,6 +78,45 @@ async def test_submit_credentials_enqueues_with_credential(db_session):
     assert enqueued["credential"] == {"email": "user@example.com", "password": "secret123"}
     assert enqueued["selected_role"] is None
     assert enqueued["create_account"] is False
+
+
+@pytest.mark.asyncio
+async def test_credential_storage_errors_do_not_log_submitted_secrets(db_session, caplog):
+    service = ExplorationService(db_session)
+    user_id = uuid.uuid4()
+    user = User(id=user_id, email="log-check@kova.test", name="Log Check")
+    db_session.add(user)
+    await db_session.flush()
+    project = await service.project_repo.create(
+        user_id=user_id,
+        name="Log Check Project",
+        base_url="https://example.test",
+    )
+    session = await service.repo.create(
+        user_id=user_id,
+        url="https://example.test/login",
+        goal=None,
+        project_id=project.id,
+    )
+    await db_session.commit()
+
+    with patch.object(
+        CredentialService,
+        "create_credential",
+        new=AsyncMock(side_effect=RuntimeError("password-secret-value")),
+    ), patch.object(ExplorationService, "_enqueue_exploration", new=AsyncMock()):
+        await service.submit_credentials(
+            session_id=session.id,
+            user_id=user_id,
+            data=ExplorationCredentialSubmit(
+                email="private@example.test",
+                password="password-secret-value",
+                save=True,
+            ),
+        )
+
+    assert "password-secret-value" not in caplog.text
+    assert "private@example.test" not in caplog.text
 
 
 @pytest.mark.asyncio
