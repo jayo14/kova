@@ -190,7 +190,7 @@ class ExplorationService:
             try:
                 password = decrypt_credential(raw_pass)
             except Exception as ex:
-                logger.error("Failed to decrypt stored credential: %s", ex)
+                logger.error("Failed to decrypt stored credential")
                 raise ValueError(
                     "Failed to decrypt stored credential; stored value is corrupt or invalid."
                 ) from ex
