@@ -16,13 +16,12 @@ from app.api.routes.viewport import (
 
 
 class DummyWebSocket:
-    def __init__(self, incoming_text=None):
+    def __init__(self):
         self.accepted = False
         self.closed_code = None
         self.closed_reason = None
         self.client_state = 1
         self.sent_messages = []
-        self.incoming_text = incoming_text
 
     async def accept(self):
         self.accepted = True
@@ -35,9 +34,6 @@ class DummyWebSocket:
         self.sent_messages.append(data)
 
     async def receive_text(self):
-        if self.incoming_text is not None:
-            value, self.incoming_text = self.incoming_text, None
-            return value
         from starlette.websockets import WebSocketDisconnect
         raise WebSocketDisconnect(code=1000)
 
@@ -83,13 +79,11 @@ async def _open_stream(db_session, execution_id, ticket, user_objs):
         db_session.add(u)
     await db_session.commit()
 
-    import json
-    ws = DummyWebSocket(json.dumps({"type": "authenticate", "ticket": ticket}))
+    ws = DummyWebSocket()
     with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
-         patch("app.api.routes.viewport.get_control_record", new=AsyncMock(return_value=type("Record", (), {"state": "running", "generation": 1, "checkpoint": None})())), \
          patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
         try:
-            await viewport_stream(ws, str(execution_id), db=db_session)
+            await viewport_stream(ws, str(execution_id), ticket=ticket, db=db_session)
         except Exception:
             pass
     return ws
@@ -121,10 +115,9 @@ async def test_viewport_stream_ticket_single_use(db_session: AsyncSession):
     assert ws1.accepted is True
 
     # Same ticket used a second time must fail immediately
-    import json
-    ws2 = DummyWebSocket(json.dumps({"type": "authenticate", "ticket": ticket}))
-    await viewport_stream(ws2, str(execution.id), db=db_session)
-    assert ws2.accepted is True
+    ws2 = DummyWebSocket()
+    await viewport_stream(ws2, str(execution.id), ticket=ticket, db=db_session)
+    assert ws2.accepted is False
     assert ws2.closed_code == 4001
 
 
@@ -138,7 +131,7 @@ async def test_viewport_stream_expired_ticket(db_session: AsyncSession):
     ticket = create_ws_ticket(str(owner.id), ttl_seconds=-1)
     ws = await _open_stream(db_session, execution.id, ticket, [owner, project, flow, execution])
 
-    assert ws.accepted is True
+    assert ws.accepted is False
     assert ws.closed_code == 4001
 
 
@@ -151,7 +144,7 @@ async def test_viewport_stream_empty_ticket(db_session: AsyncSession):
 
     ws = await _open_stream(db_session, execution.id, "", [owner, project, flow, execution])
 
-    assert ws.accepted is True
+    assert ws.accepted is False
     assert ws.closed_code == 4001
 
 
@@ -167,24 +160,5 @@ async def test_viewport_stream_another_user_ticket(db_session: AsyncSession):
     ticket = create_ws_ticket(str(other_user.id), ttl_seconds=30)
     ws = await _open_stream(db_session, execution.id, ticket, [owner, other_user, project, flow, execution])
 
-    assert ws.accepted is True
+    assert ws.accepted is False
     assert ws.closed_code == 4003
-
-
-@pytest.mark.asyncio
-async def test_viewport_authenticates_from_first_message_without_url_ticket():
-    import json
-    from types import SimpleNamespace
-    import inspect
-
-    assert "ticket" not in inspect.signature(viewport_stream).parameters
-    user_id = str(uuid.uuid4())
-    ticket = create_ws_ticket(user_id, ttl_seconds=30)
-    ws = DummyWebSocket(json.dumps({"type": "authenticate", "ticket": ticket}))
-    with patch("app.api.routes.viewport._verify_execution_access", new=AsyncMock(return_value=True)), \
-         patch("app.api.routes.viewport.get_control_record", new=AsyncMock(return_value=SimpleNamespace(state="running", generation=1, checkpoint=None))), \
-         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
-        await viewport_stream(ws, str(uuid.uuid4()), db=None)
-
-    assert ws.accepted is True
-    assert ws.closed_code is None
