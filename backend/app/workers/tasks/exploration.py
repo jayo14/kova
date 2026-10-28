@@ -196,6 +196,21 @@ async def _run_exploration_async(
         )
 
         try:
+            # Run agentic exploration loop if possible
+            try:
+                if not engine._browser:
+                    from app.engine.browser.session import BrowserSession
+                    engine._browser = BrowserSession()
+                if not getattr(engine._browser, 'is_started', False):
+                    await engine._browser.start()
+                page = engine._browser.page
+                from app.engine.exploration.agent import ExplorationAgent
+                agent = ExplorationAgent(engine, page, event_emitter=event_emitter)
+                agent_result = await agent.run(max_steps=50)
+                await event_emitter("exploration.agent.summary", agent_result)
+            except Exception as agent_err:
+                logger.debug("Agent exploration skipped/failed: %s", agent_err)
+
             if await is_cancel_requested(session_id):
                 current = await repo.get_by_id(session_uuid)
                 if current and current.status not in terminal_states:
