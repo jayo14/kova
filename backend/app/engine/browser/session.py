@@ -178,7 +178,17 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
 
     # For literal localhost:
     if host == "localhost":
-        return allow_loopback
+        try:
+            if getattr(settings, "ALLOW_LOCALHOST", False):
+                allowlist = getattr(settings, "ALLOW_LOCALHOST_TARGETS", "") or ""
+                allowed = [a.strip().lower() for a in allowlist.split(",") if a.strip()]
+                if not allowed or host in allowed or any(host.endswith("." + a) or a == host for a in allowed):
+                    return True
+            if allow_loopback and not getattr(settings, "is_production", False):
+                return True
+            return False
+        except Exception:
+            return allow_loopback
 
     # Resolve hostname with socket.getaddrinfo
     try:
