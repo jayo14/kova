@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     OIDC_AUDIENCE: str = "authenticated"
     JWT_SECRET_KEY: str = ""
     FAIL_ON_NETWORK_ERRORS: bool = True
-    AGENT_EXECUTION_ENABLED: bool = False  # default off in code; enabled via env in deployment
+    AGENT_EXECUTION_ENABLED: bool = True  # enabled by default when AI configured
     AGENT_EXECUTION_MAX_DURATION_SECONDS: int = 600
     VLM_ENABLED: bool = False
     VLM_MODEL: str = "gpt-4o-mini"
