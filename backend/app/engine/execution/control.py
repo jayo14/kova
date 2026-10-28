@@ -32,7 +32,10 @@ class ControlState(str, enum.Enum):
     RUNNING = "RUNNING"
     PAUSE_REQUESTED = "PAUSE_REQUESTED"
     PAUSED = "PAUSED"
+    QUIESCING = "QUIESCING"
     HUMAN_CONTROL = "HUMAN_CONTROL"
+    RECONCILING = "RECONCILING"
+    WAITING_FOR_USER = "WAITING_FOR_USER"
     RESUME_REQUESTED = "RESUME_REQUESTED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -52,6 +55,10 @@ CONTROL_ALIASES: dict[str, ControlState] = {
     "human_control": ControlState.HUMAN_CONTROL,
     "human_controlled": ControlState.HUMAN_CONTROL,
     "user_control": ControlState.HUMAN_CONTROL,
+    "quiescing": ControlState.QUIESCING,
+    "reconciling": ControlState.RECONCILING,
+    "waiting_for_user": ControlState.WAITING_FOR_USER,
+    "waitingforuser": ControlState.WAITING_FOR_USER,
     "resuming": ControlState.RESUME_REQUESTED,
     "resume_requested": ControlState.RESUME_REQUESTED,
     "completed": ControlState.COMPLETED,
