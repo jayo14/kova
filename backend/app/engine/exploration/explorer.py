@@ -2655,8 +2655,7 @@ class ExplorationEngine:
             "study": 1,
             "exam": 1,
             "test": 1,
-            "flashcard": 1,
-            "card": 1,
+                        "card": 1,
             "deck": 1,
             "learn": 1,
             "practice": 1,
@@ -2779,7 +2778,7 @@ class ExplorationEngine:
 
         # Feature routes (dashboard, workspace, quiz, study, creation, tools, settings, etc.)
         feature_keywords = [
-            "quiz", "study", "exam", "test", "flashcard", "card", "deck",
+            "quiz", "study", "exam", "test", "card", "deck",
             "course", "learn", "practice", "review", "question",
             "dashboard", "workspace", "app", "portal", "console",
             "create", "new", "edit", "manage", "builder", "generator", "generate",
@@ -4187,7 +4186,7 @@ class ExplorationEngine:
             expected_outcome = f"Report interface renders with content generation controls and document preview"
             is_functional = True
             is_core = True
-        elif any(k in path_lower for k in ["study", "flashcard", "deck", "material", "course"]):
+        elif any(k in path_lower for k in ["study", "deck", "material", "course"]):
             mission_title = f"Explore {feature_name} study resources"
             objective = f"Verify that {persona} can view and study {feature_name}"
             user_goal = f"Access educational material for {feature_name}"
@@ -4419,9 +4418,9 @@ class ExplorationEngine:
             return "logout"
 
         # Core functional capabilities (report generation, mock defence/simulations)
-        if any(kw in lower for kw in ["mock defence", "mock defense", "defence", "defense", "practice", "simulation", "quiz", "exam", "assessment"]):
+        if any(kw in lower for kw in ["practice", "simulation", "quiz", "exam", "assessment"]):
             return "practice_simulation"
-        if any(kw in lower for kw in ["create your report", "generate report", "create report", "draft report", "new report", "build report", "logbook", "siwes"]):
+        if any(kw in lower for kw in ["create", "generate", "new", "add", "submit"]):
             return "generate_report"
         if "report" in lower and not any(kw in lower for kw in ["bug", "issue", "abuse", "violation", "contact", "feedback"]):
             return "generate_report"

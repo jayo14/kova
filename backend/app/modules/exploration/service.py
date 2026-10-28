@@ -59,8 +59,6 @@ def extract_project_name(hostname: str) -> str:
 
     brand_part = parts[0] if parts else "Project"
 
-    if brand_part.lower() == "summastudy":
-        return "SummaStudy"
 
     words = [w for w in re.split(r"[-_]", brand_part) if w]
     if len(words) > 1:
