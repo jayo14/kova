@@ -469,14 +469,7 @@ class AgentReasoner:
         observation: dict,
         recent_failure: str | None = None,
     ) -> ActionProposal:
-        """Deterministic state-machine proposal for the forgot-password class.
-
-        Implements the benchmark flow semantically WITHOUT a hardcoded DOM.
-        Phase order advances only on real executor-reported state:
-          email → signup → verify → login → logout → forgot → mailbox → reset
-        Reacts to what the observation actually contains, using semantic
-        equivalence classes instead of exact strings (spec §7).
-        """
+        """Generic deterministic fallback policy (no benchmark-specific state machine)."""
         identity = memory.identity
         buttons = {(b.get("name") or "").lower(): b for b in observation.get("buttons", [])}
         links = {(l.get("name") or "").lower(): l for l in observation.get("links", [])}
