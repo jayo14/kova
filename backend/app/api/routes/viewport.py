@@ -175,60 +175,6 @@ async def _verify_execution_access(execution_id: str, user_id: str, db: AsyncSes
         return False
 
 
-async def _authenticate_ws_token(token: str, db: AsyncSession | None = None) -> str | None:
-    """Verify JWT or kova_ API token and return user_id. Returns None if invalid."""
-    import jwt
-    from app.config.settings import settings
-    from app.modules.auth.dependencies import _get_jwt_secret
-
-    if not token:
-        return None
-
-    if token.startswith("kova_"):
-        from app.infrastructure.database.session import async_session_factory
-        from app.modules.auth.token_service import verify_api_token
-        try:
-            if db is not None:
-                api_tok = await verify_api_token(db, token)
-                if api_tok:
-                    return str(api_tok.user_id)
-            else:
-                async with async_session_factory() as session:
-                    api_tok = await verify_api_token(session, token)
-                    if api_tok:
-                        return str(api_tok.user_id)
-        except Exception as e:
-            logger.warning("WebSocket API token verification failed: %s", e)
-        return None
-
-    secret = _get_jwt_secret()
-    try:
-        decode_options: dict = {"require": ["exp"]}
-        audience = settings.OIDC_AUDIENCE
-        issuer = settings.effective_jwt_issuer
-        if not audience:
-            decode_options["verify_aud"] = False
-        if not issuer:
-            decode_options["verify_iss"] = False
-
-        payload = jwt.decode(
-            token,
-            secret,
-            algorithms=["HS256"],
-            audience=audience or None,
-            issuer=issuer,
-            options=decode_options,
-        )
-        sub = payload.get("sub")
-        if sub:
-            uuid.UUID(str(sub))
-            return str(sub)
-    except Exception as e:
-        logger.warning("WebSocket JWT auth failed: %s", e)
-
-    return None
-
-
 async def _pump_frames(execution_id: str, websocket: WebSocket) -> None:
     """Relay Redis frames to the WebSocket. Latest-wins via drop-stale queue."""
     while True:
@@ -298,22 +244,16 @@ async def _pump_loop(execution_id: str, websocket: WebSocket) -> None:
             logger.debug("Pump task ended: %s", e)
 
 
-async def get_optional_session() -> AsyncSession | None:
-    """Dependency placeholder that returns None so WebSockets do not hold open persistent DB sessions."""
-    return None
-
-
 @router.websocket("/ws/viewport/{execution_id}")
 async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
     ticket: str = Query(default=""),
-    token: str = Query(default=""),
-    db: AsyncSession | None = Depends(get_optional_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 
-    Auth: Requires short-lived single-use ticket or valid session token.
+    Auth: Requires a short-lived, single-use ticket issued by POST /viewport/ticket.
+    Tokens are never accepted in WebSocket URLs.
     Ownership: Verifies user owns the execution's project.
 
     Protocol:
@@ -328,19 +268,14 @@ async def viewport_stream(
     - Client → Server: {"type": "nav", "kind": "back"|"forward"|"reload"}
     """
     raw_ticket = ticket if isinstance(ticket, str) else ""
-    raw_token = token if isinstance(token, str) else ""
 
-    user_id = None
-    if raw_ticket:
-        user_id = consume_ws_ticket(raw_ticket)
-    elif raw_token:
-        user_id = await _authenticate_ws_token(raw_token, db=db)
+    user_id = consume_ws_ticket(raw_ticket) if raw_ticket else None
 
     if not user_id:
         await websocket.close(code=4001, reason="Unauthorized")
         return
 
-    if not await _verify_execution_access(execution_id, user_id, db=db):
+    if not await _verify_execution_access(execution_id, user_id):
         await websocket.close(code=4003, reason="Forbidden")
         return
 
