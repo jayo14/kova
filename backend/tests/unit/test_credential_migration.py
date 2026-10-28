@@ -72,3 +72,16 @@ def test_migration_rejects_malformed_legacy_ciphertext(monkeypatch):
         with pytest.raises(InvalidToken):
             migration.upgrade()
     engine.dispose()
+
+
+def test_exploration_budget_migration_follows_credential_revision():
+    path = (
+        Path(__file__).parents[2]
+        / "alembic"
+        / "versions"
+        / "034_add_exploration_budget_fields.py"
+    )
+    spec = importlib.util.spec_from_file_location("exploration_budget_034", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.down_revision == "033"
