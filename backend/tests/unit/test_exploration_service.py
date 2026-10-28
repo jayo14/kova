@@ -17,10 +17,22 @@ from app.modules.credentials.service import CredentialService
 from app.modules.users.models import User
 
 
+async def _create_test_user(db_session, user_id=None):
+    user = User(
+        id=user_id or uuid.uuid4(),
+        email=f"{uuid.uuid4().hex}@kova.test",
+        name="Exploration Test",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    return user
+
+
 @pytest.mark.asyncio
 async def test_create_enqueues_exploration_task(db_session):
     """create_and_start_exploration should create a session and enqueue a worker task."""
     service = ExplorationService(db_session)
+    user = await _create_test_user(db_session)
 
     enqueued = {}
 
@@ -33,7 +45,7 @@ async def test_create_enqueues_exploration_task(db_session):
     with patch.object(ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue):
         session = await service.create_and_start_exploration(
             ExplorationCreate(url="https://example.com", goal="test goal"),
-            user_id=uuid.uuid4(),
+            user_id=user.id,
         )
 
     assert session.status == ExplorationStatus.CREATED.value
@@ -49,6 +61,7 @@ async def test_submit_credentials_enqueues_with_credential(db_session):
     service = ExplorationService(db_session)
 
     user_id = uuid.uuid4()
+    await _create_test_user(db_session, user_id)
     session = await service.repo.create(
         user_id=user_id,
         url="https://example.com/login",
@@ -125,6 +138,7 @@ async def test_submit_answer_enqueues_with_role(db_session):
     service = ExplorationService(db_session)
 
     user_id = uuid.uuid4()
+    await _create_test_user(db_session, user_id)
     session = await service.repo.create(
         user_id=user_id,
         url="https://example.com",
@@ -159,6 +173,7 @@ async def test_create_account_enqueues_with_create_account_flag(db_session):
     service = ExplorationService(db_session)
 
     user_id = uuid.uuid4()
+    await _create_test_user(db_session, user_id)
     session = await service.repo.create(
         user_id=user_id,
         url="https://example.com/signup",
@@ -192,6 +207,7 @@ async def test_cancel_session_requests_cancel_and_marks_cancelled(db_session):
     service = ExplorationService(db_session)
 
     user_id = uuid.uuid4()
+    await _create_test_user(db_session, user_id)
     session = await service.repo.create(
         user_id=user_id,
         url="https://example.com",
