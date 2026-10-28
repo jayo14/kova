@@ -3,17 +3,20 @@
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 
 from benchmarks.runner import BenchmarkRunner
-from benchmarks.suites.default import DEFAULT_SUITE
+from benchmarks.suites.default import DEFAULT_SUITE, load_messy_suite
 
 
-async def run_single_mode(agent_enabled: bool, output_prefix: str) -> None:
-    runner = BenchmarkRunner(suite=DEFAULT_SUITE, agent_enabled=agent_enabled)
+async def run_single_mode(agent_enabled: bool, output_prefix: str, suite_name: str) -> None:
+    suite = load_messy_suite() if suite_name == "tier-a-messy" else DEFAULT_SUITE
+    runner = BenchmarkRunner(suite=suite, agent_enabled=agent_enabled)
     report = await runner.run()
 
     json_path = f"{output_prefix}.json"
     md_path = f"{output_prefix}.md"
+    Path(json_path).parent.mkdir(parents=True, exist_ok=True)
 
     with open(json_path, "w", encoding="utf-8") as f:
         f.write(report.model_dump_json(indent=2))
@@ -35,13 +38,15 @@ def main():
     parser.add_argument("--both", action="store_true", help="Run both AI-off and AI-on modes and publish both")
     parser.add_argument("--output", default="benchmark_report", help="Output file prefix")
     args = parser.parse_args()
+    if args.suite not in ("default", "tier-a-messy"):
+        parser.error("suite must be 'default' or 'tier-a-messy'")
 
     if args.both:
         print("Running benchmark in dual mode (AI off and AI on)...")
-        asyncio.run(run_single_mode(agent_enabled=False, output_prefix=f"{args.output}_ai_off"))
-        asyncio.run(run_single_mode(agent_enabled=True, output_prefix=f"{args.output}_ai_on"))
+        asyncio.run(run_single_mode(agent_enabled=False, output_prefix=f"{args.output}_ai_off", suite_name=args.suite))
+        asyncio.run(run_single_mode(agent_enabled=True, output_prefix=f"{args.output}_ai_on", suite_name=args.suite))
     else:
-        asyncio.run(run_single_mode(agent_enabled=args.agent, output_prefix=args.output))
+        asyncio.run(run_single_mode(agent_enabled=args.agent, output_prefix=args.output, suite_name=args.suite))
 
 
 if __name__ == "__main__":

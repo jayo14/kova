@@ -26,6 +26,14 @@ class FixtureRunResult(BaseModel):
     flow_completed: bool = False
     evidence_completeness: float = 0.0
     tokens_used: int = 0
+    journeys_found: int = 0
+    journeys_labeled: int = 0
+    false_journeys_proposed: int = 0
+    steps_executed: int = 0
+    false_passes: int = 0
+    false_fails: int = 0
+    unverified: bool = True
+    success_without_evidence: bool = False
 
 
 class BenchmarkReport(BaseModel):
@@ -97,6 +105,14 @@ class BenchmarkReport(BaseModel):
             f"| Cost per validation | ${m.cost_per_validation_usd:.4f} | ≤$0.05 | {cost_icon} |",
             f"| Time per validation | {m.time_per_validation_seconds:.2f}s | ≤60s | {time_icon} |",
             f"| Model calls per validation | {m.model_calls_per_validation:.1f} | N/A | ℹ️ |",
+            f"| Journeys found / labeled | {m.journeys_found} / {m.journeys_labeled} | Reported | ℹ️ |",
+            f"| False journeys proposed | {m.false_journeys_proposed} | 0 desired | ℹ️ |",
+            f"| Completion rate | {m.completion_rate:.1%} | Baseline −5 pp max regression | ℹ️ |",
+            f"| Steps per journey | {m.avg_steps_per_journey:.2f} | Reported | ℹ️ |",
+            f"| False-pass rate | {m.false_pass_rate:.1%} | 0% | {'✅' if m.false_pass_rate == 0 else '❌'} |",
+            f"| False-fail rate | {m.false_fail_rate:.1%} | Reported | ℹ️ |",
+            f"| UNVERIFIED rate | {m.unverified_rate:.1%} | Reported | ℹ️ |",
+            f"| Success without evidence | {m.success_without_evidence} | 0 | {'✅' if m.success_without_evidence == 0 else '❌'} |",
             "",
             "## Per-fixture results",
             "| Fixture | Expected | Detected | FP | Completed | Auth | Evidence | Notes |",
