@@ -6,6 +6,7 @@ on:
       - 'backend/app/engine/execution/**'
       - 'backend/app/modules/validation/**'
       - 'backend/benchmarks/**'
+      - 'backend/tests/benchmarks/**'
 
 jobs:
   benchmark:
@@ -54,3 +55,28 @@ jobs:
         with:
           name: benchmark-report
           path: /tmp/benchmark_*.*
+
+  messy-tier-a:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e backend/
+          playwright install --with-deps chromium
+      - name: Run deterministic messy-fixture scorecard
+        run: python -m benchmarks.cli --suite tier-a-messy --output /tmp/tier_a_messy
+        working-directory: backend
+      - name: Enforce reliability gates against committed baseline
+        run: |
+          python -m benchmarks.scorecard_gate \
+            benchmarks/baselines/tier_a_messy.json \
+            /tmp/tier_a_messy.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier-a-messy-scorecard
+          path: /tmp/tier_a_messy.*
