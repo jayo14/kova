@@ -42,13 +42,27 @@ Native browser `EventSource` cannot send custom `Authorization: Bearer <token>` 
 - Frontend issues request with `withCredentials: true`.
 - Backend validates HTTP-only session cookie (`sb-access-token` or custom session cookie).
 
-### Preferred Option B: Authenticated Fetch Stream
-- Frontend uses `fetch` with the access token in the `Authorization` header and reads the response stream.
-- If the app and API share an origin, an HTTP-only session cookie is also supported.
-- Do not put bearer tokens, tickets, or other credentials in the stream URL. URLs are commonly copied into logs, browser history, and monitoring systems.
+### Preferred Option B: Short-Lived Stream Ticket
+- Frontend requests a single-use, short-lived (e.g., 30–60 second) ticket:
+  ```http
+  POST /api/v1/executions/{execution_id}/stream-ticket
+  Authorization: Bearer <supabase_access_token>
+  ```
+  Response:
+  ```json
+  {
+    "ticket": "st_9b1deb4d3b7d4b89",
+    "expires_in": 30
+  }
+  ```
+- Browser connects using:
+  ```
+  GET /api/v1/executions/{execution_id}/events/stream?ticket=st_9b1deb4d3b7d4b89
+  ```
+- Backend consumes the ticket once and verifies it belongs to the authenticated user and execution.
 
 ### Explicit Security Rule
-- **NEVER** accept or allow tokens or tickets in query strings.
+- **NEVER** accept or allow long-lived Supabase JWTs in the query string (`?token=eyJ...`).
 
 ---
 
