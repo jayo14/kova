@@ -183,7 +183,7 @@ def test_decrypt_credential_raises_invalid_token():
 
 def test_versioned_encryption_format():
     """encrypt_credential must store values using versioned format v1:enc: and decrypt them cleanly."""
-    from cryptography.fernet import Fernet
+    from cryptography.fernet import Fernet, InvalidToken
     from app.modules.credentials.crypto import (
         encrypt_credential,
         decrypt_credential,
@@ -196,10 +196,13 @@ def test_versioned_encryption_format():
     assert encrypted.startswith(ENCRYPTION_PREFIX)
     assert decrypt_credential(encrypted) == secret
 
-    # Legacy token without v1 prefix decrypts cleanly for backwards compatibility
+    # Legacy / non-versioned values are rejected: fail closed
     legacy_fernet = get_fernet().encrypt(secret.encode()).decode()
     assert legacy_fernet.startswith("gAAAAA")
-    assert decrypt_credential(legacy_fernet) == secret
+    with pytest.raises(InvalidToken):
+        decrypt_credential(legacy_fernet)
+    with pytest.raises(InvalidToken):
+        decrypt_credential("plaintext_unencrypted_secret")
 
 
 def test_invalid_configured_key_fails_closed(monkeypatch):

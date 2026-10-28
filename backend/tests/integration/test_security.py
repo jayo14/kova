@@ -533,7 +533,7 @@ async def test_credential_encryption_and_no_leak_in_api_events_logs_exceptions(
     )
     db_cred = result.scalar_one()
     assert db_cred.password != secret_password
-    assert db_cred.password.startswith("gAAAAA")
+    assert db_cred.password.startswith("v1:enc:")
     assert decrypt_credential(db_cred.password) == secret_password
 
     # 3. Assert password never in API read/list responses
