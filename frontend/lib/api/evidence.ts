@@ -1,4 +1,4 @@
-import { api, getApiBaseUrl } from "./client";
+import { api, getApiBaseUrl, getBrowserSessionToken } from "./client";
 import { mapKeysToCamel } from "./mappers";
 
 export type EvidenceType = "SCREENSHOT" | "VERIFICATION" | "ARTIFACT" | "VISUAL";
@@ -69,14 +69,23 @@ function parseEvidenceItem(item: Record<string, unknown>): Evidence {
   };
 }
 
-/**
- * Build the authenticated trace download URL for an execution.
- * Accepts an optional signed report signature so links work without a bearer token.
- */
-export function getTraceDownloadUrl(executionId: string, signature?: string | null): string {
+/** Fetch trace evidence with the caller's bearer token and download it locally. */
+export async function downloadExecutionTrace(executionId: string): Promise<void> {
   const base = getApiBaseUrl();
-  const query = signature ? `?signature=${encodeURIComponent(signature)}` : "";
-  return `${base}/api/v1/executions/${encodeURIComponent(executionId)}/trace${query}`;
+  const token = await getBrowserSessionToken();
+  if (!token) throw new Error("Authentication required to download trace");
+  const response = await fetch(
+    `${base}/api/v1/executions/${encodeURIComponent(executionId)}/trace`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (!response.ok) throw new Error(`Trace download failed with status ${response.status}`);
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = `trace_${executionId}.zip`;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
 }
 
 /**

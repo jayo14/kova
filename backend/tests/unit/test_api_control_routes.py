@@ -23,6 +23,8 @@ from app.api.routes.runs import (
     resume_run,
 )
 from app.api.routes.viewport import (
+    consume_ws_ticket,
+    create_ws_ticket,
     viewport_stream,
 )
 from app.engine.execution.control import (
@@ -244,6 +246,12 @@ class MockWebSocket:
             raise WebSocketDisconnect(code=1000)
         import json
         return json.dumps(self._incoming.pop(0))
+
+
+def test_viewport_ticket_is_short_lived_and_single_use():
+    ticket = create_ws_ticket("user-tenant", ttl_seconds=30)
+    assert consume_ws_ticket(ticket) == "user-tenant"
+    assert consume_ws_ticket(ticket) is None
 
 
 @pytest.mark.asyncio
