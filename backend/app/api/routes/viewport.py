@@ -19,7 +19,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 
 from app.api import get_current_user, get_session
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -250,13 +250,12 @@ async def _pump_loop(execution_id: str, websocket: WebSocket) -> None:
 async def viewport_stream(
     websocket: WebSocket,
     execution_id: str,
-    ticket: str = Query(default=""),
     db: AsyncSession = Depends(get_session),
 ):
     """WebSocket endpoint for live viewport streaming.
 
-    Auth: Requires a short-lived, single-use ticket issued by POST /viewport/ticket.
-    Tokens are never accepted in WebSocket URLs.
+    Auth: The first client message must contain a short-lived, single-use ticket
+    issued by POST /viewport/ticket. Secrets are never accepted in WebSocket URLs.
     Ownership: Verifies user owns the execution's project.
 
     Protocol:
@@ -270,9 +269,19 @@ async def viewport_stream(
     - Client → Server: {"type": "input", "kind": "type", "text": "hello"}
     - Client → Server: {"type": "nav", "kind": "back"|"forward"|"reload"}
     """
-    raw_ticket = ticket if isinstance(ticket, str) else ""
-
-    user_id = consume_ws_ticket(raw_ticket) if raw_ticket else None
+    await websocket.accept()
+    try:
+        auth_text = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+        auth_message = json.loads(auth_text)
+    except (asyncio.TimeoutError, WebSocketDisconnect, ValueError, TypeError):
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    raw_ticket = (
+        auth_message.get("ticket")
+        if isinstance(auth_message, dict) and auth_message.get("type") == "authenticate"
+        else None
+    )
+    user_id = consume_ws_ticket(raw_ticket) if isinstance(raw_ticket, str) else None
 
     if not user_id:
         await websocket.close(code=4001, reason="Unauthorized")
@@ -282,7 +291,6 @@ async def viewport_stream(
         await websocket.close(code=4003, reason="Forbidden")
         return
 
-    await websocket.accept()
     _viewport_connections[execution_id] = websocket
     logger.info("Viewport connected for execution %s (user %s)", execution_id, user_id)
 
