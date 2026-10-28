@@ -311,7 +311,7 @@ class AgentReasoner:
             "4. UTILITY IS NOT CORE: Settings, user profile, account details, or terms are utility areas and must NEVER be the recommended journey "
             "unless the user explicitly requested it in their goal.\n"
             "5. PURPOSEFUL FEATURE WORKFLOWS: The RECOMMENDED journey MUST test the application's core value proposition grounded in the actual domain "
-            "(e.g., report generation and mock defence for academic/logbook tools like Log2Def; repository exploration and code review for engineering platforms; "
+            "(e.g., core feature workflows based strictly on observed routes, forms, and actions; repository exploration and code review for engineering platforms; "
             "product discovery and checkout for commerce; dashboards and administrative controls for SaaS). Infer features from observed headlines, routes, and controls.\n"
             "6. ACTION-ORIENTED TITLES: Use meaningful titles reflecting real user intent (e.g. 'Generate Technical SIWES Report from Logbook', "
             "'Complete Practice Mock Defence Session', 'Search and Inspect Catalog Items') rather than generic 'Open X'.\n"
