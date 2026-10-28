@@ -66,13 +66,12 @@ function getCanvasRelativeCoords(
   };
 }
 
-function toWsUrl(path: string, param: string): string {
+function toWsUrl(path: string): string {
   const base = getApiBaseUrl();
   const httpUrl = base.startsWith("http") ? base : `http://${base}`;
   const u = new URL(httpUrl);
   const protocol = u.protocol === "https:" ? "wss:" : "ws:";
-  const qs = param ? `?ticket=${encodeURIComponent(param)}` : "";
-  return `${protocol}//${u.host}${path}${qs}`;
+  return `${protocol}//${u.host}${path}`;
 }
 
 export function LiveViewport({
@@ -134,6 +133,7 @@ export function LiveViewport({
 
     const token = (await getBrowserSessionToken()) ?? "";
     let wsUrl: string;
+    let wsTicket: string;
     try {
       const res = await fetch(`${getApiBaseUrl()}/viewport/ticket`, {
         method: "POST",
@@ -143,7 +143,8 @@ export function LiveViewport({
         throw new Error(`ticket endpoint returned ${res.status}`);
       }
       const data = await res.json();
-      wsUrl = toWsUrl(`/ws/viewport/${executionId}`, data.ticket);
+      wsTicket = data.ticket;
+      wsUrl = toWsUrl(`/ws/viewport/${executionId}`);
     } catch {
       setState("disconnected");
       return;
@@ -159,6 +160,7 @@ export function LiveViewport({
     wsRef.current = ws;
 
     ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "authenticate", ticket: wsTicket }));
       reconnectAttemptsRef.current = 0;
       setState((s) => (s === "disconnected" ? "disconnected" : "observing"));
     };
