@@ -22,7 +22,7 @@ from playwright.async_api import (
 )
 
 from app.config.settings import settings
-from app.engine.browser.egress import _is_safe_url, _redact_url
+from app.engine.browser.egress import _is_safe_url, _redact_url, evaluate_url
 from app.engine.browser.observer import PageObserver
 from app.engine.browser.resolver import ResolutionStrategy, TargetResolver
 from app.engine.browser.executor import ActionExecutor
@@ -166,10 +166,26 @@ class BrowserSession:
             if req.url.startswith(("about:", "data:", "blob:")):
                 await route.continue_()
                 return
-            if not _is_safe_url(req.url):
+            verdict = evaluate_url(req.url)
+            if not verdict.safe:
                 logger.warning("SSRF: Aborting browser request to unsafe destination")
                 await route.abort("blockedbyclient")
                 return
+            if verdict.pin_url and verdict.host_header:
+                # DNS rebinding defense: connect to the address we just
+                # verified instead of letting Chromium resolve again.
+                # Host header keeps the original vhost routing intact.
+                headers = dict(req.headers)
+                headers["host"] = verdict.host_header
+                try:
+                    await route.continue_(url=verdict.pin_url, headers=headers)
+                    return
+                except Exception as e:
+                    logger.warning(
+                        "SSRF pin rejected for %s (%s); continuing unpinned",
+                        _redact_url(verdict.pin_url),
+                        e,
+                    )
             await route.continue_()
 
         await self._context.route("**/*", _intercept_request)
