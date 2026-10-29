@@ -22,6 +22,62 @@ from app.engine.execution.state import ExecutionState
 from app.modules.executions.event_types import EventTypes
 
 
+class _FakeElement:
+    def __init__(self, text: str = ""):
+        self._text = text
+
+    async def is_visible(self, timeout: int | None = None) -> bool:
+        return True
+
+    async def inner_text(self, timeout: int | None = None) -> str:
+        return self._text
+
+
+class _FakeLocator:
+    def __init__(self, count: int = 0, text: str = ""):
+        self._count = count
+        self._text = text
+
+    @property
+    def first(self) -> _FakeElement:
+        return _FakeElement(self._text)
+
+    def count(self) -> int:
+        return self._count
+
+    def nth(self, index: int) -> _FakeElement:
+        return _FakeElement(self._text)
+
+
+_LOGGED_IN_SELECTOR_MARKERS = (
+    "logout",
+    "signout",
+    "sign out",
+    "log out",
+    "user-greeting",
+    "user-name",
+    "user-menu",
+    "user-info",
+)
+
+
+class _FakePage:
+    """Playwright page double; optionally reports a logged-in DOM."""
+
+    def __init__(self, url: str, authenticated: bool = False):
+        self.url = url
+        self._authenticated = authenticated
+        self.screenshot = AsyncMock(return_value=b"fake-jpeg")
+
+    def locator(self, selector: str) -> _FakeLocator:
+        lowered = selector.lower()
+        if self._authenticated and any(
+            marker in lowered for marker in _LOGGED_IN_SELECTOR_MARKERS
+        ):
+            return _FakeLocator(count=1, text="Log Out")
+        return _FakeLocator(count=0)
+
+
 @pytest.mark.asyncio
 async def test_runner_pause_and_adaptive_resume():
     exec_id = str(uuid.uuid4())
@@ -32,9 +88,7 @@ async def test_runner_pause_and_adaptive_resume():
     ctx.state = ExecutionState.RUNNING
 
     browser = MagicMock()
-    browser.page = AsyncMock()
-    browser.page.url = "https://example.com/login"
-    browser.page.screenshot = AsyncMock(return_value=b"fake-jpeg")
+    browser.page = _FakePage("https://example.com/login", authenticated=True)
     browser.observe = AsyncMock(return_value={"title": "Dashboard", "elements": []})
 
     recorded_events = []
@@ -86,9 +140,7 @@ async def test_runner_cancellation_during_pause():
     ctx.state = ExecutionState.RUNNING
 
     browser = MagicMock()
-    browser.page = AsyncMock()
-    browser.page.url = "https://example.com"
-    browser.page.screenshot = AsyncMock(return_value=b"fake-jpeg")
+    browser.page = _FakePage("https://example.com")
     browser.observe = AsyncMock()
 
     # Request pause
@@ -125,9 +177,7 @@ async def test_runner_resolves_checkpoint_on_resume():
     ctx.state = ExecutionState.RUNNING
 
     browser = MagicMock()
-    browser.page = AsyncMock()
-    browser.page.url = "https://example.com"
-    browser.page.screenshot = AsyncMock(return_value=b"fake-jpeg")
+    browser.page = _FakePage("https://example.com")
     browser.observe = AsyncMock(return_value={"title": "Unlocked"})
 
     # Raise checkpoint
@@ -169,9 +219,7 @@ async def test_runner_reclaims_control_on_lease_expiry():
     ctx.state = ExecutionState.RUNNING
 
     browser = MagicMock()
-    browser.page = AsyncMock()
-    browser.page.url = "https://example.com"
-    browser.page.screenshot = AsyncMock(return_value=b"fake-jpeg")
+    browser.page = _FakePage("https://example.com")
     browser.observe = AsyncMock(return_value={"title": "Reclaimed"})
 
     # 1. Acquire takeover with a very short lease (0.2s)
