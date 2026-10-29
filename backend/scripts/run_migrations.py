@@ -2,7 +2,7 @@
 """Run and verify database migrations using Alembic's programmatic API."""
 
 import argparse
-***REMOVED***
+import sys
 from pathlib import Path
 
 from alembic import command

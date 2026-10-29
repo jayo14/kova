@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-***REMOVED***
 from pathlib import Path
 
 from benchmarks.runner import BenchmarkRunner

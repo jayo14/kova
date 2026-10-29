@@ -5,7 +5,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from app.config.settings import settings
 
 import os
-***REMOVED***
+import sys
 
 # Deterministic test fallback key (32 bytes base64-encoded)
 _DEV_FERNET_KEY = b"k9_8TqZfUvYx3W1eR7tL5mN2pQ4sA6dF8gH0jK2lM4o="

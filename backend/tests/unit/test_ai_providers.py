@@ -152,7 +152,7 @@ def test_absent_openai_key_allows_supported_providers(monkeypatch):
 
 def test_core_execution_does_not_instantiate_openai_client():
     """Agent execution and reasoner rely strictly on HTTP abstraction, not OpenAI SDK."""
-    ***REMOVED***
+    import sys
     from app.engine.ai.reasoner import AgentReasoner
     from app.engine.ai.executor import AgentExecutor
 

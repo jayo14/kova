@@ -63,7 +63,7 @@ class SessionEstablishResult(tuple):
 
     def __iter__(self):
         try:
-            ***REMOVED***
+            import sys
             import dis
             f = sys._getframe(1)
             for instr in dis.get_instructions(f.f_code):

@@ -2,7 +2,7 @@
 """Send a test email through AWS SES with the Sessy Configuration Set."""
 
 import argparse
-***REMOVED***
+import sys
 from pathlib import Path
 
 # Add backend directory to sys.path
