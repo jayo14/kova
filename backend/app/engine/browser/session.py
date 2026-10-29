@@ -149,9 +149,17 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
     Resolves hostname with socket.getaddrinfo and rejects any address that is
     private, loopback, link-local, reserved, multicast, or in 100.64.0.0/10.
     Handles decimal, hex, and IPv6-mapped forms.
+
+    Loopback is default-denied: it requires the ALLOW_LOCALHOST opt-in
+    (validator-forced off in production) and, when ALLOW_LOCALHOST_TARGETS
+    is set, a matching entry ("host" = any port, or "host:port").
     """
     if allow_loopback is None:
-        allow_loopback = not settings.is_production
+        # Default-deny: local targets only with explicit opt-in.
+        allow_loopback = (
+            getattr(settings, "ALLOW_LOCALHOST", False)
+            and not settings.is_production
+        )
 
     try:
         parsed = urlparse(url)
@@ -171,6 +179,16 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
     if host in _METADATA_HOSTS:
         return False
 
+    # Optional allowlist narrows loopback permission to specific local
+    # targets: entries are "host" (any port) or "host:port".
+    if allow_loopback:
+        allowed = list(getattr(settings, "allow_localhost_targets_list", None) or [])
+        if allowed:
+            default_port = 443 if parsed.scheme == "https" else 80
+            netloc = f"{host}:{parsed.port or default_port}"
+            if not any(host == a or netloc == a for a in allowed):
+                allow_loopback = False
+
     # Check for direct raw IP representations first (decimal, hex, etc.)
     raw_ip = _parse_raw_ip(host)
     if raw_ip is not None:
@@ -184,10 +202,8 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
             if not allow_loopback:
                 return False
             if getattr(settings, "ALLOW_LOCALHOST", False):
-                allowlist = getattr(settings, "ALLOW_LOCALHOST_TARGETS", "") or ""
-                allowed = [a.strip().lower() for a in allowlist.split(",") if a.strip()]
-                if not allowed or host in allowed or any(host.endswith("." + a) or a == host for a in allowed):
-                    return True
+                # Target allowlist (if any) already applied above.
+                return True
             if allow_loopback and not getattr(settings, "is_production", False):
                 return True
             return False
