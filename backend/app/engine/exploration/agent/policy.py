@@ -4,11 +4,23 @@ import re
 
 
 DANGEROUS_PATTERNS = [
-    r"\b(delete|remove|destroy|erase)\b",
-    r"\b(pay|checkout|purchase|buy|subscribe|charge|billing)\b",
-    r"\b(send|message|email|submit.*form|apply|register.*account)\b",
-    r"\b(logout|sign out|signout)\b",
-    r"\b(unsubscribe|cancel.*subscription)\b",
+    # Destructive mutations.
+    r"\b(delete|destroy|erase|remove)\b",
+    r"\b(reset|clear)\s+(all|data|account|history|cart|filters?)\b",
+    # Money movement.
+    r"\b(pay|payment|checkout|purchase|buy|subscribe|charge)\b",
+    r"\b(upgrade|downgrade)\s+(plan|subscription)\b",
+    r"\b(add|update|change)\s+(payment|card)\b",
+    # Outbound communication and irreversible submission.
+    r"\b(send|compose|reply|forward|share)\b.*\b(message|email|sms|invite)\b",
+    r"\b(message|email)\s+(us|them|him|her|support|team|seller)\b",
+    r"\b(submit|place\s+order)\b",
+    r"\bapply\s+(now|for\s+(this\s+)?(job|position|role))\b",
+    r"\bregister\s+(an?\s+)?account\b",
+    r"\bsign\s?up\b",
+    # Session and subscription teardown.
+    r"\b(log\s?out|sign\s?out|signout)\b",
+    r"\b(unsubscribe|cancel\s+(subscription|plan|account))\b",
 ]
 
 
@@ -36,7 +48,6 @@ def is_safe_to_click(text: str | None, attributes: dict | None = None) -> bool:
     # Also block explicit submit buttons in forms
     if attributes:
         t = str(attributes.get("type", "")).lower()
-        tag = str(attributes.get("tag", "")).lower()
-        if t == "submit" or tag == "input" and t == "submit":
+        if t == "submit":
             return False
     return True
