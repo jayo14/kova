@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+import redis.asyncio as aioredis
 from sqlalchemy import select
 
 from app.config.settings import settings
@@ -32,6 +33,14 @@ EXPLORATION_ABANDONED_SECONDS = max(
     660, settings.EXPLORATION_MAX_WALL_CLOCK_SECONDS + 60
 )
 
+# One pending Celery task per session. Without this, every reconciliation tick
+# re-enqueues the same sessions while no worker is consuming, growing the queue
+# without bound.
+EXPLORATION_DISPATCH_LOCK_PREFIX = "exploration:dispatch"
+EXPLORATION_DISPATCH_LOCK_TTL_SECONDS = EXPLORATION_ABANDONED_SECONDS
+
+_dispatch_redis: aioredis.Redis | None = None
+
 EXPLORATION_TERMINAL_STATES = {
     ExplorationStatus.COMPLETED.value,
     ExplorationStatus.FAILED.value,
@@ -42,6 +51,83 @@ EXPLORATION_TERMINAL_STATES = {
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+def _get_dispatch_redis() -> aioredis.Redis | None:
+    """Return a Redis client for dispatch locks, or None when unavailable."""
+    global _dispatch_redis
+    if _dispatch_redis is not None:
+        return _dispatch_redis
+    kwargs: dict[str, object] = {
+        "decode_responses": True,
+        "socket_connect_timeout": 2.0,
+        "socket_timeout": 2.0,
+    }
+    if str(settings.REDIS_URL).startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = "none"
+    try:
+        _dispatch_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
+    except Exception:
+        logger.exception("Could not build Redis client for dispatch locks")
+        return None
+    return _dispatch_redis
+
+
+def _dispatch_lock_key(session_id: str) -> str:
+    return f"{EXPLORATION_DISPATCH_LOCK_PREFIX}:{session_id}"
+
+
+async def _claim_exploration_dispatch(session_id: str) -> bool:
+    """Claim the single pending dispatch slot for a session.
+
+    Fails open: if Redis is unreachable, dispatching is still allowed so a
+    degraded cache never blocks recovery.
+    """
+    client = _get_dispatch_redis()
+    if client is None:
+        return True
+    try:
+        claimed = await client.set(
+            _dispatch_lock_key(session_id),
+            "1",
+            nx=True,
+            ex=EXPLORATION_DISPATCH_LOCK_TTL_SECONDS,
+        )
+    except Exception:
+        logger.warning(
+            "Could not claim dispatch lock for exploration %s; dispatching anyway",
+            session_id,
+        )
+        return True
+    return bool(claimed)
+
+
+async def _release_exploration_dispatch(session_id: str) -> None:
+    client = _get_dispatch_redis()
+    if client is None:
+        return
+    try:
+        await client.delete(_dispatch_lock_key(session_id))
+    except Exception:
+        logger.warning("Could not release dispatch lock for exploration %s", session_id)
+
+
+def _release_dispatch_lock_on_failure(session_id: str):
+    """Release the dispatch slot when enqueueing fails so the next tick retries."""
+
+    def _callback(task: asyncio.Task) -> None:
+        if task.cancelled() or task.exception() is None:
+            return
+        logger.error(
+            "Recovery dispatch failed for exploration %s: %s",
+            session_id,
+            task.exception(),
+        )
+        release = asyncio.create_task(_release_exploration_dispatch(session_id))
+        _dispatch_tasks.add(release)
+        release.add_done_callback(_dispatch_tasks.discard)
+
+    return _callback
 
 
 PLANNING_TIMEOUT_SECONDS = 30
@@ -166,7 +252,12 @@ async def reconcile_explorations() -> dict[str, int]:
                 )
                 and age >= EXPLORATION_DISPATCH_GRACE_SECONDS
             ):
-                dispatch_ids.append(str(session.id))
+                if await _claim_exploration_dispatch(str(session.id)):
+                    dispatch_ids.append(str(session.id))
+                else:
+                    logger.debug(
+                        "Exploration %s already has a pending dispatch", session.id
+                    )
             elif age >= EXPLORATION_ABANDONED_SECONDS:
                 try:
                     await repo.update_status(
@@ -196,7 +287,9 @@ async def reconcile_explorations() -> dict[str, int]:
             )
             _dispatch_tasks.add(task)
             task.add_done_callback(_dispatch_tasks.discard)
+            task.add_done_callback(_release_dispatch_lock_on_failure(session_id))
         except Exception:
+            await _release_exploration_dispatch(session_id)
             logger.exception(
                 "Failed to schedule recovery for exploration %s", session_id
             )
