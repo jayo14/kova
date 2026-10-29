@@ -135,7 +135,7 @@ async def test_perform_login_switches_to_signup_view_when_requested_on_signin():
 
     opened_signup = []
 
-    async def mock_open_auth(page, is_signup=False, provider=None):
+    async def mock_open_auth(page, is_signup=False, provider=None, event_recorder=None):
         if is_signup:
             opened_signup.append(True)
             mock_page.url = "https://example.com/signup"
