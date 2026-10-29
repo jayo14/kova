@@ -1,6 +1,6 @@
 """Add exploration budget fields to exploration_sessions
 
-Revision ID: 034_add_exploration_budget_fields
+Revision ID: 034
 Revises: 033
 Create Date: 2026-10-28 10:00:00.000000
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = "034_add_exploration_budget_fields"
+revision: str = "034"
 down_revision: Union[str, Sequence[str], None] = "033"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
