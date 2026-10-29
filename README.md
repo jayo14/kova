@@ -41,4 +41,4 @@ cd backend && .venv/bin/pytest tests/smoke/ -v
 
 ## License
 
-Private / Proprietary. All rights reserved.
+MIT License. See [LICENSE](LICENSE).
