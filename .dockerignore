@@ -19,3 +19,11 @@ coverage.xml
 htmlcov/
 .DS_Store
 *.rdb
+
+# Never bake local secrets into an image. .env.example is safe and useful.
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
