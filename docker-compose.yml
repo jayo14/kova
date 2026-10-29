@@ -23,6 +23,7 @@ services:
       POSTGRES_DB: kova
     ports:
       - "5432:5432"
+    restart: unless-stopped
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,6 +34,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "6379:6379"
     healthcheck:
@@ -63,8 +65,15 @@ services:
       AGENT_EXECUTION_MAX_DURATION_SECONDS: ${AGENT_EXECUTION_MAX_DURATION_SECONDS:-600}
     env_file:
       - ./backend/.env
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,11 +106,20 @@ services:
       AGENT_EXECUTION_MAX_DURATION_SECONDS: ${AGENT_EXECUTION_MAX_DURATION_SECONDS:-600}
     env_file:
       - ./backend/.env
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+    # Chromium shutdown plus in-flight task cleanup needs more than the 10s default.
+    stop_grace_period: 90s
     command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 
   # Next.js frontend
@@ -109,12 +127,18 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    environment:
-      NEXT_PUBLIC_API_URL: http://kova-api:8000
+      # NEXT_PUBLIC_* are inlined into the browser bundle at build time, so
+      # runtime `environment:` cannot change them.
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-}
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
-      - kova-api
+      kova-api:
+        condition: service_healthy
 
 volumes:
   pgdata:
