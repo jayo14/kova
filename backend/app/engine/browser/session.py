@@ -88,9 +88,10 @@ class BrowserSession:
             await browser.close()
     """
 
-    def __init__(self, headless: bool = True, browser_settings: Any = None):
+    def __init__(self, headless: bool = True, browser_settings: Any = None, job_id: str | None = None):
         self._headless = headless
         self._browser_settings = browser_settings
+        self.job_id = job_id
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -106,10 +107,45 @@ class BrowserSession:
         self._capturing_step_network: bool = False
 
     async def start(self):
-        """Launch browser and create isolated context + page."""
-        import os
+        """Launch browser and create isolated context + page.
+
+        Idempotent: if the session is already started, the current context
+        is replaced with a fresh one instead of leaking a second browser
+        launch. Every job therefore begins with a clean context.
+        """
+        if self.is_started:
+            await self.fresh_context()
+            return
         self._playwright = await async_playwright().start()
         self._browser = await self._playwright.chromium.launch(headless=self._headless)
+        await self._setup_context()
+        logger.info("Browser session started")
+
+    async def fresh_context(self):
+        """Replace the current context with a brand-new isolated one.
+
+        Keeps the browser process but drops every cookie, storage entry,
+        page, and listener from the previous context. Requires a started
+        session (see start()).
+        """
+        if self._browser is None:
+            raise RuntimeError("Browser session not started")
+        old_context = self._context
+        self._context = None
+        self._page = None
+        self.network_errors = []
+        self.console_errors = []
+        self.failed_requests = []
+        if old_context is not None:
+            try:
+                await old_context.close()
+            except Exception as e:
+                logger.debug("Failed to close old context: %s", e)
+        await self._setup_context()
+
+    async def _setup_context(self):
+        """Create context + page with interception, tracing, and observers."""
+        import os
         viewport = DEFAULT_VIEWPORT
         user_agent = DEFAULT_USER_AGENT
         locale = None
@@ -321,7 +357,7 @@ class BrowserSession:
         self._page.on("console", _on_console)
         self._page.on("pageerror", _on_page_error)
 
-        logger.info("Browser session started")
+        logger.info("Browser context ready (job=%s)", self.job_id)
 
     async def close(self):
         """Clean up all resources in reverse order.

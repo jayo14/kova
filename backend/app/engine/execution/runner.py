@@ -847,8 +847,8 @@ class FlowRunner:
                     "observations": ctx.observations,
                 }
 
-        browser = BrowserSession(browser_settings=ctx.browser_settings)
         exec_id = str(execution_id)
+        browser = BrowserSession(browser_settings=ctx.browser_settings, job_id=exec_id)
         frame_task: asyncio.Task | None = None
         nav_unbind: Callable[[], None] | None = None
         try:
