@@ -102,6 +102,10 @@ class Settings(BaseSettings):
                 )
             if self.DEV_ALLOW_MOCKS:
                 raise ValueError("DEV_ALLOW_MOCKS cannot be enabled in production.")
+            if self.ALLOW_LOCALHOST:
+                raise ValueError(
+                    "ALLOW_LOCALHOST cannot be enabled in production; internal network targets must stay unreachable from the browser."
+                )
             if self.REQUIRE_PRODUCTION_INTEGRATIONS:
                 missing = []
                 if not self.STRIPE_SECRET_KEY:
@@ -192,6 +196,27 @@ class Settings(BaseSettings):
     EXPLORATION_AGENT_MAX_PAGES: int = 50
     EXPLORATION_AGENT_MAX_ACTIONS: int = 200
     EXPLORATION_AGENT_MAX_MODEL_CALLS: int = 100
+
+    # Browser isolation & egress policy
+    # Loopback/private navigation targets are denied by default; local dev and
+    # tests must opt in explicitly. Production hard-forces this off (see
+    # validate_production_keys).
+    ALLOW_LOCALHOST: bool = False
+    # Comma-separated "host" or "host:port" entries allowed when
+    # ALLOW_LOCALHOST is true; empty string = any loopback target.
+    ALLOW_LOCALHOST_TARGETS: str = ""
+    # Optional egress proxy for all browser traffic, e.g.
+    # "http://egress-proxy:3128". Empty = direct connections.
+    BROWSER_EGRESS_PROXY_SERVER: str = ""
+    # Job-scoped download handling for untrusted page downloads.
+    BROWSER_DOWNLOAD_DIR: str = "/tmp/kova_downloads"
+    BROWSER_DOWNLOAD_MAX_BYTES: int = 25 * 1024 * 1024
+    BROWSER_DOWNLOAD_MAX_FILES: int = 20
+
+    @property
+    def allow_localhost_targets_list(self) -> list[str]:
+        return [t.strip().lower() for t in self.ALLOW_LOCALHOST_TARGETS.split(",") if t.strip()]
+
 
     # Page readiness: how long Kova waits for a slow / sleeping deployment to
     # serve the real application before reporting it as unresolved.

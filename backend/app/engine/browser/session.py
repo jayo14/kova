@@ -179,6 +179,10 @@ def _is_safe_url(url: str, *, allow_loopback: bool | None = None) -> bool:
     # For literal localhost:
     if host == "localhost":
         try:
+            # Explicit caller denial (production path) always wins over any
+            # local-dev ALLOW_LOCALHOST opt-in.
+            if not allow_loopback:
+                return False
             if getattr(settings, "ALLOW_LOCALHOST", False):
                 allowlist = getattr(settings, "ALLOW_LOCALHOST_TARGETS", "") or ""
                 allowed = [a.strip().lower() for a in allowlist.split(",") if a.strip()]

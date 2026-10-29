@@ -1,3 +1,10 @@
+import os
+
+# Browser tests and fixture apps navigate to loopback targets. The default
+# egress policy denies them, so the test environment opts in explicitly.
+# Must run before any app.* import instantiates Settings.
+os.environ.setdefault("ALLOW_LOCALHOST", "true")
+
 import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
