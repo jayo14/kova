@@ -250,5 +250,6 @@ def test_production_rejects_empty_or_dev_credential_key():
         ENVIRONMENT="production",
         JWT_SECRET_KEY=valid_jwt,
         CREDENTIAL_ENCRYPTION_KEY=valid_fernet,
+        ALLOW_LOCALHOST=False,
     )
     assert s.CREDENTIAL_ENCRYPTION_KEY == valid_fernet

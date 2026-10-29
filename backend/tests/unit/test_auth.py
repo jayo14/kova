@@ -162,7 +162,12 @@ def test_production_refuses_weak_or_empty_jwt_secret():
         Settings(ENVIRONMENT="production", JWT_SECRET_KEY="short-secret-key", CREDENTIAL_ENCRYPTION_KEY=valid_fernet)
 
     # Valid secret passes
-    s = Settings(ENVIRONMENT="production", JWT_SECRET_KEY="a" * 32, CREDENTIAL_ENCRYPTION_KEY=valid_fernet)
+    s = Settings(
+        ENVIRONMENT="production",
+        JWT_SECRET_KEY="a" * 32,
+        CREDENTIAL_ENCRYPTION_KEY=valid_fernet,
+        ALLOW_LOCALHOST=False,
+    )
     assert s.JWT_SECRET_KEY == "a" * 32
 
 

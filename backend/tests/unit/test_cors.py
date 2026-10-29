@@ -80,6 +80,7 @@ async def test_default_cors_origins_includes_vercel_app():
         ENVIRONMENT="production",
         JWT_SECRET_KEY="x" * 32,
         CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        ALLOW_LOCALHOST=False,
     )
     assert "https://kova-x.vercel.app" in default_settings.cors_origins_list
 
