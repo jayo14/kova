@@ -16,12 +16,19 @@ from app.api.routes.viewport import (
 
 
 class DummyWebSocket:
-    def __init__(self):
+    """Minimal WebSocket double.
+
+    ``incoming`` holds client messages delivered in order. Once exhausted,
+    ``receive_text`` raises ``WebSocketDisconnect`` to end the server loop.
+    """
+
+    def __init__(self, incoming=None):
         self.accepted = False
         self.closed_code = None
         self.closed_reason = None
         self.client_state = 1
         self.sent_messages = []
+        self._incoming = list(incoming or [])
 
     async def accept(self):
         self.accepted = True
@@ -35,7 +42,14 @@ class DummyWebSocket:
 
     async def receive_text(self):
         from starlette.websockets import WebSocketDisconnect
+        if self._incoming:
+            return self._incoming.pop(0)
         raise WebSocketDisconnect(code=1000)
+
+
+def _auth_message(ticket):
+    import json
+    return json.dumps({"type": "authenticate", "ticket": ticket})
 
 
 @pytest.mark.asyncio
@@ -74,19 +88,32 @@ async def test_verify_execution_access(db_session: AsyncSession):
     assert await _verify_execution_access(str(uuid.uuid4()), str(owner.id), db=db_session) is False
 
 
+class _ControlRecord:
+    def __init__(self):
+        from app.engine.execution.control import ControlState
+        self.state = ControlState.RUNNING
+        self.generation = 1
+        self.checkpoint = None
+
+
+async def _run_stream(db_session, execution_id, ws):
+    with patch("app.api.routes.viewport.get_control_record",
+               new=AsyncMock(return_value=_ControlRecord())), \
+         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
+        try:
+            await viewport_stream(ws, str(execution_id), db=db_session)
+        except Exception:
+            pass
+    return ws
+
+
 async def _open_stream(db_session, execution_id, ticket, user_objs):
     for u in user_objs:
         db_session.add(u)
     await db_session.commit()
 
-    ws = DummyWebSocket()
-    with patch("app.api.routes.viewport.get_control_state", new=AsyncMock(return_value="agent")), \
-         patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
-        try:
-            await viewport_stream(ws, str(execution_id), ticket=ticket, db=db_session)
-        except Exception:
-            pass
-    return ws
+    ws = DummyWebSocket(incoming=[_auth_message(ticket)])
+    return await _run_stream(db_session, execution_id, ws)
 
 
 @pytest.mark.asyncio
@@ -115,9 +142,9 @@ async def test_viewport_stream_ticket_single_use(db_session: AsyncSession):
     assert ws1.accepted is True
 
     # Same ticket used a second time must fail immediately
-    ws2 = DummyWebSocket()
-    await viewport_stream(ws2, str(execution.id), ticket=ticket, db=db_session)
-    assert ws2.accepted is False
+    ws2 = DummyWebSocket(incoming=[_auth_message(ticket)])
+    await _run_stream(db_session, execution.id, ws2)
+    assert ws2.accepted is True
     assert ws2.closed_code == 4001
 
 
@@ -131,7 +158,7 @@ async def test_viewport_stream_expired_ticket(db_session: AsyncSession):
     ticket = create_ws_ticket(str(owner.id), ttl_seconds=-1)
     ws = await _open_stream(db_session, execution.id, ticket, [owner, project, flow, execution])
 
-    assert ws.accepted is False
+    assert ws.accepted is True
     assert ws.closed_code == 4001
 
 
@@ -144,7 +171,7 @@ async def test_viewport_stream_empty_ticket(db_session: AsyncSession):
 
     ws = await _open_stream(db_session, execution.id, "", [owner, project, flow, execution])
 
-    assert ws.accepted is False
+    assert ws.accepted is True
     assert ws.closed_code == 4001
 
 
@@ -160,5 +187,5 @@ async def test_viewport_stream_another_user_ticket(db_session: AsyncSession):
     ticket = create_ws_ticket(str(other_user.id), ttl_seconds=30)
     ws = await _open_stream(db_session, execution.id, ticket, [owner, other_user, project, flow, execution])
 
-    assert ws.accepted is False
+    assert ws.accepted is True
     assert ws.closed_code == 4003
