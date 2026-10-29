@@ -19,8 +19,10 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    # Soft limit (9 min) allows graceful cleanup before hard kill (10 min)
-    soft_time_limit=540,
+    # Soft limit sits above the exploration wall-clock budget (600s) so the task
+    # gets a graceful cleanup window before the recovery watchdog declares it
+    # abandoned at 660s. The hard kill is raised per-task to 3660s.
+    soft_time_limit=630,
     task_default_queue="kova-free",
     task_queues=[
         Queue("kova-free", routing_key="kova-free"),

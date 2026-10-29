@@ -186,6 +186,13 @@ class Settings(BaseSettings):
         val = int(v) if v is not None else 100
         return min(max(val, 1), 1000)
 
+    # Bounded observe -> act -> observe crawl; set false to disable explicitly.
+    EXPLORATION_AGENT_ENABLED: bool = True
+    EXPLORATION_AGENT_MAX_WALL_CLOCK: int = 600
+    EXPLORATION_AGENT_MAX_PAGES: int = 50
+    EXPLORATION_AGENT_MAX_ACTIONS: int = 200
+    EXPLORATION_AGENT_MAX_MODEL_CALLS: int = 100
+
     # Page readiness: how long Kova waits for a slow / sleeping deployment to
     # serve the real application before reporting it as unresolved.
     PAGE_READINESS_TIMEOUT_SECONDS: float = 20.0

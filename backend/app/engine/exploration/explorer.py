@@ -707,6 +707,78 @@ class ExplorationEngine:
         except Exception as e:
             logger.debug("Page exploration streaming completed: %s", e)
 
+    async def _run_agent_exploration(self, page: Any) -> dict[str, Any] | None:
+        """Run the bounded observe -> act -> observe crawl when enabled.
+
+        The agent navigates the page away from the observed URL, so the original
+        URL is restored afterwards and legacy discovery continues unchanged.
+        """
+        settings = get_settings()
+        if not getattr(settings, "EXPLORATION_AGENT_ENABLED", False):
+            return None
+
+        from app.engine.exploration.agent.agent import ExplorationAgent
+
+        budget = {
+            "max_wall_clock": settings.EXPLORATION_AGENT_MAX_WALL_CLOCK,
+            "max_pages": settings.EXPLORATION_AGENT_MAX_PAGES,
+            "max_actions": settings.EXPLORATION_AGENT_MAX_ACTIONS,
+            "max_model_calls": settings.EXPLORATION_AGENT_MAX_MODEL_CALLS,
+        }
+        start_url = getattr(page, "url", self.url)
+        agent = ExplorationAgent(self, page, self._emit, budget=budget)
+
+        await self._emit("exploration.agent.started", {"url": start_url})
+        try:
+            result = await agent.run()
+        except Exception:
+            logger.exception("Exploration agent failed; falling back to legacy discovery")
+            return None
+        finally:
+            try:
+                if getattr(page, "url", None) != start_url:
+                    await page.goto(start_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception:
+                logger.debug("Could not restore page after agent run", exc_info=True)
+
+        await self._emit("exploration.agent.finished", {
+            "termination": result.get("termination"),
+            "stats": result.get("stats"),
+        })
+        await self._emit("exploration.agent.capabilities", {
+            "capabilities": result.get("capabilities", []),
+            "dangerous_controls": result.get("dangerous_controls", []),
+        })
+        return result
+
+    @staticmethod
+    def _merge_agent_capabilities(
+        discoveries: list[Any],
+        agent_result: dict[str, Any] | None,
+    ) -> list[Any]:
+        """Append agent-discovered capabilities as discoveries, de-duplicated."""
+        if not agent_result:
+            return discoveries
+
+        seen = {
+            str(getattr(item, "label", "") or (item.get("label") if isinstance(item, dict) else "")).strip().lower()
+            for item in discoveries
+        }
+        merged = list(discoveries)
+        for capability in agent_result.get("capabilities") or []:
+            name = str(capability.get("name") or "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            kind = capability.get("kind") or "capability"
+            merged.append(
+                DiscoveryItem(
+                    label=name,
+                    description=f"Discovered {kind} at {capability.get('url') or ''}".strip(),
+                )
+            )
+        return merged
+
     async def explore(
         self,
         credential: dict | None = None,
@@ -1270,7 +1342,9 @@ class ExplorationEngine:
                 "status": "active",
             })
 
+            agent_result = await self._run_agent_exploration(page)
             discoveries, missions = await self._discover_workflows(page, observation, selected_role)
+            discoveries = self._merge_agent_capabilities(discoveries, agent_result)
             await self._capture_and_emit_screenshot(page, full_page=False)
 
             await self._emit("progress", {
@@ -1309,6 +1383,8 @@ class ExplorationEngine:
                 "candidate_missions": [m.model_dump() for m in missions],
                 "discovery_result": discovery_result.model_dump(mode="json") if discovery_result else None,
                 "brand_metadata": getattr(self, "_brand_metadata", None),
+                "sitemap": (agent_result or {}).get("sitemap"),
+                "dangerous_controls": (agent_result or {}).get("dangerous_controls") or [],
             }
 
         finally:

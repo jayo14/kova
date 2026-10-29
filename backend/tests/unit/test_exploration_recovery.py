@@ -138,12 +138,12 @@ async def test_claim_exploration_dispatch_allows_one_pending_task(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_claim_exploration_dispatch_fails_open_without_redis(monkeypatch):
+async def test_claim_exploration_dispatch_fails_closed_without_redis(monkeypatch):
     from app.workers import recovery
 
     monkeypatch.setattr(recovery, "_get_dispatch_redis", lambda: None)
 
-    assert await recovery._claim_exploration_dispatch("any-session") is True
+    assert await recovery._claim_exploration_dispatch("any-session") is False
 
 
 @pytest.mark.asyncio

@@ -25,10 +25,17 @@ def _button(name: str, selector: str | None = None) -> dict:
 class FakeSite:
     """A tiny static site keyed by URL, with optional dynamic trap pages."""
 
-    def __init__(self, pages: dict[str, dict], start: str, trap: bool = False):
+    def __init__(
+        self,
+        pages: dict[str, dict],
+        start: str,
+        trap: bool = False,
+        click_routes: dict[str, str] | None = None,
+    ):
         self.pages = pages
         self.start = start
         self.trap = trap
+        self.click_routes = click_routes or {}
         self.visits: list[str] = []
         self.clicks: list[str] = []
         self.scrolls = 0
@@ -76,6 +83,9 @@ class FakeLocator:
 
     async def click(self, timeout: int = 0) -> None:
         self.page.site.clicks.append(self.key)
+        route = self.page.site.click_routes.get(self.key)
+        if route:
+            await self.page.goto(route)
         if self.key.endswith("#menu") or self.key == "Menu":
             self.page.site.dialogs.add("Menu")
 
@@ -301,3 +311,55 @@ async def test_agent_rejects_hallucinated_ai_target_and_falls_back():
     assert f"{ORIGIN}/docs" in {node.url_norm for node in agent.sitemap.nodes.values()}
     sources = [payload.get("source") for event, payload in events if event == "exploration.agent.act"]
     assert "bfs_fallback" in sources
+
+
+@pytest.mark.asyncio
+async def test_agent_explores_spa_without_links_via_custom_controls():
+    site = FakeSite(
+        {
+            f"{ORIGIN}/": {
+                "title": "Workspace",
+                "headings": [],
+                "elements": [_button("Open reports", "#openReports")],
+            },
+            f"{ORIGIN}/reports": {
+                "title": "Reports",
+                "headings": [{"level": 1, "text": "Reports"}],
+                "elements": [],
+            },
+        },
+        start=f"{ORIGIN}/",
+        click_routes={"#openReports": f"{ORIGIN}/reports"},
+    )
+    agent, _ = _agent(site, budget={"max_actions": 6, "max_pages": 10})
+
+    result = await agent.run()
+
+    assert site.clicks == ["#openReports"]
+    assert f"{ORIGIN}/reports" in site.visits
+    assert result["stats"]["pages"] >= 2
+    assert "Open reports" in {cap["name"] for cap in result["capabilities"]}
+    assert result["termination"] in ("frontier_empty", "no_new_state")
+
+
+@pytest.mark.asyncio
+async def test_agent_discovers_modal_controls_without_submitting():
+    site = FakeSite(
+        {
+            f"{ORIGIN}/": {
+                "title": "Home",
+                "headings": [],
+                "elements": [_button("Menu", "#menu")],
+            },
+        },
+        start=f"{ORIGIN}/",
+    )
+    agent, _ = _agent(site, budget={"max_actions": 6, "max_pages": 10})
+
+    result = await agent.run()
+
+    assert site.clicks == ["#menu"]
+    kinds = {(cap["kind"], cap["name"]) for cap in result["capabilities"]}
+    assert ("dialog", "Menu") in kinds
+    assert all("submit" not in click.lower() for click in site.clicks)
+    assert result["termination"] in ("frontier_empty", "no_new_state")
