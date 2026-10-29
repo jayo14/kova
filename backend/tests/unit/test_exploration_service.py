@@ -36,13 +36,16 @@ async def test_create_enqueues_exploration_task(db_session):
 
     enqueued = {}
 
-    async def mock_enqueue(session_id, credential=None, selected_role=None, create_account=False):
+    async def mock_enqueue(session_id):
         enqueued["session_id"] = session_id
-        enqueued["credential"] = credential
-        enqueued["selected_role"] = selected_role
-        enqueued["create_account"] = create_account
 
-    with patch.object(ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue):
+    queue_input = AsyncMock()
+
+    with patch.object(
+        ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue
+    ), patch(
+        "app.modules.exploration.service.queue_worker_input", new=queue_input
+    ):
         session = await service.create_and_start_exploration(
             ExplorationCreate(url="https://example.com", goal="test goal"),
             user_id=user.id,
@@ -50,9 +53,8 @@ async def test_create_enqueues_exploration_task(db_session):
 
     assert session.status == ExplorationStatus.CREATED.value
     assert enqueued["session_id"] == session.id
-    assert enqueued["credential"] is None
-    assert enqueued["selected_role"] is None
-    assert enqueued["create_account"] is False
+    # No interactive payload should be queued for a plain start.
+    queue_input.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -71,13 +73,16 @@ async def test_submit_credentials_enqueues_with_credential(db_session):
 
     enqueued = {}
 
-    async def mock_enqueue(session_id, credential=None, selected_role=None, create_account=False):
+    async def mock_enqueue(session_id):
         enqueued["session_id"] = session_id
-        enqueued["credential"] = credential
-        enqueued["selected_role"] = selected_role
-        enqueued["create_account"] = create_account
 
-    with patch.object(ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue):
+    queue_input = AsyncMock()
+
+    with patch.object(
+        ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue
+    ), patch(
+        "app.modules.exploration.service.queue_worker_input", new=queue_input
+    ):
         updated = await service.submit_credentials(
             session_id=session.id,
             user_id=user_id,
@@ -88,9 +93,12 @@ async def test_submit_credentials_enqueues_with_credential(db_session):
         )
 
     assert updated.status == ExplorationStatus.AUTHENTICATING.value
-    assert enqueued["credential"] == {"email": "user@example.com", "password": "secret123"}
-    assert enqueued["selected_role"] is None
-    assert enqueued["create_account"] is False
+    assert enqueued["session_id"] == session.id
+    # Secrets travel through the shared control queue, not the broker task args.
+    queue_input.assert_awaited_once_with(
+        str(session.id),
+        {"kind": "credentials", "email": "user@example.com", "password": "secret123"},
+    )
 
 
 @pytest.mark.asyncio
@@ -117,7 +125,11 @@ async def test_credential_storage_errors_do_not_log_submitted_secrets(db_session
         CredentialService,
         "create_credential",
         new=AsyncMock(side_effect=RuntimeError("password-secret-value")),
-    ), patch.object(ExplorationService, "_enqueue_exploration", new=AsyncMock()):
+    ), patch.object(
+        ExplorationService, "_enqueue_exploration", new=AsyncMock()
+    ), patch(
+        "app.modules.exploration.service.queue_worker_input", new=AsyncMock()
+    ):
         await service.submit_credentials(
             session_id=session.id,
             user_id=user_id,
@@ -148,13 +160,16 @@ async def test_submit_answer_enqueues_with_role(db_session):
 
     enqueued = {}
 
-    async def mock_enqueue(session_id, credential=None, selected_role=None, create_account=False):
+    async def mock_enqueue(session_id):
         enqueued["session_id"] = session_id
-        enqueued["credential"] = credential
-        enqueued["selected_role"] = selected_role
-        enqueued["create_account"] = create_account
 
-    with patch.object(ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue):
+    queue_input = AsyncMock()
+
+    with patch.object(
+        ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue
+    ), patch(
+        "app.modules.exploration.service.queue_worker_input", new=queue_input
+    ):
         updated = await service.submit_answer(
             session_id=session.id,
             user_id=user_id,
@@ -163,8 +178,10 @@ async def test_submit_answer_enqueues_with_role(db_session):
 
     assert updated.status == ExplorationStatus.DISCOVERING.value
     assert updated.selected_role == "admin"
-    assert enqueued["selected_role"] == "admin"
-    assert enqueued["credential"] is None
+    assert enqueued["session_id"] == session.id
+    queue_input.assert_awaited_once_with(
+        str(session.id), {"kind": "answer", "selected_role": "admin"}
+    )
 
 
 @pytest.mark.asyncio
@@ -183,13 +200,16 @@ async def test_create_account_enqueues_with_create_account_flag(db_session):
 
     enqueued = {}
 
-    async def mock_enqueue(session_id, credential=None, selected_role=None, create_account=False):
+    async def mock_enqueue(session_id):
         enqueued["session_id"] = session_id
-        enqueued["credential"] = credential
-        enqueued["selected_role"] = selected_role
-        enqueued["create_account"] = create_account
 
-    with patch.object(ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue):
+    queue_input = AsyncMock()
+
+    with patch.object(
+        ExplorationService, "_enqueue_exploration", side_effect=mock_enqueue
+    ), patch(
+        "app.modules.exploration.service.queue_worker_input", new=queue_input
+    ):
         updated = await service.create_account(
             session_id=session.id,
             user_id=user_id,
@@ -197,8 +217,16 @@ async def test_create_account_enqueues_with_create_account_flag(db_session):
         )
 
     assert updated.status == ExplorationStatus.AUTHENTICATING.value
-    assert enqueued["credential"] == {"email": "new@example.com", "password": "newpass123"}
-    assert enqueued["create_account"] is True
+    assert enqueued["session_id"] == session.id
+    queue_input.assert_awaited_once_with(
+        str(session.id),
+        {
+            "kind": "credentials",
+            "email": "new@example.com",
+            "password": "newpass123",
+            "create_account": True,
+        },
+    )
 
 
 @pytest.mark.asyncio
