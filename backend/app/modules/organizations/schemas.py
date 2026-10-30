@@ -45,6 +45,7 @@ class OrganizationRead(BaseModel):
     slug: str
     owner_user_id: uuid.UUID
     plan: str
+    tier: str
     created_at: datetime
     quota: Optional[OrganizationQuotaRead] = None
 

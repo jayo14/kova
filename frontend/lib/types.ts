@@ -25,6 +25,7 @@ export interface Organization {
   slug: string;
   createdAt: string;
   updatedAt?: string;
+  tier?: string;
 }
 
 export interface UserProfile {
