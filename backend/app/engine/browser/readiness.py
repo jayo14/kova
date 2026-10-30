@@ -894,3 +894,95 @@ class ReadinessWaiter:
                     or "The page did not change between readiness checks"
                 )
         return current
+
+    async def wait_for_settle(
+        self,
+        page: Any,
+        *,
+        quiet_ms: float = 300.0,
+        network_idle_cap_ms: float = 5000.0,
+        max_wait_s: float = 10.0,
+    ) -> None:
+        """Wait for the page to settle into a stable, interactive state.
+
+        Replaces fixed sleeps with state-based waits:
+        - DOM mutation quiet period: no mutations for ``quiet_ms``.
+        - Network idle: no network activity for up to ``network_idle_cap_ms``.
+        - Skeleton/spinner detection: common loading indicators must disappear.
+
+        Late hydration (up to ~10s) is treated as normal: we wait rather than
+        failing immediately. All waits are bounded by ``max_wait_s`` so a badly
+        built or hung page cannot block forever.
+        """
+        import time as _time
+
+        started = _time.monotonic()
+        deadline = started + max_wait_s
+
+        # 1. DOM mutation quiet period: wait until the DOM stops mutating.
+        remaining = deadline - started
+        if remaining > 0:
+            try:
+                await page.evaluate(
+                    """([quietMs, maxWaitMs]) => new Promise((resolve) => {
+                        let timer = null;
+                        const observer = new MutationObserver(() => {
+                            if (timer) clearTimeout(timer);
+                            timer = setTimeout(resolve, quietMs);
+                        });
+                        observer.observe(document.body, {
+                            childList: true, subtree: true, attributes: true
+                        });
+                        const hardStop = setTimeout(() => {
+                            observer.disconnect();
+                            resolve();
+                        }, maxWaitMs);
+                        // Resolve early if the observer stops mutating within budget.
+                    }""",
+                    [int(quiet_ms), int(min(remaining, max_wait_s) * 1000)],
+                    timeout=int(min(remaining, max_wait_s) * 1000) + 1000,
+                )
+            except Exception:
+                # Timeout or evaluation failure — proceed; do not block forever.
+                pass
+
+        # 2. Network idle: Playwright waits until there are no network connections
+        #    for at least ~500ms, capped by network_idle_cap_ms.
+        remaining = deadline - _time.monotonic()
+        if remaining > 0:
+            try:
+                await page.wait_for_load_state(
+                    "networkidle",
+                    timeout=min(int(network_idle_cap_ms), int(remaining * 1000)),
+                )
+            except Exception:
+                # Timed out on network idle — proceed rather than blocking.
+                pass
+
+        # 3. Skeleton / spinner detection: wait for loading indicators to vanish.
+        remaining = deadline - _time.monotonic()
+        if remaining > 0:
+            try:
+                await page.wait_for_function(
+                    """() => {
+                        const selectors = [
+                            '.skeleton', '.spinner', '.loader', '.loading',
+                            '[aria-busy="true"]', '[role="status"][aria-hidden="false"]',
+                            '.skeleton-screen', '.spinner-border'
+                        ];
+                        for (const s of selectors) {
+                            const els = document.querySelectorAll(s);
+                            for (const el of els) {
+                                const rect = el.getBoundingClientRect();
+                                const style = window.getComputedStyle(el);
+                                if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+                                    return false; // still loading
+                                }
+                            }
+                        }
+                        return true;
+                    }""",
+                    timeout=int(min(remaining, 8.0) * 1000),
+                )
+            except Exception:
+                pass
