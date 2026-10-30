@@ -767,5 +767,82 @@ class PageObserver:
                 continue
         return results[:8]
 
+    @staticmethod
+    def compress_for_model(
+        observation: dict[str, Any],
+        objective: str = "",
+        max_elements: int = 40,
+        max_text_chars: int = 600,
+    ) -> dict[str, Any]:
+        """Compress an observation for the model so large pages do not blow context.
+
+        - Deduplicates identical element names/selectors.
+        - Ranks by relevance to the objective (keyword overlap + interactivity).
+        - Caps element count and text length.
+        - Keeps only model-relevant fields.
+        """
+        if not observation:
+            return observation
+
+        obj_words = set(w.lower() for w in objective.split() if len(w) > 3)
+        elements = observation.get("elements", []) or []
+
+        def score(el: dict[str, Any]) -> int:
+            if not isinstance(el, dict):
+                return 0
+            name = (el.get("name") or el.get("accessible_name") or "").lower()
+            role = (el.get("role") or "").lower()
+            text = (el.get("label") or "").lower()
+            blob = f"{name} {role} {text}"
+            score_val = sum(1 for w in obj_words if w in blob)
+            # Prefer interactive controls
+            if el.get("type") in ("button", "input", "link", "select"):
+                score_val += 2
+            if el.get("cursor_pointer"):
+                score_val += 1
+            return score_val
+
+        # Rank then dedupe by selector+name key.
+        seen: set[str] = set()
+        ranked: list[dict[str, Any]] = []
+        for el in sorted(elements, key=score, reverse=True):
+            key = (el.get("selector") or el.get("name") or "").strip()
+            if key and key in seen:
+                continue
+            if key:
+                seen.add(key)
+            compressed: dict[str, Any] = {
+                "type": el.get("type", ""),
+                "name": el.get("name") or el.get("accessible_name") or "",
+                "role": el.get("role", ""),
+                "selector": el.get("selector", ""),
+            }
+            if el.get("href"):
+                compressed["href"] = el["href"]
+            if el.get("input_type"):
+                compressed["input_type"] = el["input_type"]
+            if el.get("cursor_pointer"):
+                compressed["cursor_pointer"] = True
+            if el.get("in_shadow_dom"):
+                compressed["in_shadow_dom"] = True
+            ranked.append(compressed)
+            if len(ranked) >= max_elements:
+                break
+
+        text = observation.get("text", "") or ""
+        compressed_text = text[:max_text_chars]
+
+        return {
+            "url": observation.get("url", ""),
+            "title": observation.get("title", ""),
+            "elements": ranked,
+            "text": compressed_text,
+            "headings": (observation.get("headings") or [])[:6],
+            "alerts": (observation.get("alerts") or [])[:5],
+            "dialogs": (observation.get("dialogs") or [])[:3],
+            "element_count": len(ranked),
+            "compressed": True,
+        }
+
 
 # Additional helper methods for enhanced observation

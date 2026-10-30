@@ -5,6 +5,8 @@ Orchestrates the action lifecycle: validate → resolve → emit → execute →
 
 import asyncio
 import logging
+import os
+import tempfile
 import uuid
 from typing import Any
 
@@ -495,8 +497,32 @@ class ActionExecutor:
             return {"cleared": True}
 
         elif action.type == ActionType.SELECT:
-            await locator.select_option(action.value)
-            return {"selected": action.value}
+            # Try native select first; fall back to click-through for custom
+            # date pickers / custom selects that are not real <select> elements.
+            try:
+                await locator.select_option(action.value)
+                return {"selected": action.value}
+            except Exception:
+                # Click-through: open the select, then click the matching option.
+                try:
+                    await locator.click()
+                    option_locator = self.page.locator(
+                        f"[role='option'], li, div.option:has-text('{action.value}')"
+                    )
+                    count = await option_locator.count()
+                    for i in range(count):
+                        nth = option_locator.nth(i)
+                        try:
+                            if await nth.is_visible():
+                                txt = (await nth.inner_text()).strip()
+                                if txt and action.value in txt:
+                                    await nth.click()
+                                    return {"selected": action.value, "via": "click_through"}
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+                raise
 
         elif action.type == ActionType.CHECK:
             await locator.check()
@@ -507,8 +533,13 @@ class ActionExecutor:
             return {"unchecked": True}
 
         elif action.type == ActionType.UPLOAD:
-            await locator.set_input_files(action.value)
-            return {"uploaded": True}
+            file_path = action.value
+            if not file_path:
+                # Generate a safe, small test file so file-input flows can be
+                # exercised without depending on user-provided fixtures.
+                file_path = _write_safe_test_file()
+            await locator.set_input_files(file_path)
+            return {"uploaded": True, "file": os.path.basename(file_path)}
 
         elif action.type == ActionType.WAIT:
             duration = 1.0
@@ -572,3 +603,20 @@ def _safe_error_message(exc: Exception) -> str:
     if any(s in msg.lower() for s in ["password", "secret", "credential"]):
         return "An error occurred during action execution"
     return msg
+
+
+def _write_safe_test_file() -> str:
+    """Write a small, safe test file to the OS temp dir for file-input flows.
+
+    Returns the absolute path of the generated file. The file is a tiny PNG-like
+    text fixture that is safe to upload and contains no sensitive data.
+    """
+    content = b"Kova test fixture - safe upload file (1x1 transparent placeholder)"
+    fd, path = tempfile.mkstemp(suffix=".png", prefix="kova-upload-")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(content)
+    except Exception:
+        # If we cannot write, return a path that will surface a clear error.
+        return path
+    return path
