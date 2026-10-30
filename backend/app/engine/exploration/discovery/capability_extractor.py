@@ -13,34 +13,30 @@ logger = logging.getLogger(__name__)
 def infer_effect_from_label(
     text: str, tag: str, page_pattern: str
 ) -> tuple[list[StateAssertion], list[str], float, str]:
-    """Infer expected effect, mutated keys, confidence, and source from element text and tag."""
+    """Infer expected effect, mutated keys, confidence, and source from element text and tag.
+
+    Inference is based on observed element role/type only, never on product-specific
+    keywords. Generic action text (submit/save/send/confirm) maps to a form-submission
+    effect; everything else defaults to an unproven, low-confidence effect.
+    """
     t = text.strip().lower()
 
-    if any(k in t for k in ("report", "generate", "document", "logbook", "export")):
-        return [StateAssertion(key="report_generated", value=True, predicate="eq")], ["report_generated"], 0.75, "heuristic"
-    if any(k in t for k in ("defence", "defense", "mock", "practice", "quiz", "test", "exam")):
-        return [StateAssertion(key="simulation_completed", value=True, predicate="eq")], ["simulation_completed"], 0.75, "heuristic"
-    if any(k in t for k in ("search", "find", "filter", "query")):
-        return [StateAssertion(key="search_executed", value=True, predicate="eq")], ["search_executed"], 0.70, "heuristic"
-    if any(k in t for k in ("enroll", "join course", "take course")):
-        return [StateAssertion(key="enrolled", value=True, predicate="eq")], ["enrolled"], 0.65, "heuristic"
+    # Auth boundaries are observed effects, not product assumptions.
     if any(k in t for k in ("log in", "login", "sign in", "signin")):
         return [StateAssertion(key="authenticated", value=True, predicate="eq")], ["authenticated"], 0.85, "discovered"
     if any(k in t for k in ("log out", "logout", "sign out", "signout")):
         return [StateAssertion(key="authenticated", value=False, predicate="eq")], ["authenticated"], 0.85, "discovered"
-    if any(k in t for k in ("add to cart", "buy now", "purchase")):
-        return [StateAssertion(key="cart_updated", value=True, predicate="eq")], ["cart"], 0.7, "heuristic"
-    if any(k in t for k in ("delete", "remove", "cancel")):
-        return [StateAssertion(key="deleted", value=True, predicate="eq")], ["deleted"], 0.55, "heuristic"
+
+    # Generic data-submission effect for any observed submit/save/send/confirm control.
     if any(k in t for k in ("save", "submit", "update", "send", "post", "confirm")):
-        key = "saved"
+        key = "form_submitted"
         if "contact" in page_pattern:
             key = "contact_form_submitted"
         elif "profile" in page_pattern:
             key = "profile_updated"
         return [StateAssertion(key=key, value=True, predicate="eq")], [key], 0.6, "heuristic"
 
-    # Default fallback
+    # Default fallback: no proven effect until execution confirms otherwise.
     return [], [], 0.4, "heuristic"
 
 
@@ -131,60 +127,9 @@ class CapabilityExtractor:
                         )
                     )
 
-            # Group discovered actions into capabilities
+            # Group discovered actions into capabilities based on observed effects only.
             effect_keys = {k for a in actions for k in a.mutates}
-            if "report_generated" in effect_keys:
-                capabilities.append(
-                    Capability(
-                        project_id=self.project_id,
-                        name="report_generation",
-                        description="Ability to submit logbook content, generate technical reports, and review outputs",
-                        produces_state=[StateMutation(key="report_generated", action="set", value=True)],
-                        kind="primary",
-                        source_files=page_obj.source_files or [],
-                        source="discovered",
-                        confidence=0.85,
-                    )
-                )
-            if "simulation_completed" in effect_keys:
-                capabilities.append(
-                    Capability(
-                        project_id=self.project_id,
-                        name="practice_session",
-                        description="Ability to conduct mock defence sessions, quizzes, or interactive practice reviews",
-                        produces_state=[StateMutation(key="simulation_completed", action="set", value=True)],
-                        kind="primary",
-                        source_files=page_obj.source_files or [],
-                        source="discovered",
-                        confidence=0.80,
-                    )
-                )
-            if "search_executed" in effect_keys:
-                capabilities.append(
-                    Capability(
-                        project_id=self.project_id,
-                        name="search_and_discovery",
-                        description="Ability to search, filter, and discover application resources and content",
-                        produces_state=[StateMutation(key="search_executed", action="set", value=True)],
-                        kind="primary",
-                        source_files=page_obj.source_files or [],
-                        source="discovered",
-                        confidence=0.75,
-                    )
-                )
-            if "enrolled" in effect_keys:
-                capabilities.append(
-                    Capability(
-                        project_id=self.project_id,
-                        name="course_enrollment",
-                        description="Ability to enroll in courses",
-                        produces_state=[StateMutation(key="enrolled", action="set", value=True)],
-                        kind="primary",
-                        source_files=page_obj.source_files or [],
-                        source="heuristic",
-                        confidence=0.7,
-                    )
-                )
+
             if "authenticated" in effect_keys:
                 capabilities.append(
                     Capability(
@@ -198,17 +143,21 @@ class CapabilityExtractor:
                         confidence=0.9,
                     )
                 )
-            if any(k in effect_keys for k in ("saved", "profile_updated", "contact_form_submitted")):
-                state_mutations = [StateMutation(key="form_submitted", action="set", value=True)]
-                for k in ("saved", "profile_updated", "contact_form_submitted"):
-                    if k in effect_keys:
-                        state_mutations.append(StateMutation(key=k, action="set", value=True))
+
+            submission_keys = {
+                "form_submitted",
+                "contact_form_submitted",
+                "profile_updated",
+            }
+            if effect_keys & submission_keys:
                 capabilities.append(
                     Capability(
                         project_id=self.project_id,
                         name="data_submission",
                         description=f"Form submission capability on {page_obj.url_pattern}",
-                        produces_state=state_mutations,
+                        produces_state=[
+                            StateMutation(key=k, action="set", value=True) for k in sorted(effect_keys & submission_keys)
+                        ],
                         kind="primary",
                         source_files=page_obj.source_files or [],
                         source="heuristic",

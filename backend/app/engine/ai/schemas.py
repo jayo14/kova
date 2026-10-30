@@ -202,13 +202,24 @@ class CompiledExpectation(BaseModel):
 
 
 class AIGeneratedJourney(BaseModel):
-    """An intelligent, purpose-driven user journey synthesized by AI."""
+    """An intelligent, purpose-driven user journey synthesized by AI.
+
+    Journeys describe GOALS, not scripts: they declare an objective, the
+    preconditions that must hold, the concrete observable outcome that proves
+    success, and a risk level. Steps must never invent CSS selectors — they
+    reference observed control labels (via control_hints) that the executor
+    resolves at run time.
+    """
 
     name: str = Field(description="Action-oriented journey name, e.g. 'Create and customize a study set'")
     title: str = Field(description="Short human-friendly title, e.g. 'Create Study Set'")
     description: str = Field(description="Clear explanation of the feature and what this journey validates")
     objective: str = Field(description="Verification objective proving the feature operates correctly")
     persona: str = Field(default="User", description="Persona executing this workflow")
+    kind: Literal["smoke", "navigation", "read_workflow", "write_workflow"] = Field(
+        default="navigation",
+        description="Honest mission kind: smoke (page loads), navigation, read workflow, or write workflow.",
+    )
     category: Literal["feature", "dashboard", "content", "settings", "workflow", "crud", "auth"] = "feature"
     journey: list[str] = Field(
         default_factory=list,
@@ -216,13 +227,29 @@ class AIGeneratedJourney(BaseModel):
     )
     steps: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="Executable browser steps: navigate, click, fill/type, select, wait",
+        description="Executable browser steps: navigate, click, fill/type, select, wait. Targets reference control labels, never raw CSS selectors.",
     )
     success_condition: dict[str, Any] = Field(
         default_factory=dict,
         description="Verification condition (text_visible, element_visible, url_changed_to, etc.)",
     )
     expected_outcome: str = Field(default="", description="Measurable state assertion proving the journey succeeded")
+    preconditions: list[str] = Field(
+        default_factory=list,
+        description="Preconditions that must hold (e.g. 'needs_login', 'needs_data').",
+    )
+    risk_level: Literal["read-only", "reversible_write", "destructive"] = Field(
+        default="read-only",
+        description="Risk level of the journey's actions.",
+    )
+    evidence_refs: list[str] = Field(
+        default_factory=list,
+        description="References to observed evidence (page, form, control) that grounds this journey.",
+    )
+    control_hints: list[str] = Field(
+        default_factory=list,
+        description="Optional hint list of observed control labels the executor resolves at run time.",
+    )
     outcome: str | None = Field(default=None, description="Execution outcome: PASSED, FAILED, BLOCKED, UNVERIFIED")
     confidence: float = Field(default=0.85, ge=0.0, le=1.0)
     recommended: bool = Field(default=False, description="True for the primary core product workflow")

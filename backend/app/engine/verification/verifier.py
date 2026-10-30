@@ -81,7 +81,7 @@ def _normalize_url_for_matching(u: str) -> str:
 
     Strips trailing slashes, drops 'www.' prefix, drops scheme (http://, https://),
     and standard default ports (:80, :443) so that e.g.:
-    - 'https://summastudy.com.ng' matches 'https://www.summastudy.com.ng/'
+    - 'https://example.com' matches 'https://www.example.com/'
     - 'http://example.com:80/dash/' matches 'https://example.com/dash'
     """
     if not u or not isinstance(u, str):

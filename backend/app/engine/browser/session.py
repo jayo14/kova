@@ -10,6 +10,7 @@ Cleanup happens automatically on success, failure, cancellation, exception, or t
 import asyncio
 import logging
 import re
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -65,6 +66,21 @@ DEFAULT_USER_AGENT = (
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
+BLOCKED_DOWNLOAD_EXTENSIONS = {
+    ".exe", ".msi", ".bat", ".cmd", ".com", ".scr", ".pif", ".dll", ".sys",
+    ".ps1", ".psm1", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".sh", ".bash", ".zsh", ".jar", ".app", ".deb", ".rpm", ".dmg",
+    ".pkg", ".lnk", ".hta", ".cpl",
+}
+
+
+def _sanitize_filename(name: str) -> str:
+    name = re.sub(r"[\x00-\x1f]", "", name).replace("\\", "/")
+    name = name.rsplit("/", 1)[-1].strip()
+    if name in ("", ".", ".."):
+        return "download.bin"
+    return name[:200]
+
 
 class BrowserSession:
     """Unified browser session wrapping Playwright Chromium.
@@ -99,6 +115,7 @@ class BrowserSession:
         self.network_errors: list[dict[str, Any]] = []
         self.console_errors: list[dict[str, Any]] = []
         self.failed_requests: list[dict[str, Any]] = []
+        self.download_events: list[dict[str, Any]] = []
         self.current_step_index: int = 0
         self.on_network_error: Callable[[dict[str, Any]], Any] | None = None
         self.video_path: str | None = None
@@ -136,12 +153,65 @@ class BrowserSession:
         self.network_errors = []
         self.console_errors = []
         self.failed_requests = []
+        self.download_events = []
         if old_context is not None:
             try:
                 await old_context.close()
             except Exception as e:
                 logger.debug("Failed to close old context: %s", e)
         await self._setup_context()
+
+    async def _on_download(self, download) -> None:
+        """Persist an untrusted page download into the job-scoped directory.
+
+        Rejects executable/script types and enforces per-job file-count and
+        byte-size limits. Every outcome is recorded on self.download_events.
+        """
+        suggested = download.suggested_filename or "download.bin"
+        filename = _sanitize_filename(suggested)
+        event: dict[str, Any] = {"filename": filename, "url": download.url}
+        try:
+            job_dir = Path(settings.BROWSER_DOWNLOAD_DIR) / (self.job_id or "unscoped")
+            job_dir.mkdir(parents=True, exist_ok=True)
+            existing = sum(1 for p in job_dir.iterdir() if p.is_file())
+            suffix = Path(filename).suffix.lower()
+            if suffix in BLOCKED_DOWNLOAD_EXTENSIONS:
+                await download.cancel()
+                event["status"] = "rejected_type"
+                logger.warning(
+                    "Blocked download type %s (%s)",
+                    suffix,
+                    _redact_url(download.url),
+                )
+            elif existing >= settings.BROWSER_DOWNLOAD_MAX_FILES:
+                await download.cancel()
+                event["status"] = "rejected_file_limit"
+                logger.warning(
+                    "Rejected download beyond job file limit: %s", filename
+                )
+            else:
+                dest = job_dir / filename
+                await download.save_as(dest)
+                size = dest.stat().st_size
+                if size > settings.BROWSER_DOWNLOAD_MAX_BYTES:
+                    dest.unlink(missing_ok=True)
+                    event["status"] = "rejected_too_large"
+                    event["size"] = size
+                    logger.warning(
+                        "Rejected oversized download %s (%d bytes)", filename, size
+                    )
+                else:
+                    event["status"] = "saved"
+                    event["size"] = size
+                    event["path"] = str(dest)
+                    logger.info("Saved job download %s (%d bytes)", filename, size)
+        except Exception as e:
+            event["status"] = "error"
+            event["error"] = str(e)
+            logger.warning(
+                "Download handling failed (%s): %s", _redact_url(download.url), e
+            )
+        self.download_events.append(event)
 
     async def _setup_context(self):
         """Create context + page with interception, tracing, and observers."""
@@ -176,6 +246,8 @@ class BrowserSession:
             "viewport": viewport,
             "user_agent": user_agent,
             "service_workers": "block",
+            "permissions": [],
+            "accept_downloads": True,
         }
         if locale:
             context_kwargs["locale"] = locale
