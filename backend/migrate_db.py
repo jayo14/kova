@@ -1,10 +1,15 @@
 import asyncio
 import asyncpg
-
 import os
+from dotenv import load_dotenv
 
+# Load .env so DATABASE_URL (rumptycloud) is available for the default target
+load_dotenv()
+
+# Target defaults to DATABASE_URL from .env (rumptycloud). Source must be
+# explicitly set via KOVA_MIGRATE_SOURCE_URL — no supabase default.
 SOURCE_URL = os.environ.get("KOVA_MIGRATE_SOURCE_URL", "")
-TARGET_URL = os.environ.get("KOVA_MIGRATE_TARGET_URL", "")
+TARGET_URL = os.environ.get("KOVA_MIGRATE_TARGET_URL", os.environ.get("DATABASE_URL", ""))
 
 async def get_tables(conn):
     return await conn.fetch('''
@@ -20,6 +25,14 @@ async def main():
     ssl_context.check_hostname = False
     ssl_context.verify_mode = ssl.CERT_NONE
     
+    if not SOURCE_URL:
+        print("ERROR: KOVA_MIGRATE_SOURCE_URL environment variable is not set")
+        print("Set it to the source database URL (e.g. export KOVA_MIGRATE_SOURCE_URL=postgresql://...)")
+        return
+    if not TARGET_URL:
+        print("ERROR: No target database URL found. Set KOVA_MIGRATE_TARGET_URL or DATABASE_URL in .env")
+        return
+
     try:
         source_conn = await asyncpg.connect(SOURCE_URL, ssl=ssl_context)
         target_conn = await asyncpg.connect(TARGET_URL, ssl=ssl_context)
