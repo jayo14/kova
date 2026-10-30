@@ -13,40 +13,52 @@
   },
   "topbarLinks": [
     {
-      "name": "Platform",
-      "url": "https://app.kova.dev"
+      "name": "Dashboard",
+      "url": "/dashboard"
     },
     {
       "name": "Status",
-      "url": "https://status.kova.dev"
+      "url": "/status"
     }
   ],
   "topbarCtaButton": {
-    "name": "Get Started Free",
-    "url": "https://app.kova.dev/auth/register"
+    "name": "Get Started",
+    "url": "/auth/signup"
   },
   "navigation": [
     {
-      "group": "Getting Started",
+      "group": "Start Here",
+      "pages": ["index", "quickstart", "how-it-works"]
+    },
+    {
+      "group": "Using Kova",
       "pages": [
-        "quickstart",
-        "concepts"
+        "guides/for-vibe-coders",
+        "guides/for-developers",
+        "guides/authentication",
+        "guides/results-and-evidence"
       ]
     },
     {
-      "group": "CI/CD & Integrations",
+      "group": "Local Setup",
       "pages": [
-        "integrations/github-actions",
-        "integrations/gitlab-ci",
-        "api-reference"
+        "development/local-setup",
+        "development/configuration",
+        "development/architecture",
+        "development/deployment"
       ]
     },
     {
-      "group": "Platform & Ops",
+      "group": "Integrations",
       "pages": [
-        "pricing",
-        "changelog"
+        "integrations/overview",
+        "integrations/api",
+        "integrations/ci-cd"
       ]
+    },
+    {
+      "group": "Reference",
+      "pages": ["troubleshooting", "limitations"]
     }
   ]
 }
