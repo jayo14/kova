@@ -13,9 +13,10 @@ interface DocsSidebarProps {
 }
 
 const groupIcons: Record<string, string> = {
-  "Getting Started": "rocket_launch",
-  "CI/CD & Integrations": "integration_instructions",
-  "Platform & Ops": "tune",
+  "Start Here": "rocket_launch",
+  "Using Kova": "explore",
+  "Local Setup": "laptop_mac",
+  Integrations: "integration_instructions",
   Reference: "menu_book",
 };
 

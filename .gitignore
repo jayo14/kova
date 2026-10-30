@@ -33,3 +33,6 @@ chunks/
 /PRD.md
 /ADR-001-native-browser-runtime.md
 /kortix.yaml
+
+# Certificate
+kova-redis-ca.crt

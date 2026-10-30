@@ -19,7 +19,7 @@ export function CodeCopyManager() {
       // Create Copy Button
       const button = document.createElement("button");
       button.className =
-        "absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity bg-white/10 hover:bg-white/20 text-white/80 hover:text-white px-2 py-1 rounded text-[11px] font-sans flex items-center gap-1 border border-white/10 backdrop-blur-sm cursor-pointer";
+        "absolute top-2.5 right-2.5 z-10 bg-white/10 hover:bg-white/25 text-white/70 hover:text-white px-2 py-1 rounded-md text-[11px] font-medium font-sans flex items-center gap-1 border border-white/15 backdrop-blur-sm cursor-pointer transition-colors";
       button.innerHTML = `
         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>

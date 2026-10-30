@@ -152,6 +152,81 @@ export function getAllDocsFlatList(): DocNavigationItem[] {
   return list;
 }
 
+function preprocessCallouts(md: string): string {
+  return md.replace(
+    /^> \[!(NOTE|TIP|WARNING|IMPORTANT|CAUTION)\][^\n]*\n((?:> ?[^\n]*(?:\n|$))*)/gm,
+    (_, type: string, body: string) => {
+      const lines = body
+        .split("\n")
+        .map((l) => l.replace(/^> ?/, ""))
+        .join("\n")
+        .trim();
+      const inner = marked.parse(lines, { async: false }) as string;
+      const label =
+        type === "CAUTION" ? "Warning" : type.charAt(0) + type.slice(1).toLowerCase();
+      return `<div class="doc-callout doc-callout-${type.toLowerCase()}" role="note"><p class="doc-callout-label"><span class="material-symbols-rounded doc-callout-icon" aria-hidden="true">${type === "TIP" ? "lightbulb" : type === "NOTE" ? "info" : type === "WARNING" || type === "CAUTION" ? "warning" : "priority_high"}</span>${label}</p><div class="doc-callout-body">${inner}</div></div>\n\n`;
+    }
+  );
+}
+
+function preprocessTabs(md: string): string {
+  return md.replace(
+    /:::tabs\n([\s\S]*?)\n:::\/tabs/g,
+    (_, body: string) => {
+      const tabRegex = /:::tab\[([^\]]+)\]\n([\s\S]*?)\n:::\/tab/g;
+      const tabs: { label: string; content: string }[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = tabRegex.exec(body)) !== null) {
+        tabs.push({ label: m[1].trim(), content: m[2].trim() });
+      }
+      if (tabs.length === 0) return "";
+
+      const tabIdBase = `tab-${Math.random().toString(36).slice(2, 9)}`;
+      const list = tabs
+        .map(
+          (t, i) =>
+            `<button type="button" role="tab" aria-selected="${i === 0}" data-tab-target="${tabIdBase}-${i}" class="doc-tab${i === 0 ? " doc-tab-active" : ""}">${t.label}</button>`
+        )
+        .join("");
+      const panels = tabs
+        .map(
+          (t, i) =>
+            `<div role="tabpanel" data-tab-panel="${tabIdBase}-${i}" class="doc-tab-panel${i === 0 ? " doc-tab-panel-active" : ""}">${marked.parse(t.content, { async: false })}</div>`
+        )
+        .join("\n");
+
+      return `<div class="doc-tabs" data-doc-tabs><div role="tablist" class="doc-tabs-list">${list}</div>${panels}</div>\n\n`;
+    }
+  );
+}
+
+let activeHeadings: DocHeading[] = [];
+
+marked.use({
+  renderer: {
+    heading({ text, depth }: { text: string; depth: number }) {
+      const cleanText = text.replace(/<[^>]+>/g, "");
+      const id = slugify(cleanText);
+
+      if (depth === 2 || depth === 3) {
+        activeHeadings.push({ id, text: cleanText, level: depth });
+      }
+
+      return `<h${depth} id="${id}" class="doc-heading group scroll-mt-24 font-heading font-semibold text-foreground tracking-tight ${
+        depth === 1
+          ? "text-3xl sm:text-4xl mt-2 mb-6"
+          : depth === 2
+          ? "text-2xl mt-12 mb-4 border-b border-border/40 pb-2"
+          : "text-xl mt-8 mb-3"
+      }">
+          <a href="#${id}" class="hover:underline flex items-center gap-2">
+            ${text}
+          </a>
+        </h${depth}>\n`;
+    },
+  } as any,
+});
+
 export async function getDocBySlug(slugArray: string[]): Promise<DocPage | null> {
   const slug = slugArray.join("/");
   const filePath = path.join(DOCS_DIRECTORY, `${slug}.mdx`);
@@ -163,35 +238,12 @@ export async function getDocBySlug(slugArray: string[]): Promise<DocPage | null>
   const fileRaw = fs.readFileSync(filePath, "utf-8");
   const { data, content } = parseFrontmatter(fileRaw);
 
-  const headings: DocHeading[] = [];
-
-  // Custom renderer for marked to collect headings with IDs
-  marked.use({
-    renderer: {
-      heading({ text, depth }: { text: string; depth: number }) {
-        const cleanText = text.replace(/<[^>]+>/g, "");
-        const id = slugify(cleanText);
-
-        if (depth === 2 || depth === 3) {
-          headings.push({ id, text: cleanText, level: depth });
-        }
-
-        return `<h${depth} id="${id}" class="doc-heading group scroll-mt-24 font-heading font-semibold text-foreground tracking-tight ${
-          depth === 1
-            ? "text-3xl sm:text-4xl mt-2 mb-6"
-            : depth === 2
-            ? "text-2xl mt-12 mb-4 border-b border-border/40 pb-2"
-            : "text-xl mt-8 mb-3"
-        }">
-          <a href="#${id}" class="hover:underline flex items-center gap-2">
-            ${text}
-          </a>
-        </h${depth}>\n`;
-      },
-    } as any,
-  });
-
-  const contentHtml = await marked.parse(content);
+  activeHeadings = [];
+  const contentHtml = await marked.parse(
+    preprocessTabs(preprocessCallouts(content))
+  );
+  const headings = activeHeadings;
+  activeHeadings = [];
 
   // Compute prev/next
   const flatList = getAllDocsFlatList();

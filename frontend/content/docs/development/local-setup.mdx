@@ -21,7 +21,7 @@ Two options: **Docker Compose** (recommended for a quick start) or **manual** (f
 ## Option A — Docker Compose (recommended)
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/jayo14/kova.git
 cd kova
 
 cp .env.example backend/.env
@@ -67,13 +67,25 @@ docker run -d --name kova-postgres \
 docker run -d --name kova-redis -p 6379:6379 redis:7-alpine
 ```
 
+:::tabs
+:::tab[macOS / Linux]
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+```
+:::/tab
+:::tab[Windows]
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+```
+:::/tab
+:::/tabs
+
 ### 2. Backend
 
 ```bash
 cd backend
-
-python3.12 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 pip install -e .
 
@@ -93,12 +105,24 @@ uvicorn app.main:app --reload --port 8000
 
 In a second terminal, start the Celery worker (required for browser execution):
 
+:::tabs
+:::tab[macOS / Linux]
 ```bash
 cd backend
 source .venv/bin/activate
 
 celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
 ```
+:::/tab
+:::tab[Windows]
+```powershell
+cd backend
+.venv\Scripts\Activate.ps1
+
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+```
+:::/tab
+:::/tabs
 
 ### 3. Frontend
 
@@ -114,6 +138,24 @@ npm run dev
 ```
 
 Open http://localhost:3000.
+
+## Option C — Managed services via RumptyCloud
+
+Instead of running Postgres and Redis yourself, provision managed instances on [RumptyCloud](https://rumptycloud.com) (same platform that hosts Kova production at `kova-9269c6.rumptycloud.app`):
+
+1. Create a managed PostgreSQL 16 instance and a managed Redis 7 instance.
+2. Copy each instance's connection string into `backend/.env`:
+
+   | Variable | Example |
+   |---|---|
+   | `DATABASE_URL` | `postgresql://user:pass@pg-host:5432/kova` |
+   | `REDIS_URL` | `redis://:pass@redis-host:6379/0` |
+   | `CELERY_BROKER_URL` | same as `REDIS_URL` |
+   | `CELERY_RESULT_BACKEND` | same as `REDIS_URL` |
+
+3. Run migrations and start the API/worker locally as in Option B — only the data stores live in the cloud.
+
+This keeps your laptop free of database processes while you develop against the same stack shape as production.
 
 ## Required environment variables
 

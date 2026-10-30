@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getAllDocSlugs, getDocBySlug } from "@/lib/docs";
 import { DocsToc } from "@/components/docs/docs-toc";
 import { CodeCopyManager } from "@/components/docs/code-copy";
+import { DocsTabsInit } from "@/components/docs/docs-tabs";
 import { MaterialIcon } from "@/components/shared/material-icon";
 
 interface DocPageProps {
@@ -36,7 +37,7 @@ export default async function DocPage({ params }: DocPageProps) {
   }
 
   return (
-    <div className="flex flex-col lg:flex-row items-start gap-8 xl:gap-12">
+    <div className="flex flex-col lg:flex-row items-start gap-10 xl:gap-16">
       {/* Main Reading Column */}
       <article className="flex-1 min-w-0 max-w-3xl">
         {/* Breadcrumb Navigation */}
@@ -68,8 +69,9 @@ export default async function DocPage({ params }: DocPageProps) {
           dangerouslySetInnerHTML={{ __html: doc.contentHtml }}
         />
 
-        {/* Code copy manager script activator */}
+        {/* Code copy manager + tabs interactivity */}
         <CodeCopyManager />
+        <DocsTabsInit />
 
         {/* Previous & Next Footer Navigation Cards */}
         <nav className="mt-12 pt-6 border-t border-border/40 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -108,7 +110,7 @@ export default async function DocPage({ params }: DocPageProps) {
       </article>
 
       {/* Desktop Sticky Table of Contents on the Right */}
-      <aside className="hidden lg:block w-48 xl:w-56 shrink-0 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pt-1">
+      <aside className="hidden lg:block w-48 xl:w-56 shrink-0 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pt-1 pl-1 border-l border-border/50">
         <DocsToc headings={doc.headings} />
       </aside>
     </div>

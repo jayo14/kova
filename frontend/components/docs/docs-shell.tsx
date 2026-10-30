@@ -52,12 +52,12 @@ export function DocsShell({ navigation, children }: DocsShellProps) {
       {/* Main Container */}
       <div className="mx-auto flex w-full max-w-7xl flex-1 px-4 sm:px-6 lg:px-8">
         {/* Desktop Sticky Left Sidebar */}
-        <aside className="hidden lg:block w-64 shrink-0 border-r border-border/40 py-8 pr-6 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto">
+        <aside className="hidden lg:block w-64 shrink-0 border-r border-border/60 py-8 pr-8 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto">
           <DocsSidebar navigation={navigation} />
         </aside>
 
         {/* Dynamic Doc Page Content */}
-        <main className="flex-1 min-w-0 py-8 lg:px-10">
+        <main className="flex-1 min-w-0 py-8 lg:pl-12">
           {children}
         </main>
       </div>
