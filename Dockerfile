@@ -33,6 +33,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Install Playwright browsers
 RUN playwright install chromium
 
+# Create non-root user for runtime
+RUN groupadd -r kova && useradd -r -g kova -m -d /home/kova kova && \
+    chown -R kova:kova /app /home/kova
+
+# Playwright browsers already installed; ensure profile dir
+RUN mkdir -p /tmp/kova-browser-profile && chown -R kova:kova /tmp/kova-browser-profile
+
+USER kova
+
 EXPOSE 8000
 
 # Support multiple launch modes via ENV:
