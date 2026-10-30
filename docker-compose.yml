@@ -6,32 +6,17 @@ version: "3.9"
 #                                          │
 #                                          ├── Celery broker ──> redis (db 1)
 #                                          ├── events/frames ──> redis (db 0)
-#                                          └── Postgres ──> postgres  (or external Supabase)
+#                                          └── Postgres ──> postgres  (or external RumptyCloud)
 #                                          │
 #                                          ▼
 #                                     kova-worker (Celery, owns Playwright/Chromium)
 #
-# Supabase (auth JWTs + evidence storage) is EXTERNAL — set SUPABASE_PROJECT_REF
-# and SUPABASE_SERVICE_ROLE_KEY in backend/.env.
+# All three backend services (kova-api, kova-worker, redis) start together with
+# `docker compose up`. The backend/.env file overrides any hardcoded defaults
+# below, so you can point DATABASE_URL / REDIS_URL / CELERY_BROKER_URL at
+# RumptyCloud or any external provider.
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: kova
-    ports:
-      - "5432:5432"
-    restart: unless-stopped
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -49,20 +34,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/kova
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      AI_PROVIDER: ${AI_PROVIDER:-none}
-      AI_MODEL: ${AI_MODEL:-}
-      AI_API_KEY: ${AI_API_KEY:-}
-      AI_BASE_URL: ${AI_BASE_URL:-}
-      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
-      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60.0}
-      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-2000}
-      AGENT_EXECUTION_ENABLED: ${AGENT_EXECUTION_ENABLED:-true}
-      AGENT_EXECUTION_MAX_DURATION_SECONDS: ${AGENT_EXECUTION_MAX_DURATION_SECONDS:-600}
     env_file:
       - ./backend/.env
     restart: unless-stopped
@@ -75,42 +46,26 @@ services:
       retries: 5
       start_period: 40s
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    command: >
+    command: >-
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
-  # Celery worker: owns Chromium. Each execution = one isolated browser context.
+  # Celery worker: owns Chromium. Each exploration = one isolated browser context.
   # concurrency=2 → at most 2 concurrent Chromium instances (~1-1.5GB RAM each).
   # Scale by raising --concurrency, not by removing the limit.
   kova-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/kova
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      AI_PROVIDER: ${AI_PROVIDER:-none}
-      AI_MODEL: ${AI_MODEL:-}
-      AI_API_KEY: ${AI_API_KEY:-}
-      AI_BASE_URL: ${AI_BASE_URL:-}
-      AI_TEMPERATURE: ${AI_TEMPERATURE:-0.2}
-      AI_TIMEOUT_SECONDS: ${AI_TIMEOUT_SECONDS:-60.0}
-      AI_MAX_OUTPUT_TOKENS: ${AI_MAX_OUTPUT_TOKENS:-2000}
-      AGENT_EXECUTION_ENABLED: ${AGENT_EXECUTION_ENABLED:-true}
-      AGENT_EXECUTION_MAX_DURATION_SECONDS: ${AGENT_EXECUTION_MAX_DURATION_SECONDS:-600}
     env_file:
       - ./backend/.env
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
+        condition: service_healthy
+      kova-api:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$HOSTNAME --timeout 10"]
