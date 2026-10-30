@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 
 import logging
+import ssl
 import redis.asyncio as aioredis
 
 from app.infrastructure.database.session import get_session

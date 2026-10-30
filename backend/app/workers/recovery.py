@@ -416,7 +416,11 @@ async def reconcile_explorations() -> dict[str, int]:
                 queue = "kova-free"
 
             task = asyncio.create_task(
-                asyncio.to_thread(run_exploration.delay, session_id, queue=queue)
+                asyncio.to_thread(
+                    run_exploration.apply_async,
+                    args=[str(session_id)],
+                    queue=queue,
+                )
             )
             _dispatch_tasks.add(task)
             task.add_done_callback(_dispatch_tasks.discard)

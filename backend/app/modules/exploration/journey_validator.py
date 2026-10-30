@@ -187,6 +187,8 @@ def validate_missions_against_site_map(
                 observed_controls.add((url, label))
 
     kept: list[DiscoveredMission] = []
+    for node in site_map:
+        print(f'  site_map node: url={node.get("url")}, needs_auth={node.get("needs_auth")}')
     for m in missions:
         entry_url = ""
         if isinstance(m.route_analysis, dict):
@@ -198,7 +200,8 @@ def validate_missions_against_site_map(
                     break
 
         hints = m.control_hints or []
-        entry_observed = (not entry_url) or (entry_url in observed_urls)
+        entry_obs = (not entry_url) or (entry_url in observed_urls)
+        entry_observed = entry_obs
         controls_observed = (not hints) or all(
             any(url == entry_url or not entry_url for url, _ in observed_controls)
             and any(label == h.lower() for _, label in observed_controls)

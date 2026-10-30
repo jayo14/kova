@@ -199,7 +199,6 @@ _INFRA_CONTROL_LANGUAGE: tuple[str, ...] = (
     "check deployment",
     "view logs",
     "render dashboard",
-    "open dashboard",
     "start building on",
     "start building",
     "cloud dashboard",

@@ -3003,7 +3003,12 @@ class ExplorationEngine:
             route_map = await self._analyze_routes(page, current_url, selected_role=selected_role)
         except TypeError:
             route_map = await self._analyze_routes(page, current_url)
-        accessible_routes = [r for r in route_map if r["accessible"]]
+        # Include protected routes (requires_auth) so they still generate
+        # missions — they're just flagged as needing authentication.
+        accessible_routes = [
+            r for r in route_map
+            if r["accessible"] or r.get("requires_auth")
+        ]
         auth_routes = [r for r in route_map if r["category"] == "auth"]
 
         # Extend the SiteMap with every discovered route so the live dry-run
@@ -3395,7 +3400,26 @@ class ExplorationEngine:
             if fav:
                 fav.recommended = True
             else:
-                non_auth = next((m for m in missions if m.category != "auth"), None)
+                non_auth = next(
+                    (
+                        m
+                        for m in missions
+                        if m.category != "auth"
+                        and not any(
+                            sk in m.name.lower()
+                            for sk in [
+                                "setting",
+                                "profile",
+                                "account",
+                                "preference",
+                                "sign up",
+                                "log in",
+                                "auth",
+                            ]
+                        )
+                    ),
+                    None,
+                )
                 if non_auth:
                     non_auth.recommended = True
 

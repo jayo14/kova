@@ -175,8 +175,8 @@ async def test_reconcile_enqueues_each_stale_exploration_once(
     enqueued: list[str] = []
     monkeypatch.setattr(
         exploration_tasks.run_exploration,
-        "delay",
-        lambda session_id: enqueued.append(session_id),
+        "apply_async",
+        lambda args=None, **_: enqueued.append((args or [None])[0]),
     )
 
     first = await recovery.reconcile_explorations()
