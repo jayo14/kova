@@ -25,8 +25,8 @@ skills-lock.json
 kova-launch-prompts/
 
 # Internal documentation, examples, and spec chunks
-docs/
-examples/
+/docs/
+/examples/
 chunks/
 /AUDIT.md
 /WORKLOG.md
