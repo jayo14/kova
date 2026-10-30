@@ -36,12 +36,12 @@ export default async function DocPage({ params }: DocPageProps) {
   }
 
   return (
-    <div className="flex flex-col xl:flex-row items-start gap-10">
+    <div className="flex flex-col lg:flex-row items-start gap-8 xl:gap-12">
       {/* Main Reading Column */}
       <article className="flex-1 min-w-0 max-w-3xl">
         {/* Breadcrumb Navigation */}
         <nav className="flex items-center gap-1.5 text-xs text-muted-foreground mb-4">
-          <Link href="/docs/quickstart" className="hover:text-foreground transition-colors">
+          <Link href="/docs" className="hover:text-foreground transition-colors">
             Docs
           </Link>
           <MaterialIcon name="chevron_right" size={14} className="opacity-50" />
@@ -108,7 +108,7 @@ export default async function DocPage({ params }: DocPageProps) {
       </article>
 
       {/* Desktop Sticky Table of Contents on the Right */}
-      <aside className="hidden xl:block w-60 shrink-0 sticky top-24 pt-2">
+      <aside className="hidden lg:block w-48 xl:w-56 shrink-0 sticky top-20 self-start max-h-[calc(100vh-6rem)] overflow-y-auto pt-1">
         <DocsToc headings={doc.headings} />
       </aside>
     </div>

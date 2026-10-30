@@ -4,7 +4,6 @@ import { useState } from "react";
 import { DocsHeader } from "./docs-header";
 import { DocsSidebar } from "./docs-sidebar";
 import { MaterialIcon } from "@/components/shared/material-icon";
-import { cn } from "@/lib/utils";
 import type { DocNavigationGroup } from "@/lib/docs";
 
 interface DocsShellProps {
@@ -53,7 +52,7 @@ export function DocsShell({ navigation, children }: DocsShellProps) {
       {/* Main Container */}
       <div className="mx-auto flex w-full max-w-7xl flex-1 px-4 sm:px-6 lg:px-8">
         {/* Desktop Sticky Left Sidebar */}
-        <aside className="hidden lg:block w-64 shrink-0 border-r border-border/40 py-8 pr-6 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto">
+        <aside className="hidden lg:block w-64 shrink-0 border-r border-border/40 py-8 pr-6 sticky top-14 self-start h-[calc(100vh-3.5rem)] overflow-y-auto">
           <DocsSidebar navigation={navigation} />
         </aside>
 
@@ -66,13 +65,30 @@ export function DocsShell({ navigation, children }: DocsShellProps) {
       {/* Docs Footer */}
       <footer className="border-t border-border/40 py-8 bg-secondary/10 mt-auto">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2">
             <span>© {new Date().getFullYear()} Kova Technologies, Inc.</span>
             <span>•</span>
             <span>Autonomous Software Testing</span>
+            <span>•</span>
+            <a
+              href="https://rumptycloud.com"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 hover:text-foreground transition-colors"
+              title="Kova is hosted on RumptyCloud"
+            >
+              <img
+                src="https://rumptycloud.com/favicon.png?v=5"
+                alt=""
+                width={14}
+                height={14}
+                className="rounded-[3px]"
+              />
+              <span>Hosted on RumptyCloud</span>
+            </a>
           </div>
           <div className="flex items-center gap-4">
-            <a href="https://status.kova.dev" target="_blank" rel="noreferrer" className="hover:text-foreground transition-colors">
+            <a href="/status" className="hover:text-foreground transition-colors">
               Status
             </a>
             <a href="https://github.com/jayo14/kova" target="_blank" rel="noreferrer" className="hover:text-foreground transition-colors">
