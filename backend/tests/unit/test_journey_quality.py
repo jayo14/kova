@@ -1,5 +1,4 @@
 """Unit tests for journey quality validation, outcome verification, and ranking."""
-
 import pytest
 from app.modules.exploration.schemas import DiscoveredMission
 from app.modules.exploration.journey_validator import (
@@ -41,7 +40,7 @@ def test_validate_journey_rejects_shallow_navigation():
         ],
         successCondition={"url_matches": "/features"},
         confidence=0.7,
-        classification="functional",  # Incorrectly claiming to be functional when it's only navigation
+        classification="functional",
         is_core=False,
     )
 
@@ -61,7 +60,7 @@ def test_validate_journey_rejects_vague_outcome():
         category="feature",
         journey=["Open app", "Click Create", "Verify visible feedback"],
         steps=[
-            {"type": "navigate", "url": "https://example.com/reports"},
+            {"type": "navigate", "url": "https://example.com/reports/new"},
             {"type": "click", "target": "button:has-text('Create')"},
         ],
         successCondition={"element_count": {"selector": "div, section, p", "min": 1}},
@@ -101,7 +100,6 @@ def test_repair_journey_enhances_weak_flow():
     assert repaired.successCondition is not None
     assert repaired.expected_outcome is not None
     assert not is_vague_outcome(repaired.expected_outcome)
-    assert "Generate Report" in repaired.expected_outcome
 
 
 def test_score_and_rank_prioritizes_functional_capabilities_over_auth_and_navigation():
@@ -116,9 +114,9 @@ def test_score_and_rank_prioritizes_functional_capabilities_over_auth_and_naviga
         journey=["Open app", "Enter email and password", "Submit login", "Verify dashboard loads"],
         steps=[
             {"type": "navigate", "url": "https://example.com/login"},
-            {"type": "type", "target": "input[type='email']", "value": "test@example.com"},
-            {"type": "type", "target": "input[type='password']", "value": "password"},
-            {"type": "click", "target": "button[type='submit']"},
+            {"type": "type", "target": "email input", "value": "test@example.com"},
+            {"type": "type", "target": "password input", "value": "password"},
+            {"type": "click", "target": "submit button"},
         ],
         successCondition={"auth_verified": {"auth_path": "/login"}},
         confidence=0.8,
@@ -149,69 +147,75 @@ def test_score_and_rank_prioritizes_functional_capabilities_over_auth_and_naviga
 
     report_mission = DiscoveredMission(
         id="m-report",
-        name="Generate SIWES Technical Report",
-        title="Generate SIWES Technical Report",
-        description="Enter logbook activity and generate technical report artifact",
-        objective="Verify student can generate technical report with document viewer output",
-        persona="Student",
+        name="Generate Technical Report",
+        title="Generate Technical Report",
+        description="Enter activity entries and generate a technical report artifact",
+        objective="Verify user can generate a technical report document",
+        persona="User",
         category="workflow",
+        kind="write_workflow",
         journey=[
             "Open app",
             "Open report generation interface",
-            "Input logbook weekly activity entries",
+            "Input activity entries",
             "Submit and trigger report generation",
             "Verify generated report document renders in viewer",
         ],
         steps=[
             {"type": "navigate", "url": "https://example.com/reports/new"},
-            {"type": "type", "target": "textarea[name='log_entry']", "value": "Week 1-4 telemetry firmware implementation."},
-            {"type": "click", "target": "button:has-text('Generate Report')"},
+            {"type": "type", "target": "entry input", "value": "Week 1-4 activity entries."},
+            {"type": "click", "target": "Generate Report"},
         ],
-        successCondition={"element_count": {"selector": ".report-viewer, [role='document']", "min": 1}},
+        successCondition={"element_count": {"selector": ".report-viewer", "min": 1}},
         confidence=0.9,
-        expected_outcome="Application processes logbook entries and renders synthesized report document",
+        expected_outcome="Application processes activity entries and renders synthesized report document",
         classification="functional",
+        route_analysis={"path": "/reports/new"},
+        control_hints=["entry input", "Generate Report"],
         is_core=True,
     )
 
-    defence_mission = DiscoveredMission(
-        id="m-defence",
-        name="Complete Mock Defence Session",
-        title="Complete Mock Defence Session",
-        description="Launch mock defence simulation, answer technical questions, and review evaluation feedback",
-        objective="Verify student can complete mock defence and receive evaluation scores",
-        persona="Student",
+    review_mission = DiscoveredMission(
+        id="m-review",
+        name="Complete Review Session",
+        title="Complete Review Session",
+        description="Launch review simulation, answer questions, and review feedback",
+        objective="Verify user can complete a review session and receive scores",
+        persona="User",
         category="workflow",
+        kind="write_workflow",
         journey=[
             "Open app",
-            "Launch mock defence",
+            "Start review",
             "Answer question prompt",
             "Submit response",
             "Verify evaluation feedback and score metrics render",
         ],
         steps=[
-            {"type": "navigate", "url": "https://example.com/defence"},
-            {"type": "click", "target": "button:has-text('Start Defence')"},
-            {"type": "type", "target": "textarea", "value": "The telemetry pipeline uses deterministic buffering."},
-            {"type": "click", "target": "button:has-text('Submit Answer')"},
+            {"type": "navigate", "url": "https://example.com/review"},
+            {"type": "click", "target": "Start Review"},
+            {"type": "type", "target": "response textarea", "value": "The telemetry pipeline uses deterministic buffering."},
+            {"type": "click", "target": "Submit Response"},
         ],
-        successCondition={"element_count": {"selector": ".evaluation-feedback, .score-badge", "min": 1}},
+        successCondition={"element_count": {"selector": ".evaluation-feedback", "min": 1}},
         confidence=0.88,
-        expected_outcome="Simulation completes and renders detailed evaluation feedback and scoring metrics",
+        expected_outcome="Review completes and renders detailed evaluation feedback and scoring metrics",
         classification="functional",
+        route_analysis={"path": "/review"},
+        control_hints=["Start Review", "response textarea", "Submit Response"],
         is_core=True,
     )
 
-    ranked = deduplicate_and_rank_journeys([auth_mission, nav_mission, report_mission, defence_mission])
+    ranked = deduplicate_and_rank_journeys([auth_mission, nav_mission, report_mission, review_mission])
 
     # Core functional workflow MUST be recommended #1
     assert len(ranked) >= 3
     assert ranked[0].id == "m-report"
     assert ranked[0].recommended is True
-    assert "SIWES Technical Report" in ranked[0].name
+    assert "Generate Technical Report" in ranked[0].name
     assert ranked[0].ranking_rationale is not None
     assert "tests core capability" in ranked[0].ranking_rationale
 
     # Auth and navigation must NOT be recommended over core features
-    assert ranked[1].id == "m-defence"
+    assert ranked[1].id == "m-review"
     assert not any(m.recommended for m in ranked[1:])

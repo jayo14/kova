@@ -24,13 +24,16 @@ def test_deduplicate_candidate_missions_removes_semantic_duplicates():
         objective="Create a new record in catalog",
         category="crud",
         classification="functional",
+        kind="write_workflow",
         route_analysis={"path": "/records/new"},
+        control_hints=["title input", "submit button"],
         steps=[
             {"type": "navigate", "target": "https://example.com/records/new"},
             {"type": "fill", "target": "#title", "value": "New Item"},
             {"type": "click", "target": "#btn-submit"},
         ],
         successCondition={"record_persisted": {"expected_text": "New Item"}},
+        expected_outcome="A new record is created and appears in the records list",
     )
     m2 = DiscoveredMission(
         id="m2",
@@ -38,13 +41,16 @@ def test_deduplicate_candidate_missions_removes_semantic_duplicates():
         objective="Create a new record in catalog",
         category="crud",
         classification="functional",
+        kind="write_workflow",
         route_analysis={"path": "/records/new"},
+        control_hints=["title input", "submit button"],
         steps=[
             {"type": "navigate", "target": "https://example.com/records/new"},
             {"type": "fill", "target": "#title", "value": "New Item"},
             {"type": "click", "target": "#btn-submit"},
         ],
         successCondition={"record_persisted": {"expected_text": "New Item"}},
+        expected_outcome="A new record is created and appears in the records list",
     )
 
     results = deduplicate_and_rank_journeys([m1, m2])
@@ -60,7 +66,12 @@ def test_mission_grounding_attaches_concrete_assertions():
         objective="Create a new project entity",
         category="crud",
         classification="functional",
+        kind="write_workflow",
+        route_analysis={"path": "/projects/new"},
+        control_hints=["save button"],
         steps=[{"type": "navigate", "target": "/projects/new"}, {"type": "click", "target": "#save"}],
+        successCondition={"record_persisted": {"expected_text": "Create Project"}},
+        expected_outcome="A new project is created and persisted",
     )
     repaired_create = repair_journey(m_create)
     assert "record_persisted" in repaired_create.successCondition
@@ -72,6 +83,9 @@ def test_mission_grounding_attaches_concrete_assertions():
         objective="Search and filter records",
         category="feature",
         classification="functional",
+        kind="read_workflow",
+        route_analysis={"path": "/records"},
+        control_hints=["search input"],
         steps=[{"type": "navigate", "target": "/records"}, {"type": "fill", "target": "#q", "value": "query"}],
     )
     repaired_search = repair_journey(m_search)
@@ -84,7 +98,13 @@ def test_mission_grounding_attaches_concrete_assertions():
         objective="Sign into user account",
         category="auth",
         classification="setup",
+        kind="navigation",
+        route_analysis={"path": "/login"},
+        control_hints=["email input", "password input", "login button"],
+        credential_id="test-cred",
         steps=[{"type": "navigate", "target": "/login"}, {"type": "click", "target": "#login"}],
+        successCondition={"auth_verified": True},
+        expected_outcome="User is authenticated and redirected to dashboard",
     )
     repaired_auth = repair_journey(m_auth)
     assert "auth_verified" in repaired_auth.successCondition
@@ -97,8 +117,16 @@ def test_ranking_prioritizes_functional_workflow_over_auth():
         objective="Sign into account",
         category="auth",
         classification="setup",
-        steps=[{"type": "navigate", "target": "/login"}, {"type": "click", "target": "#login"}],
+        kind="navigation",
+        route_analysis={"path": "/login"},
+        control_hints=["login button"],
+        credential_id="test-cred",
+        steps=[
+            {"type": "navigate", "target": "/login"},
+            {"type": "click", "target": "#login", "credential_id": "test-cred"},
+        ],
         successCondition={"auth_verified": True},
+        expected_outcome="User is authenticated",
     )
     m_functional = DiscoveredMission(
         id="m-func",
@@ -106,12 +134,16 @@ def test_ranking_prioritizes_functional_workflow_over_auth():
         objective="Create a new record",
         category="feature",
         classification="functional",
+        kind="write_workflow",
+        route_analysis={"path": "/records/new"},
+        control_hints=["title input", "submit button"],
         steps=[
             {"type": "navigate", "target": "/records/new"},
             {"type": "fill", "target": "#title", "value": "Test"},
             {"type": "click", "target": "#submit"},
         ],
         successCondition={"record_persisted": {"expected_text": "Test"}},
+        expected_outcome="A new record is created and appears in the list",
     )
 
     ranked = deduplicate_and_rank_journeys([m_auth, m_functional])
