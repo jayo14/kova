@@ -29,6 +29,45 @@ from app.engine.credentials.store import CredentialStore
 
 logger = logging.getLogger(__name__)
 
+# Bounded retries for transient action failures (flaky APIs, timing, etc.).
+MAX_ACTION_RETRIES = 3
+RETRY_BACKOFF_BASE_SECONDS = 0.4
+
+# Error types that are transient and worth retrying with backoff.
+RETRYABLE_ERROR_TYPES = frozenset({
+    "target_not_found",
+    "execution_error",
+    "network_error",
+    "timeout",
+    "action_error",
+})
+
+# Errors that reflect a problem with the application under test (rather than
+# automation timing) and should NOT be retried blindly.
+APP_ERROR_TYPES = frozenset({
+    "validation_error",
+    "credential_error",
+    "unsafe_navigation",
+})
+
+
+def classify_error_category(error_type: str, message: str = "") -> str:
+    """Classify an action error as 'app' or 'automation'.
+
+    'app' errors indicate a problem with the application under test (bad input,
+    rejected credentials, blocked navigation). 'automation' errors indicate the
+    automation could not complete the action (target missing, flaky click).
+    """
+    et = (error_type or "").lower()
+    if et in APP_ERROR_TYPES:
+        return "app"
+    msg = (message or "").lower()
+    if any(k in msg for k in ("500", "502", "503", "server error", "internal server")):
+        return "app"
+    if "credential" in msg or "validation" in et:
+        return "app"
+    return "automation"
+
 
 class ActionExecutor:
     """Executes structured browser actions.
@@ -136,8 +175,9 @@ class ActionExecutor:
             emit_payload["credential_id"] = credential_id
         await self._emit(execution_id, "action.started", emit_payload)
 
-        # Step 4: Resolve target (if needed)
+        # Step 4: Resolve target (if needed) and execute, with bounded retries.
         locator = None
+        result: dict[str, Any] = {}
         actions_needing_target = {
             ActionType.CLICK,
             ActionType.TYPE,
@@ -149,55 +189,86 @@ class ActionExecutor:
         }
         if action.type in actions_needing_target:
             try:
-                locator = await self._resolve_target(action)
+                locator, result = await self._resolve_and_execute_with_retries(action)
             except TargetNotFoundError as e:
-                logger.warning("Target not found: %s", e)
+                safe_error = _safe_error_message(e)
+                logger.warning("Target not found: %s", safe_error)
+                category = classify_error_category("target_not_found", safe_error)
                 await self._emit(
                     execution_id,
                     "action.failed",
                     {
                         "action": action.type.value,
                         "error": "target_not_found",
-                        "message": str(e),
+                        "message": safe_error,
+                        "category": category,
                     },
                 )
                 return {
                     "success": False,
                     "error": {
                         "type": "target_not_found",
-                        "message": str(e),
+                        "message": safe_error,
                         "action_type": action.type.value,
+                        "category": category,
                         "target": action.target.to_dict(),
                     },
                 }
+            except Exception as e:
+                safe_error = _safe_error_message(e)
+                logger.warning("Action execution failed: %s", safe_error)
+                error_type = getattr(e, "error_code", None) or type(e).__name__
+                category = classify_error_category(error_type, safe_error)
+                await self._emit(
+                    execution_id,
+                    "action.failed",
+                    {
+                        "action": action.type.value,
+                        "error": error_type,
+                        "message": safe_error,
+                        "category": category,
+                    },
+                )
+                return {
+                    "success": False,
+                    "error": {
+                        "type": error_type,
+                        "message": safe_error,
+                        "action_type": action.type.value,
+                        "category": category,
+                        "target": action.target.to_dict(),
+                    },
+                }
+        else:
+            # Actions without a target (navigate, wait, press, scroll, etc.)
+            try:
+                result = await self._execute_action(action, None)
+            except Exception as e:
+                safe_error = _safe_error_message(e)
+                logger.warning("Action execution failed: %s", safe_error)
+                error_type = getattr(e, "error_code", None) or type(e).__name__
+                category = classify_error_category(error_type, safe_error)
+                await self._emit(
+                    execution_id,
+                    "action.failed",
+                    {
+                        "action": action.type.value,
+                        "error": error_type,
+                        "message": safe_error,
+                        "category": category,
+                    },
+                )
+                return {
+                    "success": False,
+                    "error": {
+                        "type": error_type,
+                        "message": safe_error,
+                        "action_type": action.type.value,
+                        "category": category,
+                    },
+                }
 
-        # Step 5: Execute
-        try:
-            result = await self._execute_action(action, locator)
-        except Exception as e:
-            # Never include action.value (password) in error messages
-            safe_error = _safe_error_message(e)
-            logger.warning("Action execution failed: %s", safe_error)
-            await self._emit(
-                execution_id,
-                "action.failed",
-                {
-                    "action": action.type.value,
-                    "error": "execution_error",
-                    "message": safe_error,
-                },
-            )
-            return {
-                "success": False,
-                "error": {
-                    "type": "execution_error",
-                    "message": safe_error,
-                    "action_type": action.type.value,
-                    "target": action.target.to_dict(),
-                },
-            }
-
-        # Step 6: Emit action.completed
+        # Step 5: Emit action.completed
         await self._emit(
             execution_id,
             "action.completed",
@@ -289,6 +360,54 @@ class ActionExecutor:
             )
 
         raise TargetNotFoundError(str(target.to_dict()))
+
+    async def _resolve_and_execute_with_retries(
+        self, action: Action
+    ) -> tuple[Any, dict[str, Any]]:
+        """Resolve target and execute the action with bounded retries.
+
+        Transient failures (target not found, flaky click, network blip) are
+        retried with exponential backoff up to MAX_ACTION_RETRIES. Non-transient
+        errors (validation, credential, unsafe navigation) are returned
+        immediately without retry.
+
+        Returns (locator, result) on success, or raises the last error on
+        exhaustion so the caller can emit a structured failure.
+        """
+        last_error: Exception | None = None
+        for attempt in range(MAX_ACTION_RETRIES):
+            locator = None
+            if action.type in {
+                ActionType.CLICK, ActionType.TYPE, ActionType.CLEAR,
+                ActionType.SELECT, ActionType.CHECK, ActionType.UNCHECK,
+                ActionType.UPLOAD,
+            }:
+                try:
+                    locator = await self._resolve_target(action)
+                except TargetNotFoundError as e:
+                    last_error = e
+                    if attempt < MAX_ACTION_RETRIES - 1:
+                        await asyncio.sleep(
+                            RETRY_BACKOFF_BASE_SECONDS * (2 ** attempt)
+                        )
+                        continue
+                    raise
+                except Exception:
+                    # Non-target resolution errors: do not retry.
+                    raise
+
+            try:
+                result = await self._execute_action(action, locator)
+                return locator, result
+            except Exception as e:
+                last_error = e
+                error_type = getattr(e, "error_code", None) or type(e).__name__
+                if error_type in RETRYABLE_ERROR_TYPES and attempt < MAX_ACTION_RETRIES - 1:
+                    await asyncio.sleep(RETRY_BACKOFF_BASE_SECONDS * (2 ** attempt))
+                    continue
+                raise
+        # Unreachable, but satisfy type checkers.
+        raise last_error or TargetNotFoundError(str(action.target.to_dict()))
 
     async def _execute_action(self, action: Action, locator=None) -> dict[str, Any]:
         """Execute the browser action."""
