@@ -415,14 +415,26 @@ class FlowRunner:
             safety_restrictions=safety_restrictions,
         )
 
+        pre_reg = None
         try:
             from app.engine.verification.expectation import derive_expectation_from_objective
             pre_state = {}
             try:
                 if browser.page:
+                    observation = await browser.observe()
+                    elements = observation.get("elements") or []
                     pre_state = {
                         "url": browser.page.url,
                         "title": await browser.page.title(),
+                        "headings": observation.get("headings") or [],
+                        "counts": {
+                            "elements": len(elements),
+                            "buttons": sum(1 for e in elements if e.get("type") == "button"),
+                            "inputs": sum(1 for e in elements if e.get("type") == "input"),
+                            "forms": len(observation.get("forms") or []),
+                            "alerts": len(observation.get("alerts") or []),
+                        },
+                        "visible_records": [],
                     }
             except Exception:
                 pass
@@ -453,20 +465,12 @@ class FlowRunner:
             await self._emit_events(ctx, event_recorder)
 
             verification = None
-            if success_condition:
-                verification = await verifier.verify(success_condition)
-            else:
-                from app.engine.verification.verifier import compile_expectation
-                live_url = getattr(browser.page, "url", "")
-                live_title = await browser.page.title() if browser.page else ""
-                live_text = await browser.page.evaluate("() => document.body ? document.body.innerText.slice(0, 500) : ''") if browser.page else ""
-                compiled_cond = await compile_expectation(
-                    objective,
-                    "",
-                    page_context={"url": live_url, "title": live_title, "text": live_text},
-                )
-                if compiled_cond:
-                    verification = await verifier.verify(compiled_cond)
+            # Pre-register the expectation BEFORE acting and verify against it.
+            # Never compile an expectation from the live page after the run —
+            # that would describe whatever is already on screen.
+            condition = success_condition or self._build_verification_condition(pre_reg, objective)
+            if condition:
+                verification = await verifier.verify(condition)
 
             if verification and verification.passed:
                 ctx.transition(ExecutionState.COMPLETED)
@@ -606,6 +610,63 @@ class FlowRunner:
                 "events": ctx.events,
                 "observations": ctx.observations,
             }
+
+    @staticmethod
+    def _extract_expected_value(objective: str | None) -> str:
+        """Extract a concrete expected value from the objective (quoted text preferred).
+
+        The value a write workflow is expected to persist must be concrete and
+        derived from the objective, never guessed from the live page.
+        """
+        import re
+
+        if not objective:
+            return ""
+        m = re.search(r"['\"]([^'\"]{2,80})['\"]", objective)
+        if m:
+            return m.group(1)
+        for kw in ("enter ", "type ", "set ", "save ", "submit ", "create ", "add "):
+            idx = objective.lower().rfind(kw)
+            if idx != -1:
+                fragment = objective[idx + len(kw):].strip().strip(".,!\"'")
+                if fragment:
+                    return fragment[:80]
+        return ""
+
+    def _build_verification_condition(
+        self,
+        pre_reg: Any | None,
+        objective: str | None,
+    ) -> dict[str, Any] | None:
+        """Build a deterministic verification condition from the pre-registered expectation.
+
+        The expectation is derived from the objective and the pre-action page state,
+        and is never overwritten after the run starts. For write workflows we assert
+        that the entered value becomes visible and (persistence) survives a reload,
+        plus negative checks that no error banner or validation error appeared.
+        """
+        if pre_reg is None:
+            return None
+        condition: dict[str, Any] = {}
+        lower_obj = (objective or "").lower()
+        is_write = any(k in lower_obj for k in ("create", "add", "submit", "save", "post", "upload"))
+        requires_persistence = bool(getattr(pre_reg, "requires_persistence_check", False)) or is_write
+        expected_text = self._extract_expected_value(objective)
+
+        # Baseline-and-delta: the written value must appear in the UI.
+        if is_write or requires_persistence:
+            spec: dict[str, Any] = {}
+            if expected_text:
+                spec["expected_text"] = expected_text
+            if requires_persistence:
+                spec["reload"] = True
+            if spec:
+                condition["record_persisted"] = spec
+
+        # Negative checks: no error banners or validation errors tied to the action.
+        condition["app_error_absent"] = True
+
+        return condition or None
 
     async def _execute_inner(
         self,
