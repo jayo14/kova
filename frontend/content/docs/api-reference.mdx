@@ -1,0 +1,41 @@
+---
+title: "API Reference"
+description: "Programmatic REST API reference for Kova."
+---
+
+# API Reference
+
+All requests must include an `Authorization: Bearer <token>` header with a valid API Token or user JWT.
+
+## CI & Validation
+
+### `POST /api/v1/ci/validate`
+Triggers continuous validation for a project based on git diff or full test suite.
+
+**Request Body:**
+```json
+{
+  "project_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "base_url": "https://preview.mycompany.com",
+  "commit_message": "Add Stripe payment element",
+  "diff_content": "diff --git a/src/Checkout.tsx b/src/Checkout.tsx..."
+}
+```
+
+**Responses:**
+- `200 OK`: Synchronous validation report
+- `201 Created`: Asynchronous validation run started
+- `402 Payment Required`: Free plan monthly execution limit reached
+
+---
+
+## Billing & Usage
+
+### `GET /api/v1/usage`
+Retrieve the caller organization's execution count and storage metrics.
+
+### `POST /api/v1/billing/checkout`
+Create a Stripe Checkout Session to upgrade subscription tier.
+
+### `POST /api/v1/billing/portal`
+Create a Stripe Customer Portal Session for billing and invoice management.
