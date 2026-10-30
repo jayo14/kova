@@ -112,6 +112,7 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._pages: list[Page] = []
         self.network_errors: list[dict[str, Any]] = []
         self.console_errors: list[dict[str, Any]] = []
         self.failed_requests: list[dict[str, Any]] = []
@@ -213,6 +214,42 @@ class BrowserSession:
             )
         self.download_events.append(event)
 
+    async def _on_new_page(self, page: Page) -> None:
+        """Handle a new tab / popup opened by the browser.
+
+        Waits for it to begin loading, adds it to the tracked page list, and
+        makes it the active page so subsequent actions target the new tab.
+        """
+        try:
+            self._pages.append(page)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            self._page = page
+            logger.info("New page opened: %s", page.url)
+        except Exception as e:
+            logger.debug("Failed to register new page: %s", e)
+
+    async def follow_new_page(self) -> bool:
+        """Switch the active page to the most recently opened tab/popup.
+
+        Returns True if a different page was found and activated.
+        Keeps exactly one active page (the newest).
+        """
+        if not self._pages:
+            return False
+        newest = self._pages[-1]
+        try:
+            if newest is not self._page and not newest.is_closed():
+                await newest.bring_to_front()
+                self._page = newest
+                logger.info("Followed new page: %s", newest.url)
+                return True
+        except Exception:
+            pass
+        return False
+
     async def _setup_context(self):
         """Create context + page with interception, tracing, and observers."""
         import os
@@ -266,6 +303,10 @@ class BrowserSession:
             logger.debug("Failed to start tracing: %s", e)
 
         self._page = await self._context.new_page()
+        self._pages = [self._page]
+
+        # Track popups / new tabs so the session always follows the active page.
+        self._context.on("page", self._on_new_page)
 
         # Check every browser request, including subresources and redirects.
         # Context routing also applies to popups and newly-created pages.
@@ -546,6 +587,7 @@ class BrowserSession:
             locator = await resolver.resolve(target, role=role, strategy=strategy)
             await locator.click()
             logger.debug("Clicked %s via %s", target, resolver.last_resolution_strategy)
+            await self.follow_new_page()
             return
         except Exception:
             pass
@@ -557,6 +599,7 @@ class BrowserSession:
                     x, y = coords
                     await self.page.mouse.click(x, y)
                     logger.debug("Clicked visual target at (%d, %d) for %s", x, y, objective[:60])
+                    await self.follow_new_page()
                     return
             except Exception:
                 pass
