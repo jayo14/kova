@@ -27,7 +27,11 @@ from app.modules.exploration.schemas import (
     DiscoveredMission,
     DiscoveryItem,
 )
-from app.modules.exploration.journey_validator import deduplicate_and_rank_journeys, validate_journey
+from app.modules.exploration.journey_validator import (
+    deduplicate_and_rank_journeys,
+    validate_journey,
+    validate_missions_against_site_map,
+)
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
 from app.config.settings import get_settings
@@ -1343,7 +1347,10 @@ class ExplorationEngine:
             })
 
             agent_result = await self._run_agent_exploration(page)
-            discoveries, missions = await self._discover_workflows(page, observation, selected_role)
+            discoveries, missions = await self._discover_workflows(
+                page, observation, selected_role,
+                agent_capabilities=(agent_result or {}).get("capabilities") or [],
+            )
             discoveries = self._merge_agent_capabilities(discoveries, agent_result)
             await self._capture_and_emit_screenshot(page, full_page=False)
 
@@ -2949,6 +2956,7 @@ class ExplorationEngine:
         page,
         observation: dict,
         selected_role: str | None,
+        agent_capabilities: list[dict] | None = None,
     ) -> tuple[list[DiscoveryItem], list[DiscoveredMission]]:
         """Analyze routes and generate meaningful persona-based missions.
 
@@ -2959,6 +2967,20 @@ class ExplorationEngine:
         elements = observation.get("elements", [])
         title = observation.get("title", "")
         current_url = getattr(page, "url", self.url)
+
+        # Build a grounded SiteMap view from the current observation so journey
+        # synthesis is fed by observed page states (forms, actions, controls)
+        # rather than landing-page text.
+        site_map = [
+            {
+                "url": current_url,
+                "title": title,
+                "needs_auth": bool(observation.get("needs_auth")),
+                "forms": observation.get("forms") or [],
+                "primary_actions": observation.get("primary_actions") or [],
+                "interactive_elements": observation.get("interactive_elements") or [],
+            }
+        ]
 
         # Require minimum evidence before generating any missions
         real_interactive_count = sum(
@@ -2983,6 +3005,21 @@ class ExplorationEngine:
             route_map = await self._analyze_routes(page, current_url)
         accessible_routes = [r for r in route_map if r["accessible"]]
         auth_routes = [r for r in route_map if r["category"] == "auth"]
+
+        # Extend the SiteMap with every discovered route so the live dry-run
+        # validation can confirm each mission's entry point (url) is observed.
+        if route_map:
+            for r in route_map:
+                site_map.append(
+                    {
+                        "url": r.get("url") or f"{current_url.rstrip('/')}{r.get('path', '')}",
+                        "title": r.get("title") or r.get("text") or "",
+                        "needs_auth": bool(r.get("requires_auth")),
+                        "forms": [],
+                        "primary_actions": [],
+                        "interactive_elements": [],
+                    }
+                )
         form_routes = [
             r for r in route_map
             if (r.get("accessible") or r.get("requires_auth"))
@@ -3130,12 +3167,8 @@ class ExplorationEngine:
                 self._model_calls += 1
         if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
-                # Prune and compact page summary tokens to keep LLM response fast
-                page_text = (
-                    (observation.get("text") or "")[:400]
-                    + " "
-                    + " ".join([el.get("name", "") for el in interactive_elements[:15] if el.get("name")])
-                ).strip()
+                # Feed synthesis the observed SiteMap + capabilities from Prompt 4
+                # exploration instead of landing-page text. Budgeted timeout.
                 ai_journeys_result = await asyncio.wait_for(
                     ai_reasoner.synthesize_journeys(
                         base_url=current_url,
@@ -3143,11 +3176,12 @@ class ExplorationEngine:
                         goal=self.goal,
                         persona=persona_name,
                         routes=route_map[:8],
-                        interactive_elements=interactive_elements[:15],
-                        page_summary=page_text,
+                        site_map=site_map,
+                        capabilities=agent_capabilities or [],
                         max_journeys=max_missions - mission_count,
+                        time_budget_seconds=30.0,
                     ),
-                    timeout=10.0,
+                    timeout=30.0,
                 )
                 if ai_journeys_result and ai_journeys_result.journeys:
                     self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
@@ -3170,6 +3204,7 @@ class ExplorationEngine:
                                 persona=j.persona or persona_name,
                                 persona_evidence=persona_evidence,
                                 category=j.category,
+                                kind=j.kind,
                                 journey=j.journey,
                                 steps=j.steps,
                                 successCondition=j.success_condition or None,
@@ -3178,6 +3213,20 @@ class ExplorationEngine:
                                 estimated_time_seconds=j.estimated_time_seconds,
                                 expectation_source="ai_synthesized",
                                 review_required=True,
+                                user_goal=j.objective,
+                                expected_outcome=j.expected_outcome or "",
+                                preconditions=j.preconditions or [],
+                                control_hints=j.control_hints or [],
+                                classification="functional" if j.kind in ("read_workflow", "write_workflow") else "navigation",
+                                is_core=bool(j.recommended),
+                                provenance={
+                                    "observed_controls": j.control_hints or [],
+                                    "observed_routes": [current_url],
+                                    "preconditions": j.preconditions or [],
+                                    "unmet_preconditions": [],
+                                    "evidence_refs": j.evidence_refs or [],
+                                    "risk_level": j.risk_level,
+                                },
                             )
                         )
                     if not has_recommended and missions:
@@ -3398,6 +3447,8 @@ class ExplorationEngine:
             unique.append(mission)
 
         # Run journey quality validation, repair, deduplication, and explainable ranking
+        # Live dry-run: drop missions whose entry point/controls are not in the observed SiteMap.
+        unique = validate_missions_against_site_map(unique, site_map)
         unique = deduplicate_and_rank_journeys(unique, goal=self.goal)
 
         return discovered_areas, unique
@@ -4281,51 +4332,42 @@ class ExplorationEngine:
             recommended = False
 
         path_lower = path.lower()
-        is_functional = False
-        is_core = False
-        user_goal = None
-        expected_outcome = None
-        if any(k in path_lower for k in ["quiz", "exam", "test", "defence", "defense", "practice", "simulation"]):
-            mission_title = f"Practice and review {feature_name}"
-            objective = f"Verify that {persona} can access {feature_name} and interact with simulation and testing workflows"
-            user_goal = f"Conduct interactive simulation and evaluation for {feature_name}"
-            expected_outcome = f"Simulation interface for {feature_name} renders with interactive evaluation controls and feedback"
-            is_functional = True
+        is_settings_like = any(sk in path_lower for sk in ["settings", "profile", "account", "preference"])
+        if is_settings_like:
+            recommended = False
+
+        has_form = bool(route.get("has_form"))
+        category = route.get("category", "feature")
+
+        # Honest classification from observed evidence (forms/actions), not path keywords.
+        # A journey is only a write workflow if its steps actually submit and its
+        # success condition proves a persisted/visible result.
+        if has_form:
+            kind = "write_workflow"
+            classification = "functional"
+            mission_title = f"Submit {feature_name}"
+            objective = f"Verify that {persona} can submit the {feature_name} form and the result is persisted"
+            user_goal = f"Submit {feature_name}"
+            expected_outcome = (
+                f"The submitted {feature_name} record appears in the application "
+                f"(a new record is visible in the list or a confirmation is shown)"
+            )
             is_core = True
-        elif any(k in path_lower for k in ["report", "logbook", "siwes"]):
-            mission_title = f"Generate and review {feature_name}"
-            objective = f"Verify that {persona} can access {feature_name} to generate and review reports"
-            user_goal = f"Generate technical reports from logbook entries via {feature_name}"
-            expected_outcome = f"Report interface renders with content generation controls and document preview"
-            is_functional = True
-            is_core = True
-        elif any(k in path_lower for k in ["study", "deck", "material", "course"]):
-            mission_title = f"Explore {feature_name} study resources"
-            objective = f"Verify that {persona} can view and study {feature_name}"
-            user_goal = f"Access educational material for {feature_name}"
-            expected_outcome = f"Study content entries and material cards render"
-            is_functional = True
-            is_core = True
-        elif any(k in path_lower for k in ["create", "generate", "generator", "new"]):
-            mission_title = f"Create new {feature_name}"
-            objective = f"Verify that {persona} can access the {feature_name} creation workflow"
-            user_goal = f"Create new {feature_name} entity"
-            expected_outcome = f"Creation form renders with validation and submission controls"
-            is_functional = True
-            is_core = True
-        elif any(k in path_lower for k in ["dashboard", "workspace", "portal", "console", "analytics"]):
-            mission_title = f"Review {feature_name} overview and activity"
-            objective = f"Confirm {feature_name} renders key metrics and interactive workflows"
-            user_goal = f"Review platform dashboard activity"
-            expected_outcome = f"Dashboard widgets and summary analytics render"
-            is_functional = False
+        elif category == "content":
+            kind = "read_workflow"
+            classification = "functional"
+            mission_title = f"Browse {feature_name}"
+            objective = f"Verify that {persona} can browse {feature_name} and see real content entries"
+            user_goal = f"Browse {feature_name}"
+            expected_outcome = f"The {feature_name} view renders a list of content entries with links"
             is_core = False
         else:
-            mission_title = f"Explore {feature_name}"
-            objective = f"Reach the {feature_name} page and confirm it renders interactive content"
-            user_goal = f"Navigate to {feature_name}"
-            expected_outcome = f"{feature_name} destination page loads"
-            is_functional = False
+            kind = "navigation"
+            classification = "navigation"
+            mission_title = f"Open {feature_name}"
+            objective = f"Verify that {persona} can reach the {feature_name} page"
+            user_goal = f"Open {feature_name}"
+            expected_outcome = f"The {feature_name} destination page loads"
             is_core = False
 
         if route.get("is_button") and route.get("selector"):
@@ -4371,7 +4413,8 @@ class ExplorationEngine:
             ),
             objective=objective,
             persona=persona,
-            category="feature",
+            category=category,
+            kind=kind,
             journey=journey_desc,
             steps=steps,
             successCondition=success_condition,
@@ -4381,7 +4424,7 @@ class ExplorationEngine:
             estimated_time_seconds=12,
             user_goal=user_goal,
             expected_outcome=expected_outcome,
-            classification="functional" if is_functional else "navigation",
+            classification=classification,
             is_core=is_core,
         )
 
@@ -4529,14 +4572,6 @@ class ExplorationEngine:
             return "login"
         if any(kw in lower for kw in ["logout", "sign out", "log out"]):
             return "logout"
-
-        # Core functional capabilities (report generation, mock defence/simulations)
-        if any(kw in lower for kw in ["practice", "simulation", "quiz", "exam", "assessment"]):
-            return "practice_simulation"
-        if any(kw in lower for kw in ["create", "generate", "new", "add", "submit"]):
-            return "generate_report"
-        if "report" in lower and not any(kw in lower for kw in ["bug", "issue", "abuse", "violation", "contact", "feedback"]):
-            return "generate_report"
 
         # Search / Discovery intents
         if any(kw in lower for kw in ["search", "find", "lookup", "discover"]):
@@ -4716,84 +4751,6 @@ class ExplorationEngine:
                     "preconditions": [],
                     "unmet_preconditions": [],
                 },
-            }
-
-        if intent == "generate_report":
-            textarea_selector = "textarea, div[contenteditable='true'], input[name*='content' i], input[name*='log' i], input[placeholder*='log' i], input[placeholder*='report' i], textarea[placeholder*='entry' i]"
-            submit_btn = "button[type='submit'], button:has-text('Generate'), button:has-text('Create'), button:has-text('Submit'), button:has-text('Build Report'), button:has-text('Save')"
-            return {
-                "name": f"Generate {el_name or 'Report'}",
-                "description": (
-                    f"Navigate to {el_name or 'report generation'}, enter logbook activity data, "
-                    f"submit report synthesis, and verify the resulting technical report document renders."
-                ),
-                "objective": f"Verify that {persona} can generate a technical report with concrete document output",
-                "category": "workflow",
-                "journey": [
-                    f"Open {app_name}",
-                    f"Open report generation interface via '{el_name}'",
-                    "Input logbook weekly activity and technical entries",
-                    "Submit and trigger report generation",
-                    "Verify the generated report document and sections render in the document viewer",
-                ],
-                "steps": [
-                    {"type": "navigate", "url": base_url},
-                    {"type": "click", "target": selector},
-                    {"type": "type", "target": textarea_selector, "value": "Completed week 1-4 engineering documentation, circuit design analysis, and firmware debugging."},
-                    {"type": "click", "target": submit_btn},
-                ],
-                "success_condition": {
-                    "element_count": {
-                        "selector": "[data-testid*='report' i], .report-content, .report-viewer, article, [role='document'], h1, h2",
-                        "min": 1,
-                    },
-                },
-                "confidence": 0.85,
-                "estimated_time": 25,
-                "user_goal": "Generate technical report from logbook entries",
-                "expected_outcome": "Application processes entries and renders generated technical report document",
-                "classification": "functional",
-                "is_core": True,
-            }
-
-        if intent == "practice_simulation":
-            start_btn = "button:has-text('Start'), button:has-text('Begin'), button:has-text('Practice'), button:has-text('Mock'), button[type='submit']"
-            answer_input = "textarea, input[type='text'], [role='textbox']"
-            submit_answer_btn = "button:has-text('Submit'), button:has-text('Next'), button:has-text('Finish'), button[type='submit']"
-            return {
-                "name": f"Practice {el_name or 'Mock Defence'}",
-                "description": (
-                    f"Launch {el_name or 'mock defence simulation'}, answer question prompts, "
-                    f"and verify defence evaluation feedback and assessment metrics render."
-                ),
-                "objective": f"Verify that {persona} can complete a mock defence simulation and receive evaluation feedback",
-                "category": "workflow",
-                "journey": [
-                    f"Open {app_name}",
-                    f"Launch simulation interface via '{el_name}'",
-                    "Start mock defence session and view question prompt",
-                    "Submit technical answer and defence response",
-                    "Verify evaluation feedback, scoring, or defence tips are rendered",
-                ],
-                "steps": [
-                    {"type": "navigate", "url": base_url},
-                    {"type": "click", "target": selector},
-                    {"type": "click", "target": start_btn},
-                    {"type": "type", "target": answer_input, "value": "The system utilizes event-driven architecture with deterministic verifiers to ensure outcome reliability."},
-                    {"type": "click", "target": submit_answer_btn},
-                ],
-                "success_condition": {
-                    "element_count": {
-                        "selector": "[data-testid*='feedback' i], [data-testid*='score' i], .evaluation, .feedback, .score, [role='region'], article",
-                        "min": 1,
-                    },
-                },
-                "confidence": 0.85,
-                "estimated_time": 30,
-                "user_goal": "Conduct mock defence practice and receive automated evaluation",
-                "expected_outcome": "Simulation completes and renders detailed evaluation feedback and scoring metrics",
-                "classification": "functional",
-                "is_core": True,
             }
 
         if intent == "create_content":

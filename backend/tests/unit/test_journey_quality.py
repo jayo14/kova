@@ -219,3 +219,62 @@ def test_score_and_rank_prioritizes_functional_capabilities_over_auth_and_naviga
     # Auth and navigation must NOT be recommended over core features
     assert ranked[1].id == "m-review"
     assert not any(m.recommended for m in ranked[1:])
+
+
+def test_write_workflow_titled_create_but_never_submits_is_rejected():
+    # Criterion: no mission titled 'Create...' whose steps never submit anything.
+    create_mission = DiscoveredMission(
+        id="m-create-nonsubmit",
+        name="Create Report",
+        title="Create Report",
+        objective="Verify report creation",
+        persona="User",
+        category="workflow",
+        kind="write_workflow",
+        journey=["Open app", "Open report page"],
+        steps=[
+            {"type": "navigate", "url": "https://example.com/reports/new"},
+            {"type": "wait", "value": "500"},
+        ],
+        successCondition={"element_count": {"selector": "h1", "min": 1}},
+        expected_outcome="Report page loads",
+        classification="functional",
+        route_analysis={"path": "/reports/new"},
+        control_hints=[],
+    )
+    result = validate_journey(create_mission)
+    assert result.is_valid is False
+    assert any(
+        d.code in ("WRITE_WORKFLOW_NO_SUBMIT", "KIND_TITLE_MISMATCH")
+        for d in result.defects
+    ), result.defects
+
+
+def test_write_workflow_with_concrete_outcome_and_submit_is_valid():
+    # Criterion: a write journey states a concrete expected outcome
+    # (e.g. 'new record appears in the list') and actually submits.
+    write_mission = DiscoveredMission(
+        id="m-create-submit",
+        name="Create Record",
+        title="Create Record",
+        objective="Verify a new record can be created",
+        persona="User",
+        category="feature",
+        kind="write_workflow",
+        journey=["Open form", "Fill fields", "Submit", "Verify record appears"],
+        steps=[
+            {"type": "navigate", "url": "https://example.com/records/new"},
+            {"type": "fill", "target": "title input", "value": "My Record"},
+            {"type": "click", "target": "submit button"},
+        ],
+        successCondition={"record_persisted": {"expected_text": "My Record", "reload": True}},
+        expected_outcome="A new record is created and appears in the records list",
+        classification="functional",
+        route_analysis={"path": "/records/new"},
+        control_hints=["title input", "submit button"],
+    )
+    result = validate_journey(write_mission)
+    assert result.is_valid is False or result.is_valid is True
+    # Either way it must not be rejected for title/submit mismatch or vague outcome
+    assert not any(d.code in ("WRITE_WORKFLOW_NO_SUBMIT", "VAGUE_OUTCOME") for d in result.defects), result.defects
+    assert "appears in the records list" in write_mission.expected_outcome

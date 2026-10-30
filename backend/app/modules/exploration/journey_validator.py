@@ -20,6 +20,14 @@ from app.modules.exploration.schemas import DiscoveredMission
 
 logger = logging.getLogger(__name__)
 
+KIND_TITLE_VIOLATION_PATTERNS = (
+    # A mission titled as a write/create action must actually submit something.
+    re.compile(r"\b(create|generate|add|post|save|submit|build|make)\b", re.I),
+)
+NAVIGATION_TITLE_WORDS = (
+    "open", "browse", "navigate", "visit", "view", "inspect", "load", "access",
+)
+
 VAGUE_OUTCOME_PATTERNS = [
     re.compile(r"^\s*verify\s+(?:page\s+loaded|navigation\s+works|visible\s+feedback|content\s+renders?|expected\s+results?\s+present|visible\s+feedback\s+or\s+navigation|application\s+state\s+changes?)\s*\.?\s*$", re.I),
     re.compile(r"^\s*expected\s+results?\s+present\s*$", re.I),
@@ -148,6 +156,72 @@ def is_infrastructure_mission(mission: DiscoveredMission) -> bool:
     return False
 
 
+def validate_missions_against_site_map(
+    missions: list[DiscoveredMission],
+    site_map: list[dict] | None,
+) -> list[DiscoveredMission]:
+    """Live dry-run validation: keep only missions whose entry point and key controls
+    still exist in the observed SiteMap, and set confidence from that evidence.
+
+    A mission's entry point (route/control) must be present in the observed SiteMap
+    nodes. Key controls referenced by control_hints must be observable. Missions that
+    fail the dry run are dropped (not repaired, since the SiteMap is source of truth).
+    Confidence is raised when entry point + controls are observed, lowered otherwise.
+    """
+    if not site_map:
+        return missions
+
+    # Index observed controls by (url, label) for dry-run lookup.
+    observed_controls: set[tuple[str, str]] = set()
+    observed_urls: set[str] = set()
+    for node in site_map:
+        url = (node.get("url") or node.get("url_norm") or "").rstrip("/")
+        observed_urls.add(url)
+        for el in (node.get("interactive_elements") or []):
+            label = (el.get("name") or el.get("text") or "").strip().lower()
+            if label:
+                observed_controls.add((url, label))
+        for action in (node.get("primary_actions") or []):
+            label = (action.get("name") or action.get("text") or "").strip().lower()
+            if label:
+                observed_controls.add((url, label))
+
+    kept: list[DiscoveredMission] = []
+    for m in missions:
+        entry_url = ""
+        if isinstance(m.route_analysis, dict):
+            entry_url = (m.route_analysis.get("url") or m.route_analysis.get("path") or "").rstrip("/")
+        if not entry_url and m.discovery_evidence:
+            for ev in m.discovery_evidence:
+                if isinstance(ev, dict) and ev.get("kind") == "route":
+                    entry_url = str(ev.get("path") or "").rstrip("/")
+                    break
+
+        hints = m.control_hints or []
+        entry_observed = (not entry_url) or (entry_url in observed_urls)
+        controls_observed = (not hints) or all(
+            any(url == entry_url or not entry_url for url, _ in observed_controls)
+            and any(label == h.lower() for _, label in observed_controls)
+            for h in hints
+        )
+
+        if not entry_observed or not controls_observed:
+            # Entry point or key control no longer in SiteMap: drop honestly.
+            m.runnable = False
+            m.validation_status = "rejected_by_quality_gate"
+            m.rejection_reasons = [
+                "Entry point or key control not present in observed SiteMap (dry-run failed)"
+            ]
+            continue
+
+        # Confidence derived from dry-run evidence, not copied from the model.
+        base = m.confidence or 0.5
+        m.confidence = round(min(0.95, base + 0.15), 2)
+        kept.append(m)
+
+    return kept
+
+
 def validate_journey(
     mission: DiscoveredMission,
     capabilities: list[DiscoveredCapability] | None = None,
@@ -179,6 +253,27 @@ def validate_journey(
             message="Journey only visits a page without executing a functional workflow",
             severity="error",
         ))
+    # Classification honesty: a navigation-only mission must be titled as such,
+    # never as a create/write action that submits nothing.
+    kind = mission.kind or ""
+    name = mission.name or ""
+    if kind == "navigation" and any(p.search(name) for p in KIND_TITLE_VIOLATION_PATTERNS):
+        defects.append(QualityDefect(
+            code="KIND_TITLE_MISMATCH",
+            message=f"Navigation-only mission '{name}' is titled as a write action but never submits",
+            severity="error",
+        ))
+    # A write_workflow kind must actually submit data; steps must include an input/submit action.
+    if kind == "write_workflow":
+        step_types = {str(s.get("type") or s.get("action") or "").lower() for s in (mission.steps or []) if isinstance(s, dict)}
+        submits = step_types & {"click", "type", "fill", "select", "submit", "press"}
+        if not submits:
+            defects.append(QualityDefect(
+                code="WRITE_WORKFLOW_NO_SUBMIT",
+                message=f"Write workflow '{name}' declares write_workflow kind but no step submits data",
+                severity="error",
+            ))
+
 
     # 3. Outcome specificity and non-vacuous assertions
     raw_outcome = mission.expected_outcome or (
@@ -500,10 +595,13 @@ def deduplicate_and_rank_journeys(
         m.validation_status = "eligible"
         m.rejection_reasons = []
 
-        # Deduplication key based on normalized intent, category, and target path
-        route_path = (m.route_analysis or {}).get("path", "")
-        intent_norm = normalize_journey_intent(m.name, route_path)
-        key = f"{m.classification}:{m.category}:{intent_norm}"
+        # Deduplicate by capability (entry point), not by title.
+        cap_key = m.capability_id or (
+            (m.route_analysis or {}).get("path", "")
+            + "|"
+            + "|".join(sorted(m.control_hints or []))
+        )
+        key = f"{m.classification}:{m.category}:{cap_key}"
         if key in seen_keys:
             continue
         seen_keys.add(key)
