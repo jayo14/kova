@@ -20,11 +20,11 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column(
-        "organizations",
-        sa.Column("tier", sa.String(32), nullable=False, server_default="free"),
-    )
+    # The tier column is already added by revision 90c971bdbde7.
+    # This revision is retained only to preserve the migration chain.
+    pass
+
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_column("organizations", "tier")
+    pass
