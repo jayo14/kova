@@ -49,6 +49,11 @@ MAX_AGENT_TURNS = 60
 MAX_RECOVERIES = 8
 OBSERVE_INTERVAL_TURNS = 1
 EMAIL_WAIT_SECONDS = 45.0
+# Cost controls: per-run caps on model calls and tokens, plus loop protection.
+MAX_MODEL_CALLS_PER_RUN = 40
+MAX_TOKENS_PER_RUN = 60000
+# Loop protection: same (page fingerprint, action) observed this many times → stop.
+LOOP_PROTECTION_REPEAT_LIMIT = 3
 
 
 class AgentOutcome:
@@ -101,6 +106,12 @@ class AgentExecutor:
         self.max_turns = min(max_turns, 100)
         self.max_duration = max_duration
         self.safety_restrictions = safety_restrictions
+        # Cost tracking for this run.
+        self._model_calls = 0
+        self._tokens = 0
+        self._cost_capped = False
+        # Loop protection: (page_fingerprint, action) -> repeat count.
+        self._loop_seen: dict[tuple[str, str], int] = {}
         from app.engine.safety.destructive_guard import DestructiveActionGuard
         self.safety_guard = DestructiveActionGuard(safety_restrictions)
         self.mailbox: Any | None = None
@@ -314,6 +325,35 @@ class AgentExecutor:
                 recent_failure=self.recent_failure_detail or None,
             )
 
+            # ── Cost controls: count this model call and enforce per-run caps ──
+            if self.reasoner.provider is not None:
+                self._model_calls += 1
+                try:
+                    usage = self.reasoner.provider.get_usage()
+                    self._tokens = int(usage.get("total_tokens", 0) or 0)
+                except Exception:
+                    pass
+            if self._cost_capped or self._model_calls > MAX_MODEL_CALLS_PER_RUN or self._tokens > MAX_TOKENS_PER_RUN:
+                self._cost_capped = True
+                return AgentOutcome(
+                    "FAILED",
+                    f"Agent run exceeded cost cap (model_calls={self._model_calls}, tokens={self._tokens})",
+                    facts=self._fact_list(memory),
+                    failure_category="cost_cap_exceeded",
+                )
+
+            # ── Loop protection: stop when the same page state + action repeats ──
+            fp = self._page_fingerprint(observation)
+            loop_key = (fp, proposal.action)
+            self._loop_seen[loop_key] = self._loop_seen.get(loop_key, 0) + 1
+            if self._loop_seen[loop_key] >= LOOP_PROTECTION_REPEAT_LIMIT:
+                return AgentOutcome(
+                    "FAILED",
+                    f"Loop protection: repeated state and action '{proposal.action}' on page {fp}",
+                    facts=self._fact_list(memory),
+                    failure_category="loop_detected",
+                )
+
             # Vision escalation: when agent is stuck or target is ambiguous, escalate to vision model
             if self.recent_failure_detail and self.vlm_client and getattr(self.vlm_client, "has_vision_capability", lambda: False)():
                 vis_res = await self.escalate_vision(
@@ -444,10 +484,13 @@ class AgentExecutor:
                     )
                 self.recent_failure_detail = ""  # consumed; next turn decides fresh
 
+        facts = self._fact_list(memory) + [
+            f"cost: model_calls={self._model_calls}, tokens={self._tokens}",
+        ]
         return AgentOutcome(
             "UNVERIFIED",
             f"Agent reached turn budget ({self.max_turns}) without completing the objective",
-            facts=self._fact_list(memory),
+            facts=facts,
         )
 
     # ── Proposal execution ──────────────────────────────────────────
@@ -856,6 +899,25 @@ class AgentExecutor:
 
     def _fact_list(self, memory: AgentMemory) -> list[str]:
         return [f"{f.kind}: {f.detail}" for f in memory.facts]
+
+    @staticmethod
+    def _page_fingerprint(observation: dict) -> str:
+        """Fingerprint the current page state for loop protection.
+
+        Combines the URL with the sorted set of visible control labels so the
+        loop can detect when it is stuck re-acting on the same page.
+        """
+        try:
+            url = str(observation.get("url", ""))
+        except Exception:
+            url = ""
+        labels = []
+        for el in (observation.get("elements") or [])[:50]:
+            label = el.get("name") or el.get("text") or el.get("label") or ""
+            if label:
+                labels.append(str(label).strip().lower())
+        controls = ",".join(sorted(set(labels)))
+        return f"{url}||{controls}"
 
     @staticmethod
     def _host_of(url: str) -> str | None:
