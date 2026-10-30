@@ -1,8 +1,10 @@
 import asyncio
 import asyncpg
 
-SOURCE_URL = "postgresql://postgres.zmbhiudolgnlccdqicas:RsZXpWzz4N9EEfs5@aws-1-eu-west-1.pooler.supabase.com:5432/postgres"
-TARGET_URL = "postgresql://postgres:gnEuXEbxa8-SJ2-4PrUWSLaE0YT44Wju@pg-088b52.ws-mika-01a0f86f.db.rumptycloud.com:5432/kova_db"
+import os
+
+SOURCE_URL = os.environ.get("KOVA_MIGRATE_SOURCE_URL", "")
+TARGET_URL = os.environ.get("KOVA_MIGRATE_TARGET_URL", "")
 
 async def get_tables(conn):
     return await conn.fetch('''
