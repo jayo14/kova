@@ -66,13 +66,40 @@ async def dispatch_execution(execution_id: str, *, context: str = "execution") -
     """
     try:
         from app.workers.tasks.executions import run_execution
+        from app.workers.celery_app import get_queue_for_plan
+        from app.modules.executions.repository import ExecutionRepository
+        from app.modules.flows.repository import FlowRepository
+        from app.modules.projects.repository import ProjectRepository
+        from app.modules.organizations.repository import OrganizationRepository
+
+        # Route to the plan-appropriate queue based on the execution's
+        # flow -> project -> organization plan.
+        queue = "kova-free"
+        try:
+            async with async_session_factory() as q_db:
+                exec_repo = ExecutionRepository(q_db)
+                execution = await exec_repo.get_by_id(uuid.UUID(execution_id))
+                if execution:
+                    flow_repo = FlowRepository(q_db)
+                    flow = await flow_repo.get_by_id(execution.flow_id)
+                    if flow and flow.project_id:
+                        project_repo = ProjectRepository(q_db)
+                        project = await project_repo.get_by_id(flow.project_id)
+                        if project and project.org_id:
+                            org_repo = OrganizationRepository(q_db)
+                            org = await org_repo.get_by_id(project.org_id)
+                            if org:
+                                queue = get_queue_for_plan(org.plan)
+        except Exception:
+            queue = "kova-free"
 
         active_workers = await _celery_active_workers()
         if active_workers:
-            await asyncio.to_thread(run_execution.delay, execution_id)
+            await asyncio.to_thread(run_execution.delay, execution_id, queue=queue)
             logger.info(
-                "Dispatched execution %s to Celery worker: %s",
+                "Dispatched execution %s to Celery queue %s: %s",
                 execution_id,
+                queue,
                 list(active_workers.keys()),
             )
             return
@@ -112,10 +139,36 @@ async def dispatch_batch(
     """
     try:
         from app.workers.tasks.tasks import run_multiple_executions
+        from app.workers.celery_app import get_queue_for_plan
+        from app.modules.executions.repository import ExecutionRepository
+        from app.modules.flows.repository import FlowRepository
+        from app.modules.projects.repository import ProjectRepository
+        from app.modules.organizations.repository import OrganizationRepository
+
+        # Route to the plan-appropriate queue based on the first execution's
+        # flow -> project -> organization plan.
+        queue = "kova-free"
+        try:
+            async with async_session_factory() as q_db:
+                exec_repo = ExecutionRepository(q_db)
+                first_exec = await exec_repo.get_by_id(uuid.UUID(execution_ids[0]))
+                if first_exec:
+                    flow_repo = FlowRepository(q_db)
+                    flow = await flow_repo.get_by_id(first_exec.flow_id)
+                    if flow and flow.project_id:
+                        project_repo = ProjectRepository(q_db)
+                        project = await project_repo.get_by_id(flow.project_id)
+                        if project and project.org_id:
+                            org_repo = OrganizationRepository(q_db)
+                            org = await org_repo.get_by_id(project.org_id)
+                            if org:
+                                queue = get_queue_for_plan(org.plan)
+        except Exception:
+            queue = "kova-free"
 
         active_workers = await _celery_active_workers()
         if active_workers:
-            task = await asyncio.to_thread(run_multiple_executions.delay, execution_ids, parallel)
+            task = await asyncio.to_thread(run_multiple_executions.delay, execution_ids, parallel, queue=queue)
             task_id = celery_task_id or getattr(task, "id", None) or str(uuid.uuid4())
             logger.info(
                 "Dispatched batch executions %s to Celery worker: %s",

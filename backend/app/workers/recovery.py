@@ -395,9 +395,28 @@ async def reconcile_explorations() -> dict[str, int]:
     for session_id in dispatch_ids:
         try:
             from app.workers.tasks.exploration import run_exploration
+            from app.workers.celery_app import get_queue_for_plan
+
+            # Route to the plan-appropriate queue based on the session's
+            # project -> organization plan.
+            queue = "kova-free"
+            try:
+                session = await db.get(ExplorationSession, session_id)
+                if session and session.project_id:
+                    from app.modules.projects.repository import ProjectRepository
+                    project_repo = ProjectRepository(db)
+                    project = await project_repo.get_by_id(session.project_id)
+                    if project and project.org_id:
+                        from app.modules.organizations.repository import OrganizationRepository
+                        org_repo = OrganizationRepository(db)
+                        org = await org_repo.get_by_id(project.org_id)
+                        if org:
+                            queue = get_queue_for_plan(org.plan)
+            except Exception:
+                queue = "kova-free"
 
             task = asyncio.create_task(
-                asyncio.to_thread(run_exploration.delay, session_id)
+                asyncio.to_thread(run_exploration.delay, session_id, queue=queue)
             )
             _dispatch_tasks.add(task)
             task.add_done_callback(_dispatch_tasks.discard)

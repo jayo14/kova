@@ -80,14 +80,33 @@ class ExplorationService:
         self,
         session_id: uuid.UUID,
     ) -> None:
-        """Enqueue the exploration session on the Celery worker."""
+        """Enqueue the exploration session on the Celery worker.
+
+        Routes to the plan-appropriate queue (kova-free / kova-pro /
+        kova-enterprise) based on the session's project organization plan.
+        Falls back to kova-free if the plan cannot be resolved.
+        """
         from app.workers.tasks.exploration import run_exploration
+        from app.workers.celery_app import get_queue_for_plan
+
+        queue = "kova-free"
+        session = await self.repo.get_by_id(session_id)
+        if session and session.project_id:
+            project = await self.project_repo.get_by_id(session.project_id)
+            if project and project.org_id:
+                from app.modules.organizations.repository import OrganizationRepository
+
+                org_repo = OrganizationRepository(self.db)
+                org = await org_repo.get_by_id(project.org_id)
+                if org:
+                    queue = get_queue_for_plan(org.plan)
 
         await asyncio.to_thread(
             run_exploration.delay,
             str(session_id),
+            queue=queue,
         )
-        logger.info("Enqueued exploration %s to Celery worker", session_id)
+        logger.info("Enqueued exploration %s to Celery queue %s", session_id, queue)
 
     async def create_and_start_exploration(
         self,
