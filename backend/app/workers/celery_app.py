@@ -1,3 +1,5 @@
+import ssl
+
 from celery import Celery
 
 from app.config.settings import settings
@@ -29,8 +31,8 @@ celery_app.conf.update(
         Queue("kova-pro", routing_key="kova-pro"),
         Queue("kova-enterprise", routing_key="kova-enterprise"),
     ],
-    broker_use_ssl={"ssl_cert_reqs": "none"} if "rediss://" in str(settings.CELERY_BROKER_URL) else None,
-    redis_backend_use_ssl={"ssl_cert_reqs": "none"} if "rediss://" in str(settings.CELERY_RESULT_BACKEND) else None,
+    broker_use_ssl={"ssl_cert_reqs": ssl.CERT_NONE} if "rediss://" in str(settings.CELERY_BROKER_URL) else None,
+    redis_backend_use_ssl={"ssl_cert_reqs": ssl.CERT_NONE} if "rediss://" in str(settings.CELERY_RESULT_BACKEND) else None,
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])

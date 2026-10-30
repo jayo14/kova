@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 import logging
 import time
 import uuid
@@ -35,7 +36,7 @@ class OrganizationService:
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
+                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
             client = aioredis.from_url(
                 settings.REDIS_URL,
                 socket_connect_timeout=0.2,

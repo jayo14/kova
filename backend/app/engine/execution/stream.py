@@ -13,6 +13,7 @@ Frame wire format on the Redis channel:
 """
 
 import asyncio
+import ssl
 import json
 import logging
 from typing import Any, AsyncIterator
@@ -115,7 +116,7 @@ async def _text_client() -> aioredis.Redis:
             "socket_timeout": 3.0,
         }
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
         _text_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _text_loop = loop
     return _text_redis
@@ -138,7 +139,7 @@ async def _bin_client() -> aioredis.Redis:
             "socket_timeout": 3.0,
         }
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
         _bin_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _bin_loop = loop
     return _bin_redis

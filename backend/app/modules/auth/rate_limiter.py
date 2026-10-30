@@ -43,7 +43,7 @@ class RateLimiter:
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
+                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
             self._shared_client = aioredis.from_url(
                 settings.REDIS_URL,
                 socket_connect_timeout=2.0,

@@ -10,6 +10,7 @@ Guarantees:
 """
 
 import asyncio
+import ssl
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -114,7 +115,7 @@ class SessionManager:
                 "socket_timeout": 0.2,
             }
             if redis_url.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
+                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
             client = aioredis.from_url(redis_url, **kwargs)
             await asyncio.wait_for(client.ping(), timeout=0.2)
             self._redis = client

@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 import asyncio
+import ssl
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -311,7 +312,12 @@ async def readiness():
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
-        redis = Redis.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2)
+        redis = Redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+            ssl_cert_reqs=ssl.CERT_NONE if str(settings.REDIS_URL).startswith("rediss://") else None,
+        )
         try:
             await redis.ping()
         finally:
