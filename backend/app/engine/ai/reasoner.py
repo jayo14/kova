@@ -13,6 +13,7 @@ final verification — never per DOM node.
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import re
 from typing import Any
@@ -255,93 +256,139 @@ class AgentReasoner:
         title: str,
         goal: str | None,
         persona: str,
-        routes: list[dict],
-        interactive_elements: list[dict],
+        routes: list[dict] | None = None,
+        interactive_elements: list[dict] | None = None,
         page_summary: str = "",
         max_journeys: int = 5,
+        time_budget_seconds: float = 30.0,
+        site_map: list[dict] | None = None,
+        capabilities: list[dict] | None = None,
     ) -> AIGeneratedJourneyList | None:
-        """Synthesize intelligent, purposeful user journeys that test real features of the app."""
+        """Synthesize intelligent, purposeful user journeys grounded in observed SiteMap + capabilities.
+
+        Journeys are goals, not scripts: they declare an objective, preconditions, a concrete
+        observable outcome, and a risk level. Steps never invent CSS selectors; they reference
+        observed control labels (control_hints) that the executor resolves at run time.
+        """
         if not self.provider:
             return None
 
-        # Compact representation of available routes (prioritizing feature, dashboard, and content)
+        # Compact representation of observed page states (SiteMap nodes): forms with fields,
+        # primary actions, and interactive controls. Chunk if needed to stay within budget.
+        compact_states = []
+        for node in (site_map or [])[:40]:
+            forms_summary = []
+            for f in (node.get("forms") or [])[:6]:
+                fields = []
+                for field in (f.get("fields") or f.get("inputs") or [])[:8]:
+                    fields.append({
+                        "name": field.get("name") or field.get("label") or "",
+                        "type": field.get("type", "text"),
+                    })
+                forms_summary.append({
+                    "action": f.get("action") or f.get("id") or "",
+                    "method": f.get("method", ""),
+                    "fields": fields,
+                })
+            actions_summary = [
+                {
+                    "label": a.get("name") or a.get("text") or "",
+                    "type": a.get("type") or a.get("role") or "",
+                }
+                for a in (node.get("primary_actions") or [])[:10]
+            ]
+            controls_summary = [
+                {
+                    "label": el.get("name") or el.get("text") or "",
+                    "type": el.get("type") or el.get("role") or "",
+                }
+                for el in (node.get("interactive_elements") or [])[:15]
+            ]
+            compact_states.append({
+                "url": node.get("url") or node.get("url_norm") or "",
+                "title": node.get("title"),
+                "needs_auth": bool(node.get("needs_auth")),
+                "forms": forms_summary,
+                "primary_actions": actions_summary,
+                "controls": controls_summary,
+            })
+
         compact_routes = [
             {
                 "path": r.get("path"),
                 "title": r.get("title") or r.get("text"),
                 "category": r.get("category"),
                 "requires_auth": r.get("requires_auth", False),
-                "elements_count": r.get("elements_count", 0),
             }
-            for r in routes[:20]
+            for r in (routes or [])[:20]
             if r.get("path")
         ]
 
-        # Compact representation of interactive elements (buttons, links, inputs)
-        compact_elements = [
+        compact_capabilities = [
             {
-                "name": el.get("name"),
-                "type": el.get("type"),
-                "role": el.get("role"),
+                "name": c.get("name"),
+                "kind": c.get("kind"),
+                "url": c.get("url"),
+                "entry_point": c.get("entry_point"),
+                "inputs": [i.get("name") or i.get("label") or "" for i in (c.get("inputs") or [])[:8]],
+                "expected_outcome": c.get("expected_outcome"),
+                "confidence": c.get("confidence"),
             }
-            for el in interactive_elements[:30]
-            if el.get("name")
+            for c in (capabilities or [])[:40]
         ]
 
         system = (
-            "You are an expert QA and product automation architect. Your mission is to discover "
-            "and synthesize HIGH-VALUE, PURPOSEFUL user journeys that thoroughly test the core features, "
-            "dashboards, workflows, and interactive capabilities of the web application.\n\n"
-            "CRITICAL RULES:\n"
-            "1. NO SHALLOW NAVIGATION FLOWS:\n"
-            "   - Merely clicking a navbar link, button, or tab to see if a page loads or URL changes is NOT a test of functionality.\n"
-            "   - Test complete, end-to-end workflows (e.g., entering input -> triggering processing/generation -> verifying concrete output/record/document/feedback).\n"
-            "   - Do not generate journeys like 'Navigate to Features and verify heading' or 'Click Get started and verify URL changes'.\n"
-            "2. CONCRETE OUTCOMES & ASSERTIONS:\n"
-            "   - Expected outcomes and success conditions must NEVER be vague (never use 'Verify visible feedback', 'Verify page loaded', 'Expected results present').\n"
-            "   - State precisely what concrete data, generated document, table row, calculation, or status badge is expected in the resulting view.\n"
-            "3. AUTH AS A PREREQUISITE BY DEFAULT, BUT CAN BE A FEATURE WHEN EXPLICITLY REQUESTED:\n"
-            "   - If the user's goal explicitly mentions testing authentication (e.g. 'test login flow',\n"
-            "     'verify signup works', 'test password reset'), generate an auth-focused journey as the\n"
-            "     primary mission.\n"
-            "   - Otherwise, treat auth as a prerequisite. The runtime resolves it automatically via the\n"
-            "     AuthCapability in the Product Graph. Do not include auth steps in feature workflows.\n"
-            "   - Never generate 'sign up and log in' as a primary journey unless the user explicitly\n"
-            "     asks for it. Feature workflows should focus on what the user does AFTER auth.\n"
-            "4. UTILITY IS NOT CORE: Settings, user profile, account details, or terms are utility areas and must NEVER be the recommended journey "
-            "unless the user explicitly requested it in their goal.\n"
-            "5. PURPOSEFUL FEATURE WORKFLOWS: The RECOMMENDED journey MUST test the application's core value proposition grounded in the actual domain "
-            "(e.g., core feature workflows based strictly on observed routes, forms, and actions; repository exploration and code review for engineering platforms; "
-            "product discovery and checkout for commerce; dashboards and administrative controls for SaaS). Infer features from observed headlines, routes, and controls.\n"
-            "6. ACTION-ORIENTED TITLES: Use meaningful titles reflecting real user intent (e.g. 'Generate Technical SIWES Report from Logbook', "
-            "'Complete Practice Mock Defence Session', 'Search and Inspect Catalog Items') rather than generic 'Open X'.\n"
-            "7. INTERACTIVE BUTTONS & MODALS: Features in modern SPAs are often activated by clicking buttons (e.g. 'Create', 'New Project', 'Upload', "
-            "'Start', tabs, modals, drawers) rather than navigating to a separate URL route. When a feature has an action button or control, synthesize steps "
-            "that click the button (`click` action targeting e.g. `button:has-text('Upload')` or `button:has-text('Create')`) and verify the resulting view, dialog, or content opens. "
-            "Do not restrict yourself to URL navigation only; test buttons and interactive UI actions directly.\n"
-            "8. STEPS: Steps must use valid browser actions: navigate, click, fill, select, wait.\n"
-            "9. VERIFIABILITY: The success condition must specify verifiable criteria grounded in observed UI (text_visible, element_visible, url_changed_to, etc.).\n"
-            "10. GROUNDED DOMAIN & PERSONA: Ensure the generated journeys and steps strictly match the observed domain and persona. Never invent mismatched domain concepts (e.g. do not invent classroom quizzes or flashcards on a developer platform or banking application).\n"
-            "11. Output ONLY JSON matching the AIGeneratedJourneyList schema."
+            "You are an expert QA and product automation architect. Synthesize HIGH-VALUE, "
+            "PURPOSEFUL user journeys that test real features of the web application.\\n\\n"
+            "GROUNDING RULES (non-negotiable):\\n"
+            "1. BASE EVERY JOURNEY ON OBSERVED EVIDENCE ONLY: use the page states, forms with "
+            "their fields, primary actions, controls, routes, and discovered capabilities "
+            "provided below. Never invent pages, controls, or domain concepts not observed.\\n"
+            "2. JOURNEYS ARE GOALS, NOT SCRIPTS: each journey declares an objective, preconditions\\n"
+            "(needs_login? needs_data?), a concrete observable expected outcome, a risk level,\\n"
+            "and evidence refs. Do NOT ask the model to invent CSS selectors; steps reference\\n"
+            "observed control labels (control_hints) that the executor resolves at run time.\\n"
+            "3. NO PRODUCT-SPECIFIC KEYWORDS OR EXAMPLES: do not reference any particular product, brand, or feature name.\\n"
+            "Logic must work for any site. Infer features purely from observed forms, inputs, actions, and content.\\n"
+            "for any site. Infer features purely from observed forms, inputs, actions, and content.\\n"
+            "4. CLASSIFICATION HONESTY: assign each journey a kind — smoke (page loads), navigation,\\n"
+            "read workflow, or write workflow. A journey may only be titled or described as a\\n"
+            "workflow if its steps and success condition actually exercise one. A navigation-only\\n"
+            "mission must be titled as such (e.g. 'Open X', 'Browse X'), never 'Create X' unless\\n"
+            "it actually submits and proves a persisted/visible result.\\n"
+            "5. CONCRETE OUTCOMES: expected outcomes and success conditions must NEVER be vague\\n"
+            "(never 'Verify visible feedback', 'Verify page loaded', 'Expected results present').\\n"
+            "State precisely what concrete data, record, document, calculation, or status is expected.\\n"
+            "6. AUTH AS A PREREQUISITE: treat auth as a prerequisite unless the user goal explicitly\\n"
+            "requests testing authentication. Do not include auth steps in feature workflows.\\n"
+            "7. STEPS: use only these actions — navigate, click, fill, select, wait. Targets must be\\n"
+            "control labels from control_hints, never CSS selectors.\\n"
+            "8. Output ONLY JSON matching the AIGeneratedJourneyList schema.\\n"
         )
 
         user_prompt = (
-            f"Application URL: {base_url}\n"
-            f"Page Title: {title}\n"
-            f"Primary Persona: {persona}\n"
-            f"User Goal: {goal or 'Thoroughly test core application features'}\n"
-            f"Page Content & Summary: {page_summary[:1500]}\n\n"
-            f"Discovered Routes:\n{json.dumps(compact_routes, indent=1)}\n\n"
-            f"Observed Controls/Elements:\n{json.dumps(compact_elements, indent=1)}\n\n"
-            f"Generate up to {max_journeys} intelligent, high-value user journeys that test real features. "
-            "Designate exactly ONE primary core feature workflow as recommended=True with high confidence. "
-            "Do NOT recommend auth/signup. Focus on the core value proposition of the product."
+            f"Application URL: {base_url}\\n"
+            f"Page Title: {title}\\n"
+            f"Primary Persona: {persona}\\n"
+            f"User Goal: {goal or 'Thoroughly test core application features'}\\n"
+            f"Time budget: {time_budget_seconds:.0f}s\\n\\n"
+            f"Observed Page States (SiteMap nodes):\\n{json.dumps(compact_states, indent=1)}\\n\\n"
+            f"Discovered Routes:\\n{json.dumps(compact_routes, indent=1)}\\n\\n"
+            f"Discovered Capabilities (from exploration):\\n{json.dumps(compact_capabilities, indent=1)}\\n\\n"
+            f"Generate up to {max_journeys} grounded, high-value user journeys. Designate exactly "
+            "ONE primary core feature workflow as recommended=True with high confidence. "
+            "Do NOT recommend auth/signup unless explicitly requested. Focus on the core value "
+            "proposition grounded in observed evidence.\\n"
         )
 
         try:
-            return await self.provider.generate_structured(
-                system, user_prompt, AIGeneratedJourneyList
+            return await asyncio.wait_for(
+                self.provider.generate_structured(system, user_prompt, AIGeneratedJourneyList),
+                timeout=time_budget_seconds,
             )
+        except asyncio.TimeoutError:
+            logger.warning("AI journey synthesis timed out after %.0fs", time_budget_seconds)
+            return None
         except AIProviderError as e:
             logger.warning("AI journey synthesis failed: %s", e)
             return None
@@ -456,10 +503,22 @@ class AgentReasoner:
                 + "\nReturn JSON: {action, target, value, credential_intent, reason, "
                 "expected_effect, verification, confidence}."
             )
-            try:
-                return await self.provider.generate_structured(system, prompt, ActionProposal)
-            except AIProviderError as e:
-                logger.warning("Action proposal via AI failed, using heuristics: %s", e)
+            last_error: AIProviderError | None = None
+            for attempt in range(2):
+                try:
+                    return await self.provider.generate_structured(system, prompt, ActionProposal)
+                except AIProviderError as e:
+                    last_error = e
+                    logger.warning("AI action proposal failed (attempt %d/2): %s", attempt + 1, e)
+                    if attempt == 0:
+                        await asyncio.sleep(0.5)
+            # Failover across providers is handled inside FailoverAIProvider. When
+            # every provider is exhausted we fall back to a generic, non-state-machine
+            # heuristic instead of silently replaying a benchmark flow (forgot-password,
+            # signup, etc.) on a real site.
+            logger.warning(
+                "AI action proposal failed after retries; using generic fallback: %s", last_error
+            )
         return self._heuristic_next_action(memory, interpretation, semantic_view, recent_failure)
 
     def _heuristic_next_action(
@@ -469,260 +528,39 @@ class AgentReasoner:
         observation: dict,
         recent_failure: str | None = None,
     ) -> ActionProposal:
-        """Generic deterministic fallback policy (no benchmark-specific state machine)."""
-        identity = memory.identity
-        buttons = {(b.get("name") or "").lower(): b for b in observation.get("buttons", [])}
-        links = {(l.get("name") or "").lower(): l for l in observation.get("links", [])}
-        inputs = observation.get("inputs", [])
+        """Generic deterministic fallback (no benchmark-specific state machine).
+
+        When the AI provider is unavailable or fails, we never silently replay a
+        hardcoded flow (forgot-password, signup, etc.) on a real site. We only
+        take safe, generic steps: dismiss consent interstitials, or hand control
+        back to the human so the model can decide once it is available again.
+        """
+        buttons = observation.get("buttons", []) or []
+        links = observation.get("links", []) or []
         text = (observation.get("text_excerpt") or "").lower()
-        signals = observation.get("auth_signals", [])
 
-        def _has_email(i: dict) -> bool:
-            return "email" in (
-                i.get("input_type", "") + " " + i.get("name", "") + " "
-                + i.get("label", "") + " " + i.get("placeholder", "")
-            ).lower()
-
-        def _empty(of_type: tuple[str, ...] = ()) -> list[dict]:
-            """Empty (unfilled) inputs, optionally filtered by input_type."""
-            return [
-                i for i in inputs
-                if not i.get("filled") and (not of_type or i.get("input_type") in of_type)
-            ]
-
-        def _input_target(inp: dict) -> dict:
-            """Deterministic input target: specific selector or name attribute."""
-            sel = inp.get("selector") or ""
-            if sel and not sel.startswith(("input[", "textarea[")):
-                return {"css": sel}
-            name = (inp.get("name") or "").strip()
-            if name and not name.startswith(("#", ".", "input", "textarea")):
-                return {"css": f"input[name='{name}']"}
-            return {"css": sel or "input"}
-
-        # Real-page evidence updates authenticated state (never guessed)
-        if "authenticated_indicators" in signals and "password_field_present" not in signals:
-            identity.authenticated = True
-        elif "password_field_present" in signals and identity.authenticated:
-            if "login_page_url" in signals or any("log in" in b or "log in" in l for b, l in
-                                                   [(b, b) for b in buttons] + [(l, l) for l in links]):
-                identity.authenticated = False
-
-        # ── Interstitial / Consent Modal Handling (Variant M) ──
+        # Consent / interstitial (generic, site-agnostic)
         consent_btn = _find_semantic(buttons, links, (
             "accept all", "accept cookies", "i accept", "agree", "i agree",
             "got it", "dismiss", "close modal", "continue to site", "close dialog",
         ))
-        if consent_btn and (observation.get("dialogs") or any(kw in text for kw in ("cookie", "consent", "privacy choices", "notice"))):
+        if consent_btn and (
+            observation.get("dialogs")
+            or any(kw in text for kw in ("cookie", "consent", "privacy choices", "notice"))
+        ):
             name_lower = (consent_btn.get("name") or "").lower()
             if not any(kw in name_lower for kw in ("submit", "sign up", "sign in", "log in", "reset", "recover", "send")):
                 return _click_proposal(consent_btn, "Dismiss interstitial modal or cookie consent notice")
 
-        # ── Phase R3: reset form open (after reset link) → set new password ──
-        if identity.reset_link_opened and not identity.password_reset:
-            pw_empty = _empty(("password",))
-            if pw_empty:
-                target = _input_target(pw_empty[0])
-                if len(pw_empty) >= 2:
-                    target["confirm_css"] = _input_target(pw_empty[1])["css"]
-                return ActionProposal(
-                    action="type",
-                    target=target,
-                    credential_intent="new_password",
-                    reason="Reset form open — setting the new password",
-                    expected_effect="New password entered",
-                    confidence=0.8,
-                )
-            if inputs:  # fields filled → submit
-                sub_btn = _find_semantic(buttons, [], ("reset", "update password", "set password", "save", "change password", "submit"))
-                if sub_btn:
-                    return _click_proposal(sub_btn, "Submitting the reset form via button")
-                return ActionProposal(
-                    action="press",
-                    value="Enter",
-                    reason="Submitting the reset form",
-                    expected_effect="Password changed",
-                    confidence=0.7,
-                )
-
-        # ── Phase R2: recovery requested → read mailbox for reset mail ──
-        if identity.recovery_requested and not identity.reset_link_opened:
-            return ActionProposal(
-                action="read_email",
-                target={"subject_keywords": ["reset", "recover", "password", "instructions"]},
-                reason="Recovery email expected — checking the mailbox",
-                expected_effect="Reset link retrieved",
-                confidence=0.8,
-            )
-
-        # ── Phase E: no identity → create the mailbox first ──
-        if interpretation.needs_email_capability and not identity.email:
-            return ActionProposal(
-                action="create_email",
-                reason="Establish a temporary email identity for the whole execution",
-                expected_effect="A persistent mailbox address is available",
-                confidence=0.9,
-            )
-
-        # ── Phase R1: unauthenticated state → forgot-password flow with SAME email ──
-        ready_for_recovery = (
-            (not interpretation.needs_account or identity.account_created)
-            and (identity.logged_out or not interpretation.needs_account)
-            and not identity.authenticated
-            and not identity.recovery_requested
-        )
-        if ready_for_recovery:
-            # Check for dedicated recovery inputs (e.g. In modal dialogs)
-            rec_inputs = [i for i in _empty() if "recovery" in (i.get("selector", "") + " " + i.get("name", "") + " " + i.get("label", "")).lower()]
-            if rec_inputs:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(rec_inputs[0]),
-                    credential_intent="email",
-                    reason="Modal recovery form detected — submitting the SAME identity email",
-                    expected_effect="Recovery request submitted for the persistent identity",
-                    confidence=0.7,
-                )
-            rec_filled = [i for i in inputs if i.get("filled") and "recovery" in (i.get("selector", "") + " " + i.get("name", "") + " " + i.get("label", "")).lower()]
-            if rec_filled:
-                sub_btn = _find_semantic(buttons, [], ("send", "submit", "continue", "reset", "recover", "email"))
-                if sub_btn:
-                    return _click_proposal(sub_btn, "Submitting the recovery form via button")
-
-            email_empty = [i for i in _empty(("email",)) if _has_email(i)]
-            if email_empty and "password_field_present" not in signals:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(email_empty[0]),
-                    credential_intent="email",
-                    reason="Recovery form detected — submitting the SAME identity email",
-                    expected_effect="Recovery request submitted for the persistent identity",
-                    confidence=0.7,
-                )
-            if any(i.get("filled") and _has_email(i) for i in inputs) \
-                    and "password_field_present" not in signals:
-                sub_btn = _find_semantic(buttons, [], ("send", "submit", "continue", "reset", "recover", "email"))
-                if sub_btn:
-                    return _click_proposal(sub_btn, "Submitting the recovery form via button")
-                return ActionProposal(
-                    action="press",
-                    value="Enter",
-                    reason="Submitting the recovery form",
-                    expected_effect="Recovery email sent",
-                    confidence=0.7,
-                )
-            recovery = _find_semantic(buttons, links, RECOVERY_TEXTS)
-            if recovery:
-                return _click_proposal(recovery, "Open the password recovery flow")
-
-        # ── Phase V: verification prompt → read mailbox for verification mail ──
-        if "email_verification_prompt" in signals and not identity.account_verified:
-            return ActionProposal(
-                action="read_email",
-                target={"subject_keywords": ["verify", "confirm", "activate"]},
-                reason="Application requests email verification — checking the mailbox",
-                expected_effect="A verification message with a link is found",
-                confidence=0.7,
-            )
-
-        # ── Phase A: authenticated → log out before recovery flows ──
-        if identity.authenticated and not identity.logged_out:
-            logout = _find_semantic(buttons, links, LOGOUT_TEXTS)
-            if logout:
-                return _click_proposal(logout, "Log out to start the recovery flow from a clean state")
-
-        # ── Phase S: no account yet → signup flow (BEFORE recovery) ──
-        if identity.email and not identity.account_created and interpretation.needs_account:
-            # Prefer the explicit signup entry point: on a login page the
-            # email+password form is the LOGIN form, not signup — filling it
-            # would submit credentials for an account that doesn't exist.
-            signup = _find_semantic(buttons, links, SIGNUP_TEXTS)
-            if signup:
-                return _click_proposal(signup, "No account yet — open signup")
-            # No signup link visible → we're on the signup form → fill it
-            email_empty = [i for i in _empty() if _has_email(i)]
-            pw_empty = _empty(("password",))
-            email_filled = any(_has_email(i) for i in inputs if i.get("filled"))
-            pw_filled = any(i.get("filled") for i in inputs if i.get("input_type") == "password")
-            if email_empty and pw_empty:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(email_empty[0]),
-                    credential_intent="email",
-                    reason="Signup form detected — creating the account with the identity email",
-                    expected_effect="Signup form filled",
-                    confidence=0.7,
-                )
-            if email_filled and pw_empty:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(pw_empty[0]),
-                    credential_intent="password",
-                    reason="Signup form — entering the account password",
-                    expected_effect="Signup form filled",
-                    confidence=0.7,
-                )
-            if email_filled and pw_filled:
-                sub_btn = _find_semantic(buttons, [], ("create", "sign up", "register", "create account", "submit", "continue", "join"))
-                if sub_btn:
-                    return _click_proposal(sub_btn, "Submitting the signup form via button")
-                return ActionProposal(
-                    action="press",
-                    value="Enter",
-                    reason="Submitting the signup form",
-                    expected_effect="Account created / verification required",
-                    confidence=0.7,
-                )
-
-        # ── Phase L: verified account → login ──
-        if identity.email and identity.account_verified and not identity.authenticated:
-            login_link = _find_semantic(buttons, links, LOGIN_TEXTS)
-            if login_link:
-                return _click_proposal(login_link, "Open the login form")
-            email_empty = [i for i in _empty() if _has_email(i)]
-            pw_empty = _empty(("password",))
-            email_filled = any(_has_email(i) for i in inputs if i.get("filled"))
-            pw_filled = any(i.get("filled") for i in inputs if i.get("input_type") == "password")
-            if email_empty:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(email_empty[0]),
-                    credential_intent="email",
-                    reason="Login form detected — entering the identity email",
-                    expected_effect="Login form filled",
-                    confidence=0.7,
-                )
-            if pw_empty:
-                return ActionProposal(
-                    action="type",
-                    target=_input_target(pw_empty[0]),
-                    credential_intent="password",
-                    reason="Login form detected — entering the password",
-                    expected_effect="Login form filled",
-                    confidence=0.7,
-                )
-            if email_filled and pw_filled:
-                sub_btn = _find_semantic(buttons, [], ("log in", "sign in", "submit", "continue", "enter", "access"))
-                if sub_btn:
-                    return _click_proposal(sub_btn, "Submitting the login form via button")
-                return ActionProposal(
-                    action="press",
-                    value="Enter",
-                    reason="Submitting the login form",
-                    expected_effect="Authenticated state",
-                    confidence=0.7,
-                )
-
-
-        # ── Default: observe more (never guess blindly) ──
+        # No safe, generic next action is identifiable without the model. Hand
+        # back to the human instead of guessing a benchmark-specific flow.
         return ActionProposal(
-            action="observe",
-            reason="No confident next action from current observation — gathering more detail",
-            expected_effect="Richer observation for the next decision",
-            confidence=0.2,
+            action="request_human",
+            reason="AI provider unavailable and no deterministic next action is identifiable",
+            expected_effect="Human decides the next step",
+            confidence=0.5,
         )
 
-    # ── Phase 8: Recovery ───────────────────────────────────────────
 
     async def propose_recovery(
         self,
