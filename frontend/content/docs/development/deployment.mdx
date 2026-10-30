@@ -1,0 +1,73 @@
+---
+title: "Deployment"
+description: "Production deployment notes: container topology, Render blueprint, environment wiring, and health checks."
+---
+
+# Deployment
+
+Kova deploys as four services: API, worker, frontend, and managed Postgres/Redis. A Render blueprint (`render.yaml`) is provided for one-click-style provisioning; the same topology maps to any container platform.
+
+## Topology
+
+| Service | Image / build | Port | Notes |
+|---|---|---|---|
+| **kova-api** | `backend/` (Python 3.12) | 8000 | Health check path: `/health` |
+| **kova-worker** | same image as API | — | Celery worker, `--concurrency=2`; needs Playwright/Chromium |
+| **kova-frontend** | `frontend/` (Next.js) | 3000 | `NEXT_PUBLIC_API_URL` must point at the public API URL |
+| **Postgres** | managed (e.g. Neon, Render Postgres) | 5432 | Set `DATABASE_URL` |
+| **Redis** | managed (e.g. Upstash, Render Redis) | 6379 | Set `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` |
+
+## Render blueprint (`render.yaml`)
+
+The repo's `render.yaml` defines:
+
+- `kova-api` — Python web service, health check `/health`
+- `kova-worker` — same build, `concurrency: 2`, `AGENT_EXECUTION_MAX_DURATION_SECONDS=600`
+- Frontend is expected to be deployed separately (e.g. Vercel or a Render Next.js service) with `NEXT_PUBLIC_API_URL` set to the public API origin
+
+## Required production environment
+
+Set on **both** API and worker:
+
+- `DATABASE_URL` — managed Postgres, SSL mode as required
+- `REDIS_URL`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND` — same Redis instance for broker and events
+- `JWT_SECRET_KEY` — long random value, unique per environment
+- `CREDENTIAL_ENCRYPTION_KEY` — long random value, unique per environment
+- `FRONTEND_URL` — public frontend origin (CORS + signed links)
+- `AGENT_EXECUTION_ENABLED=true`
+- `SENTRY_DSN` — optional but recommended
+
+Set on **frontend only**:
+
+- `NEXT_PUBLIC_API_URL` — public API origin (must be reachable from the end user's browser)
+
+## Worker image requirements
+
+Workers must include Playwright and Chromium. In a Dockerfile:
+
+```dockerfile
+RUN pip install playwright && playwright install --with-deps chromium
+```
+
+If Chromium fails at runtime, runs will stall or fail with browser-launch errors. Verify with a smoke execution after deploy.
+
+## Health checks
+
+- API: `GET /health` → `{"status":"ok",...}`
+- Worker: no HTTP port; watch Celery logs for broker connectivity
+- Frontend: standard Next.js health / SSR response
+
+## Blue/green and migrations
+
+Run `alembic upgrade head` before shifting traffic to a new API build. Keep worker and API on the same commit to avoid schema/task-queue skew.
+
+## What is not provided
+
+- No official Helm chart or Terraform module is shipped in this repo.
+- No multi-region active-active configuration is documented; assume single-region with managed HA Postgres/Redis if needed.
+
+## Next
+
+- [Architecture](architecture) — how services fit together
+- [Configuration](configuration) — full environment variable reference
+- [Troubleshooting](../troubleshooting) — common deployment failures

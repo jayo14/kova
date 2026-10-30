@@ -1,0 +1,69 @@
+---
+title: "How Kova works"
+description: "Execution model, isolation, verification, and the state machine — grounded in the Kova architecture."
+---
+
+# How Kova works
+
+This page describes how a validation actually runs. It is aimed at judges, developers, and anyone who wants to trust the evidence model.
+
+## High-level flow
+
+1. You create a **project** (base URL, optional credentials).
+2. You define or discover **flows** — product journeys as typed steps (navigate, click, type, assert, …).
+3. You start an **execution** from the web app or the CI API.
+4. A **Celery worker** claims the job, launches an **isolated Playwright Chromium context**, and drives the real UI.
+5. Every step records actions, screenshots/frames, network activity, and outcomes.
+6. **Deterministic verification** decides the verdict. AI models may assist in proposing actions; they do not mark runs green.
+
+## Isolation: browsers never run in the API process
+
+The FastAPI API accepts work and schedules it. **Playwright/Chromium run only inside Celery workers** (`kova-worker` in Docker Compose). Each job gets an isolated browser context so concurrent runs do not share cookies, storage, or page state.
+
+That split is why the API can stay lightweight while browser automation scales with worker concurrency.
+
+## AI proposes, code disposes
+
+Model output (selectors, next actions, repair suggestions) is passed through **code-side validation** before any browser action runs. Schemas and rules reject invalid or unsafe actions. After a run, **verification must be deterministic** (assertions, postconditions, network/UI checks). VLM (vision) checks are advisory only and cannot alone mark a run complete.
+
+## Execution state machine (summary)
+
+Executions move through an explicit state machine (see `backend/app/engine/execution/`):
+
+| Category | States |
+|---|---|
+| Active | `RUNNING`, `PAUSE_REQUESTED`, `PAUSED`, `QUIESCING`, `HUMAN_CONTROL`, `RECONCILING`, `WAITING_FOR_USER`, `RESUME_REQUESTED` |
+| Terminal | `COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`, `BLOCKED`, `UNVERIFIED` |
+
+Execution control uses a **single lease with heartbeat** so only one worker owns a run at a time. Pause/resume and human-control handoff are first-class states, not ad-hoc flags.
+
+## Evidence model
+
+A finished run is auditable:
+
+- **Timeline** of steps with timestamps and outcomes
+- **Visual evidence** — screenshots and viewport frames streamed during the run
+- **Network log** — requests observed while driving the UI
+- **Verification verdict** — deterministic result plus explanations when available
+
+Shareable report URLs can be **HMAC-signed** so you can hand a report link outside the app without a full session. See [Results and evidence](guides/results-and-evidence).
+
+## Continuous validation (diff-aware)
+
+When you pass `changed_files` or `diff_content` to the CI endpoint, Kova can select a **minimal valid path** related to the change rather than always running every flow. Reports can include **baseline comparison** (newly failing vs recovered) so you can gate merges on real regressions, not just flaky noise.
+
+## Why this design
+
+Manual QA does not scale. Script-only tools break when the UI shifts. Kova sits between: autonomous exploration plus structured, verifiable journeys, with a hard rule that **code, not the model, decides success**.
+
+## Source of truth in the repo
+
+| Concern | Location |
+|---|---|
+| Execution states & lease | `backend/app/engine/execution/` |
+| AI action validation | `backend/app/engine/ai/validator.py` |
+| Workers (browsers) | `backend/app/workers/`, Celery |
+| CI routes | `backend/app/api/routes/ci.py` |
+| Architecture notes | `docs/ARCHITECTURE.md` |
+
+For how to run this stack yourself, see [Local setup](development/local-setup) and [Architecture](development/architecture).

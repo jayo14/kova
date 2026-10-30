@@ -1,0 +1,84 @@
+---
+title: "Use Kova as a developer"
+description: "Developer-oriented workflow: projects, flows, credentials, executions, and how to verify results programmatically."
+---
+
+# Use Kova as a developer
+
+This guide assumes you can run Kova (hosted or [local setup](../development/local-setup)) and are comfortable with HTTP APIs and CI configuration.
+
+## Project model
+
+A **project** is the unit of ownership:
+
+- `name` — display name
+- `base_url` — default application URL under test
+- optional org membership and roles (viewer / tester / admin)
+
+You need a **tester** (or higher) role on a project to start CI runs. Viewer can read reports.
+
+## Flows
+
+A **flow** is a product journey defined as typed steps. Core shape (from `backend/app/modules/flows/schemas.py`):
+
+```json
+{
+  "name": "Checkout happy path",
+  "project_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "steps": [
+    { "step_id": "s1", "action": "navigate", "url": "https://staging.example.com/login" },
+    { "step_id": "s2", "action": "type", "selector": "#email", "value": "user@example.com" },
+    { "step_id": "s3", "action": "type", "selector": "#password", "value": "secret" },
+    { "step_id": "s4", "action": "click", "selector": "button[type=submit]" },
+    { "step_id": "s5", "action": "assert", "postcondition": "dashboard visible" }
+  ]
+}
+```
+
+Actions that target UI elements (`click`, `type`, `fill`, `select`, `check`, `uncheck`, `upload`) require an element target: `selector`, `target`, `label`, `role`, or `test_id`. `navigate` requires a URL. Extra fields are allowed on steps (`extra="allow"`).
+
+Flows can also be **discovered** during an exploration session and then edited in the UI or via the API.
+
+## Credentials
+
+Store application credentials once per project so flows can log in without hard-coding secrets in every step. Reference them from steps via `credential_id`.
+
+## Executions
+
+An **execution** is one run of a flow against a base URL. Terminal statuses you will see in the API and UI:
+
+| Status | Meaning |
+|---|---|
+| `COMPLETED` | Finished and verified |
+| `FAILED` | A step or deterministic check failed |
+| `CANCELLED` | Manually cancelled |
+| `TIMEOUT` | Exceeded max duration |
+| `BLOCKED` | Could not proceed (missing target, safety stop, etc.) |
+| `UNVERIFIED` | Actions ran but verification did not prove success |
+
+Active concurrency is capped (default max active executions per user is 5 in the API). Plan CI fan-out accordingly.
+
+## Reports
+
+`GET /api/v1/executions/{execution_id}/report` returns the full evidence package: timeline, verdict breakdown, failure diagnosis, and sanitized payloads. Share links can be HMAC-signed so external reviewers can open a report without a full app session.
+
+## Continuous validation
+
+Two modes on `POST /api/v1/ci/run`:
+
+1. **Flow mode** — pass `flow_ids`; Kova creates one execution per flow and dispatches them.
+2. **Diff mode** — pass `diff_content` or `changed_files`; Kova selects a minimal valid path and returns a synchronous validation report with baseline comparison (newly failing vs recovered).
+
+`POST /api/v1/ci/validate` accepts either an async validation run (when `scope` is present) or a synchronous targeted report (when only diff/file inputs are present). Poll `GET /api/v1/ci/validate/{id}` and fetch `GET /api/v1/ci/validate/{id}/report` for the full payload.
+
+## What not to do
+
+- Do not treat `UNVERIFIED` as pass; gate on deterministic verification.
+- Do not hard-code credentials in flow steps; use the credentials store.
+- Do not assume a published GitHub Action exists; use the HTTP API or `scripts/kova_ci.py` (see [CI/CD](../integrations/ci-cd)).
+
+## Next
+
+- [API](../integrations/api) — endpoint reference
+- [CI/CD](../integrations/ci-cd) — pipeline integration
+- [Results and evidence](results-and-evidence) — how to read reports

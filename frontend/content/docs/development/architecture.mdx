@@ -1,0 +1,69 @@
+---
+title: "Architecture"
+description: "How the API, Celery workers, Postgres, Redis, and frontend fit together — and where isolation boundaries sit."
+---
+
+# Architecture
+
+Kova is a split architecture: a stateless FastAPI API for control-plane work, and Celery workers that own all browser execution. Postgres is the source of truth; Redis carries events, frames, and the task queue.
+
+## Components
+
+| Component | Role |
+|---|---|
+| **Next.js frontend** (`frontend/`) | Web UI: auth, onboarding, projects, flows, executions, settings |
+| **FastAPI API** (`backend/app/`) | REST API, JWT auth, RBAC, flow/execution/CI orchestration |
+| **Celery worker** (`backend/app/workers/`) | Runs Playwright/Chromium; one isolated browser context per job |
+| **Postgres 16** | Projects, users, flows, executions, tokens, billing records |
+| **Redis** | Celery broker + result backend; event streams; frame storage (db 0) |
+
+## Request path (web run)
+
+1. Browser hits Next.js (`:3000`).
+2. Next.js calls FastAPI (`:8000`) with a bearer JWT or session token.
+3. API validates, persists the execution row, and enqueues a Celery task.
+4. Worker claims the task (single lease + heartbeat), launches an isolated Chromium context, drives the UI, streams frames to Redis, and writes step results back to Postgres.
+5. Deterministic verification runs; the execution reaches a terminal state.
+6. UI polls or subscribes to status and renders the report.
+
+## Isolation boundary
+
+**Browsers never run in the API process.** Playwright/Chromium are worker-only. This keeps the API lightweight, prevents a hung browser from blocking HTTP request threads, and lets you scale workers independently of API replicas.
+
+Each job gets a fresh browser context: no shared cookies, storage, or page state between concurrent runs.
+
+## Control plane vs data plane
+
+- **Control plane** (API): auth, project/flow CRUD, execution scheduling, CI endpoints, report serving, HMAC-signed share links.
+- **Data plane** (worker): browser automation, step execution, frame capture, verification.
+
+## State machine
+
+Executions move through an explicit state machine (`backend/app/engine/execution/`):
+
+- **Active:** `RUNNING`, `PAUSE_REQUESTED`, `PAUSED`, `QUIESCING`, `HUMAN_CONTROL`, `RECONCILING`, `WAITING_FOR_USER`, `RESUME_REQUESTED`
+- **Terminal:** `COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`, `BLOCKED`, `UNVERIFIED`
+
+A single lease with heartbeat ensures only one worker owns a run at a time. Pause, resume, and human-control handoff are first-class states.
+
+## AI boundary
+
+AI models propose actions and repairs. Code validates every proposal against typed schemas before any browser call (`backend/app/engine/ai/validator.py`). Final verification is deterministic; VLM (vision) checks are advisory only.
+
+## Source map
+
+| Concern | Location |
+|---|---|
+| API routes | `backend/app/api/routes/` |
+| Flow schemas | `backend/app/modules/flows/schemas.py` |
+| Execution engine | `backend/app/engine/execution/` |
+| AI validator | `backend/app/engine/ai/validator.py` |
+| Workers / Celery app | `backend/app/workers/` |
+| CI routes | `backend/app/api/routes/ci.py` |
+| Internal architecture notes | `docs/ARCHITECTURE.md` |
+
+## Next
+
+- [Local setup](local-setup) — run the full stack locally
+- [Configuration](configuration) — environment variables
+- [Deployment](deployment) — production notes

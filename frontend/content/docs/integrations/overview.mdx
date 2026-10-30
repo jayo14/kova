@@ -1,0 +1,44 @@
+---
+title: "Integrations overview"
+description: "What Kova integrates with today — HTTP API, CI scripts, GitHub/GitLab project webhooks — and what does not exist yet."
+---
+
+# Integrations overview
+
+Kova integrates at three levels. Be explicit about which one you need; the surface area and trust model differ.
+
+## 1. Web app (no integration required)
+
+Sign up, complete onboarding, explore, and run validations entirely in the UI. No external tools needed. See [Use Kova on the web](../guides/for-vibe-coders).
+
+## 2. Local run (developer machine)
+
+Clone the repo, start services, and drive everything from `localhost`. Useful for development, demos, and hackathon judging. See [Local setup](../development/local-setup).
+
+## 3. CI/CD automation (HTTP API + CLI)
+
+Wire Kova into GitHub Actions, GitLab CI, or any pipeline that can make HTTP calls:
+
+- **HTTP API** — `POST /api/v1/ci/run`, `POST /api/v1/ci/validate`, status/report endpoints. Auth via API token (`kova_tok_...`). See [API](api).
+- **CLI** — `scripts/kova_ci.py`, a stdlib-only Python script with clear exit codes. See [CI/CD](ci-cd).
+- **Project webhooks** — connect a GitHub or GitLab repository from project **Integrations** so pull/merge request events can trigger validation runs. This is configured per-project in the app.
+
+## What does not exist
+
+- **No published GitHub Action** on the marketplace (there is no `kova-ai/action-validate@v1`). Pipelines call the HTTP API or the CLI directly.
+- **No official GitLab CI template package**; use the HTTP API from `.gitlab-ci.yml`.
+- **No Terraform/Helm operator**; infrastructure is standard containers + managed data services.
+
+## Choosing a path
+
+| Goal | Use |
+|---|---|
+| Try Kova once | Web app or local setup |
+| Gate PRs on product flows | CI/CD (HTTP API or CLI) |
+| Build custom tooling on top of Kova | API |
+
+## Next
+
+- [CI/CD](ci-cd) — pipeline recipes and exit codes
+- [API](api) — endpoint reference
+- [Authentication](../guides/authentication) — tokens and scopes

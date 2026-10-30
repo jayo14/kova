@@ -1,0 +1,126 @@
+---
+title: "CI/CD"
+description: "Wire Kova into GitHub Actions, GitLab CI, or any pipeline using the HTTP API or the kova_ci.py CLI."
+---
+
+# CI/CD
+
+Kova has **no published GitHub Action**. Automation uses the HTTP API or the bundled CLI. Both paths authenticate with an API token created at **Settings → API tokens** (`/settings/tokens`).
+
+## CLI: `scripts/kova_ci.py`
+
+Stdlib-only Python (urllib). No pip install required.
+
+```bash
+export KOVA_PROJECT_ID="your-project-id"
+export KOVA_API_TOKEN="kova_tok_..."
+
+python scripts/kova_ci.py \
+  --api-url "https://your-kova-api" \
+  --scope full \
+  --changed-files "src/checkout.tsx,src/cart.ts" \
+  --commit-sha "$GIT_SHA" \
+  --branch "$BRANCH_NAME" \
+  --pr-number "$PR_NUMBER" \
+  --base-url "https://staging.example.com" \
+  --json-output kova-report.json
+```
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Pass |
+| `1` | Fail (validation or verification failed) |
+| `2` | Untrustworthy / blocked (cannot trust the result) |
+| `3` | Invalid config or auth (bad token, missing project, bad args) |
+| `4` | Infrastructure down (API unreachable, timeout) |
+
+### Flags
+
+`--project-id`, `--api-token`, `--api-url`, `--scope`, `--changed-files`, `--diff-file`, `--commit-sha`, `--branch`, `--pr-number`, `--base-url`, `--commit-message`, `--fail-on-healed`, `--json-output`.
+
+Output includes `baseline_diff`, `impact_report.selection_reasons`, and GitHub annotations (`::warning::`, `::notice::`) when running under Actions.
+
+## HTTP API
+
+```bash
+curl -sS -X POST "$KOVA_API_URL/api/v1/ci/run" \
+  -H "Authorization: Bearer $KOVA_API_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "diff_content": "...",
+    "base_url": "https://staging.example.com",
+    "fail_on_healed": false,
+    "timeout_seconds": 1800
+  }'
+```
+
+Branch mode: pass `flow_ids` instead of diff fields to run specific flows async. Poll `GET /api/v1/ci/validate/{id}` and fetch `GET /api/v1/ci/validate/{id}/report` for the full payload. See [API](api).
+
+## GitHub Actions
+
+Repo ships `.github/workflows/kova-ci.yml` as a reference: it POSTs to `$KOVA_API_URL/api/v1/ci/run` with secrets-gated `KOVA_API_URL`, `KOVA_API_TOKEN`, `KOVA_PROJECT_ID`. The default `https://api.kova.dev` in that workflow is aspirational — replace with your real API origin.
+
+Minimal job:
+
+```yaml
+kova-validate:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - name: Kova validation
+      env:
+        KOVA_API_URL: ${{ secrets.KOVA_API_URL }}
+        KOVA_API_TOKEN: ${{ secrets.KOVA_API_TOKEN }}
+        KOVA_PROJECT_ID: ${{ secrets.KOVA_PROJECT_ID }}
+      run: |
+        git diff --name-only origin/main...HEAD > changed.txt
+        python scripts/kova_ci.py \
+          --api-url "$KOVA_API_URL" \
+          --changed-files "$(paste -sd, changed.txt)" \
+          --commit-sha "$GITHUB_SHA" \
+          --branch "$GITHUB_REF_NAME" \
+          --json-output kova-report.json
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: kova-report
+        path: kova-report.json
+```
+
+## GitLab CI
+
+```yaml
+kova-validate:
+  image: python:3.12
+  script:
+    - git diff --name-only origin/$CI_DEFAULT_BRANCH...HEAD > changed.txt
+    - python scripts/kova_ci.py
+      --api-url "$KOVA_API_URL"
+      --changed-files "$(paste -sd, changed.txt)"
+      --commit-sha "$CI_COMMIT_SHA"
+      --branch "$CI_COMMIT_REF_NAME"
+      --json-output kova-report.json
+  artifacts:
+    paths: [kova-report.json]
+    when: always
+```
+
+Set `KOVA_API_URL`, `KOVA_API_TOKEN`, `KOVA_PROJECT_ID` as CI/CD variables.
+
+## Project webhooks (in-app)
+
+From a project's **Integrations** settings, connect a GitHub or GitLab repository so pull/merge request events can trigger validation runs. This is configured per project inside Kova — not via a marketplace action.
+
+## Gating rules
+
+- Gate merges on deterministic verification only; never treat `UNVERIFIED` as pass.
+- Use `--fail-on-healed` / `fail_on_healed` when you want recovered baselines to fail the gate (stricter regression policy).
+- Plan around the per-user active execution cap (default 5); serialize or batch large monorepo runs.
+
+## Next
+
+- [API](api) — full endpoint reference
+- [Authentication](../guides/authentication) — tokens and scopes
+- [Limitations](../limitations) — what CI automation does and does not cover

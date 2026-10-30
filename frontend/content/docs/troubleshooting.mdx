@@ -1,0 +1,97 @@
+---
+title: "Troubleshooting"
+description: "Common failures during local setup, web app, CI, and deployment — with the fix for each."
+---
+
+# Troubleshooting
+
+## Local setup
+
+### API starts but runs stay `RUNNING` forever
+
+Celery worker is not running, or it is connected to a different Redis than the API. Start the worker and confirm `CELERY_BROKER_URL` / `REDIS_URL` match on both processes:
+
+```bash
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+```
+
+### Playwright errors in worker logs
+
+Chromium is not installed in the worker environment. Inside the worker container or venv:
+
+```bash
+playwright install chromium
+```
+
+In Docker, ensure the worker image runs `playwright install --with-deps chromium` at build time.
+
+### Frontend cannot reach the API
+
+- Confirm `NEXT_PUBLIC_API_URL=http://localhost:8000` in `frontend/.env.local`.
+- Confirm `FRONTEND_URL` on the API allows your frontend origin (CORS).
+- Check the browser network tab: failed requests usually show CORS or 404 on `/api/v1/...`.
+
+### Migrations fail
+
+Run `alembic upgrade head` from `backend/` with the correct `DATABASE_URL`. Ensure Postgres is up and the database `kova` exists.
+
+### Smoke test fails
+
+```bash
+cd backend && .venv/bin/pytest tests/smoke/ -v
+```
+
+Fix any failing import or env error before debugging higher layers.
+
+## Web app
+
+### Sign-up returns "Email already registered"
+
+The email already exists. Use login or a different address.
+
+### Onboarding discovery finds nothing
+
+The base URL may be unreachable from the worker (private network, wrong host). Verify the worker can open the URL; try `http://localhost:3000` against a public staging URL first.
+
+### Execution stuck in active states
+
+Check worker liveness and Redis connectivity. Pause/resume and human-control states require a healthy lease heartbeat; a dead worker leaves the run active until timeout.
+
+## CI / API
+
+### `401` or `403` from CI endpoints
+
+- Token missing, revoked, or wrong scope. CI requires `ci:validate` and a tester-or-higher project role.
+- Raw token is shown only once at creation; if lost, revoke and recreate at `/settings/tokens`.
+
+### CLI exit code 2 (untrustworthy / blocked)
+
+The run could not produce a trustworthy verdict (safety stop, missing target, verification could not prove success). Inspect the JSON report and the execution timeline; do not treat this as pass.
+
+### CLI exit code 4 (infra down)
+
+API unreachable or timed out. Check `--api-url`, network, and API health (`GET /health`).
+
+### Runs rejected with concurrency error
+
+Active executions per user are capped (default 5). Wait for runs to reach terminal state or cancel idle ones.
+
+## Deployment
+
+### Worker crashes on browser launch
+
+Chromium missing or missing system deps in the production image. Rebuild with `playwright install --with-deps chromium`.
+
+### Signed report links fail signature check
+
+`FRONTEND_URL` or the signing secret differs between the API instance that created the link and the one serving it. Keep secrets and `FRONTEND_URL` consistent across replicas.
+
+### CORS errors in production
+
+Set `FRONTEND_URL` to the exact public frontend origin (scheme + host + port if non-standard).
+
+## Still stuck
+
+- Check API and worker logs first — most failures surface there before the UI.
+- Review [Architecture](development/architecture) for the request/worker split.
+- Review [Limitations](limitations) for known boundaries.

@@ -1,0 +1,89 @@
+---
+title: "Results and evidence"
+description: "How to read execution status, timelines, verification verdicts, and signed shareable reports."
+---
+
+# Results and evidence
+
+Kova runs are evidence-backed. This page explains how to interpret what you see after a validation finishes.
+
+## Execution status
+
+Terminal statuses you will see in the UI and API:
+
+| Status | Meaning | Treat as |
+|---|---|---|
+| `COMPLETED` | Finished and deterministic verification passed | Pass |
+| `FAILED` | A step or verification check failed | Fail |
+| `CANCELLED` | Manually cancelled before completion | Neutral |
+| `TIMEOUT` | Exceeded max duration (`timeout_seconds`) | Fail / investigate |
+| `BLOCKED` | Could not proceed (missing credential, unreachable target, safety stop) | Fail / fix prerequisites |
+| `UNVERIFIED` | Actions ran but verification did not prove success | **Not a pass** — treat as inconclusive |
+
+Active states you may see while a run is in flight: `RUNNING`, `PAUSE_REQUESTED`, `PAUSED`, `QUIESCING`, `HUMAN_CONTROL`, `RECONCILING`, `WAITING_FOR_USER`, `RESUME_REQUESTED`.
+
+## What a completed run contains
+
+Open a run in the dashboard or fetch the report API to see:
+
+- **Step timeline** — ordered list of actions with timestamps, selectors, outcomes
+- **Screenshots / frames** — visual evidence captured at each step or on failure
+- **Network log** — HTTP requests observed while driving the UI
+- **Verification verdict** — deterministic result plus explanations
+
+## Reading the verification verdict
+
+Kova separates **doing** from **proving**:
+
+- The agent **proposes and executes** actions (navigate, click, type, …).
+- **Deterministic checks** decide whether the run succeeded (assertions, postconditions, network/UI state).
+- **VLM (vision) checks are advisory only** — they can annotate but never mark a run green on their own.
+
+If a run says `COMPLETED`, deterministic verification passed. If it says `UNVERIFIED`, actions ran but proof was incomplete — do not treat that as a pass.
+
+## Failure diagnosis
+
+The report includes failure diagnosis fields (`diagnose_failure`, `diagnose_verification` in the backend). Look for:
+
+- **First failing step** — usually the root cause
+- **Missing selector / element** — UI changed or flow needs updating
+- **Credential issue** — login step failed; check project credentials
+- **Timeout** — step or overall run exceeded limits
+- **Postcondition unmet** — action succeeded but expected state was not reached
+
+## Baseline comparison (continuous validation)
+
+When you run CI with `changed_files` or `diff_content`, the report can include **baseline diff**:
+
+- **Newly failing** — flows that passed before and fail now (real regression)
+- **Recovered** — flows that failed before and pass now
+
+Use newly-failing as your merge gate; ignore recovered for blocking.
+
+## Shareable report URLs
+
+Execution reports can be shared via **HMAC-signed URLs**. A signed link allows external reviewers to open a report without a full Kova session. The signature is part of the URL (`?signature=...`) and is generated server-side.
+
+API endpoint:
+
+```http
+GET /api/v1/executions/{execution_id}/report
+Authorization: Bearer <token>
+```
+
+Response includes timeline, verdict breakdown, failure/verification diagnosis, and sanitized payloads (secrets are stripped from logged text and payloads).
+
+## Streaming live runs
+
+While a run is active, the frontend streams **viewport frames** and telemetry over WebSocket / SSE so you can watch the isolated browser in real time. This is the same evidence stream that is captured into the final report.
+
+## Practical tips
+
+- Always open the **first failing step** in the timeline before re-running.
+- A run marked `UNVERIFIED` often means a postcondition was too strict or the UI settled slower than expected — tune the assertion, do not loosen the gate to `pass`.
+- For CI, gate on `COMPLETED` only; treat `BLOCKED` and `UNVERIFIED` as failures that need human review.
+
+## Related
+
+- [How Kova works](../how-it-works) — execution model
+- [Use Kova as a developer](for-developers) — API access to reports

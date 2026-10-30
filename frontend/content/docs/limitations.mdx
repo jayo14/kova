@@ -1,0 +1,57 @@
+---
+title: "Limitations"
+description: "What Kova verifies, what it does not, and which integrations do not exist yet — no marketing gloss."
+---
+
+# Limitations
+
+This page is intentionally blunt. Use it to decide whether Kova fits your workflow before you invest setup time.
+
+## Verification model
+
+- **Success requires deterministic proof.** Assertions, postconditions, and structured checks decide the verdict. AI models never mark a run green.
+- **`UNVERIFIED` is not pass.** Actions may have run, but verification did not prove the expected outcome. Gate CI on deterministic results only.
+- **VLM / vision checks are advisory.** They can annotate or suggest; they cannot alone complete a run.
+
+## Browser and environment
+
+- Each execution uses an **isolated Playwright Chromium context**. There is no cross-run cookie/session reuse by design.
+- Workers must have Chromium + system deps; missing deps cause launch failures, not graceful degradation.
+- The FastAPI process **never runs browsers**. If workers are down, executions queue or stall — they do not fail over to the API process.
+- **Active executions per user are capped** (default 5). Large parallel CI fan-out will queue.
+
+## AI behavior
+
+- Model output is validated into typed schemas before any browser action (`backend/app/engine/ai/validator.py`). Invalid or unsafe proposals are rejected.
+- AI-assisted repair and action proposal depend on configured provider keys; without them, runs still execute deterministic steps but lose AI assistance.
+- Flaky third-party UIs, CAPTCHAs, and heavy SPAs with unstable selectors remain hard; discovery helps but does not eliminate maintenance.
+
+## Integrations — what does not exist
+
+- **No published GitHub Action** on the marketplace. There is no `kova-ai/action-validate@v1`. Use the HTTP API or `scripts/kova_ci.py`.
+- **No official GitLab CI template package.** Call the HTTP API from `.gitlab-ci.yml`.
+- **No Terraform module or Helm chart** shipped in this repo.
+- **No hosted multi-tenant service is documented in-repo.** Deployment is self-hosted (Docker Compose, Render blueprint, or your own containers). URLs like `app.kova.dev` / `status.kova.dev` are not verified here.
+- **No official mobile / native client.** The web app is the product surface.
+
+## Product surfaces
+
+- Pricing tiers exist in code (`PLAN_LIMITS` in `backend/app/modules/billing/service.py`) but **production pricing is not verified from the repo** — confirm on a live instance before quoting.
+- Shareable report links use **HMAC signatures**; they are not a full multi-tenant sharing product (no per-link expiry UI, no role-scoped shares beyond the signature).
+
+## Platform
+
+- Single-region deployment is the documented assumption; no multi-region active-active guide is provided.
+- No official status page or SLA document ships with the repo.
+
+## When to look elsewhere
+
+- You need pixel-perfect visual regression as the primary gate (Kova's gate is journey + deterministic verification).
+- You need a marketplace GitHub Action with zero-config setup.
+- You need a fully hosted SaaS with no self-host option.
+
+## Next
+
+- [How Kova works](how-it-works) — the verification model in depth
+- [CI/CD](integrations/ci-cd) — what automation actually exists
+- [Troubleshooting](troubleshooting) — common failure modes

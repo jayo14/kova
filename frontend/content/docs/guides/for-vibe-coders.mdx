@@ -1,0 +1,102 @@
+---
+title: "Use Kova on the web"
+description: "Web-app workflow for non-technical users: sign up, onboarding, explore, run validations, read evidence."
+---
+
+# Use Kova on the web
+
+Kova is a browser app. Sign up, point it at your product URL, and it explores and validates real user journeys — no clone, no terminal required.
+
+<div class="doc-cards">
+  <a class="doc-card" href="/auth/signup" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">person_add</span>
+    <span class="doc-card-title">Sign up</span>
+    <p class="doc-card-desc">Create an account with email + password. Docs and app share the same origin you are reading from.</p>
+  </a>
+  <a class="doc-card" href="/onboarding" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">rocket_launch</span>
+    <span class="doc-card-title">Onboarding</span>
+    <p class="doc-card-desc">Four steps: project URL → optional credentials → discovery → first validation.</p>
+  </a>
+  <a class="doc-card" href="/dashboard" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">space_dashboard</span>
+    <span class="doc-card-title">Dashboard</span>
+    <p class="doc-card-desc">Projects, flows, and run history with evidence for every execution.</p>
+  </a>
+  <a class="doc-card" href="/explore?url=https://example.com" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">explore</span>
+    <span class="doc-card-title">Explore</span>
+    <p class="doc-card-desc">Drive a live exploratory browser session against any URL.</p>
+  </a>
+</div>
+
+> [!TIP]
+> If you are reading these docs on the hosted instance (`https://kova-9269c6.rumptycloud.app`), **Sign up** and **Dashboard** above open the app directly. On a self-hosted install, the same links work on your own domain.
+
+## 1. Create an account
+
+1. Open your Kova instance in the browser (hosted default: `https://kova-9269c6.rumptycloud.app`).
+2. Go to [Sign up](/auth/signup).
+3. Register with email and password, then sign in at [Log in](/auth/login).
+
+## 2. Complete onboarding
+
+After sign-in, open [Onboarding](/onboarding). The wizard has four steps:
+
+| Step | What you do | What Kova does |
+|---|---|---|
+| Project | Project name + **base URL** of the app under test | Creates the project |
+| Credentials | Optional login username/password for the app | Stores credentials for later runs |
+| Discovery | Start exploration | Opens an isolated browser and discovers workflows |
+| First validation | Kick off a first check | Runs an initial validation and shows results |
+
+You can re-run onboarding later; it is not a one-time gate.
+
+## 3. Explore manually
+
+Open [Explore](/explore?url=https://your-app.example) to drive a live session against any URL. Useful for checking login, discovering pages, and seeing how Kova reads your UI.
+
+## 4. Projects, flows, and validations
+
+<div class="doc-cards doc-cards-3">
+  <a class="doc-card" href="/projects" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">folder_open</span>
+    <span class="doc-card-title">Projects</span>
+    <p class="doc-card-desc">One per application (or environment) you test.</p>
+  </a>
+  <a class="doc-card" href="/dashboard" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">account_tree</span>
+    <span class="doc-card-title">Flows</span>
+    <p class="doc-card-desc">Structured journeys (login, checkout…). Create in the product or discover during exploration.</p>
+  </a>
+  <a class="doc-card" href="/dashboard" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">fact_check</span>
+    <span class="doc-card-title">Validations</span>
+    <p class="doc-card-desc">A single run of a flow (or set of flows). Produces evidence.</p>
+  </a>
+</div>
+
+Typical loop: pick a project → open or create a flow → run a validation → open the result and read the timeline + screenshots.
+
+## 5. Read results
+
+Open a completed run to see status, step-by-step timeline, screenshots, and verification details explaining **why** it passed or failed.
+
+See [Results and evidence](results-and-evidence) for how to interpret verdicts.
+
+## 6. When something fails
+
+<div class="doc-callout doc-callout-warning" role="note"><p class="doc-callout-label"><span class="material-symbols-rounded doc-callout-icon" aria-hidden="true">warning</span>Warning</p><div class="doc-callout-body"><p><strong>BLOCKED</strong> — Kova could not complete an action (missing credential, UI not reachable, or safety stop).</p><p><strong>UNVERIFIED</strong> — actions finished but deterministic verification did not confirm success. Treat as “not proven”, not as pass.</p><p><strong>FAILED</strong> — a step or check failed. Open the timeline and the first failing step.</p></div></div>
+
+See [Troubleshooting](../troubleshooting) and [Limitations](../limitations).
+
+## 7. Next level (optional)
+
+When you are ready to automate:
+
+- Create an [API token](/settings/tokens)
+- Point CI at the CI endpoints or `scripts/kova_ci.py` — see [CI/CD](../integrations/ci-cd)
+- Connect GitHub/GitLab under project **Integrations** — see [Integrations overview](../integrations/overview)
+
+> [!NOTE]
+> Prefer a **staging or preview URL** until you trust the flows. Short, clear paths beat giant journeys. Evidence (screenshots + timeline) is the source of truth.

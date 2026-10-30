@@ -1,0 +1,64 @@
+---
+title: "Welcome to Kova"
+description: "Kova is an autonomous software-use platform. Give it a URL, credentials, and a goal; it explores your app and records verifiable evidence."
+---
+
+# Welcome to Kova
+
+Kova is an **autonomous software-use and product-flow execution platform**. Give Kova a URL, credentials, and a goal; it opens an isolated Playwright browser, explores the application, discovers workflows, executes product journeys, and records step-by-step evidence.
+
+It is not a script recorder. It acts like a real user: navigates real UIs, handles logins, runs journeys, and captures screenshots, audit logs, and network requests so you can verify product behavior without writing brittle scripts.
+
+## Three ways to use Kova
+
+<div class="doc-cards doc-cards-3">
+  <a class="doc-card" href="guides/for-vibe-coders" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">language</span>
+    <span class="doc-card-title">Use on the web</span>
+    <p class="doc-card-desc">Open the app, sign up, complete onboarding, explore and run validations. No local install. Default hosted: <code>kova-9269c6.rumptycloud.app</code>.</p>
+  </a>
+  <a class="doc-card" href="development/local-setup" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">laptop_mac</span>
+    <span class="doc-card-title">Run locally</span>
+    <p class="doc-card-desc">Clone the repository, start Postgres/Redis, API, Celery, and frontend on your machine.</p>
+  </a>
+  <a class="doc-card" href="integrations/ci-cd" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">integration_instructions</span>
+    <span class="doc-card-title">Automate in CI/CD</span>
+    <p class="doc-card-desc">HTTP API or <code>kova_ci.py</code> from your pipeline. GitHub/GitLab webhooks via project integrations. No marketplace Action.</p>
+  </a>
+</div>
+
+## What Kova proves with evidence
+
+Every run produces evidence, not just a pass/fail flag:
+
+- Step timeline with actions and outcomes
+- Screenshots and viewport frames from the isolated browser
+- Network request log
+- Deterministic verification verdict (success is proven by checks, not by "an action was attempted")
+
+See [Results and evidence](guides/results-and-evidence).
+
+## Core principles
+
+- **Isolated browser execution**: each run uses a dedicated Chromium context inside a Celery worker. The FastAPI process never launches browsers.
+- **AI proposes, code disposes**: model output is validated into typed schemas before any browser action. Only deterministic verification can mark a run complete.
+- **Evidence-backed verification**: success requires proof; VLM checks are advisory only.
+
+See [How Kova works](how-it-works) for the architecture behind these claims.
+
+## Quick links
+
+| I want to… | Go to |
+|---|---|
+| Sign up and run my first validation on the web | [Quickstart](quickstart) |
+| Understand how a run executes | [How Kova works](how-it-works) |
+| Start everything on my machine | [Local setup](development/local-setup) |
+| Wire Kova into CI | [CI/CD](integrations/ci-cd) |
+| Call the REST API | [API](integrations/api) |
+| Know what is and is not available | [Limitations](limitations) |
+
+## License
+
+Kova is open source under the MIT License. See the repository `LICENSE` file.

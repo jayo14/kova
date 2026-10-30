@@ -1,0 +1,67 @@
+---
+title: "API"
+description: "REST endpoint reference for auth, flows, executions, CI, and reports."
+---
+
+# API
+
+All endpoints are under `/api/v1` on the API origin (local default: `http://localhost:8000`). Authenticate with a Bearer API token (`kova_tok_...`) or a session JWT from login.
+
+## Authentication
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/auth/register` | `{email, password}` → user; `400` if email exists |
+| `POST` | `/auth/login` | `{email, password}` → `{access_token, token_type: "bearer", user}` (HS256, 7-day expiry) |
+| `POST` | `/auth/tokens` | Create API token; raw value shown once |
+| `GET` | `/auth/tokens` | List tokens (metadata only) |
+| `DELETE` | `/auth/tokens/{id}` | Revoke token |
+
+Token scopes: `*` (full), `flows:read`, `flows:write`, `executions:read`, `executions:write`, `ci:validate`, `integrations:manage`, `org:manage`, plus `domain:*` wildcards. CI endpoints require `ci:validate` and a tester-or-higher project role. See [Authentication](../guides/authentication).
+
+## Flows
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/flows/` | Create flow (typed steps; `FlowStep` schema) |
+| `GET` | `/flows/` | List flows for project |
+| `PUT` | `/flows/{flow_id}` | Update flow |
+| `DELETE` | `/flows/{flow_id}` | Delete flow |
+| `POST` | `/flows/{flow_id}/executions` | Start one execution → `201` |
+
+Step actions: `navigate` (requires `url`), `click`, `type`, `fill`, `select`, `check`, `uncheck`, `upload` (element target required: `selector`, `target`, `label`, `role`, or `test_id`), `assert` (with `postcondition`). Extra fields allowed (`extra="allow"`).
+
+Active executions per user are capped (default **5**). Plan CI fan-out accordingly.
+
+## Executions
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/executions/{id}` | Status, steps, evidence pointers |
+| `GET` | `/executions/{id}/report` | Full evidence package: timeline, verdict breakdown, failure diagnosis, sanitized payloads |
+| share links | report URLs may be **HMAC-signed** (`?signature=...`) so external reviewers can open a report without a full session |
+
+Terminal statuses: `COMPLETED`, `FAILED`, `CANCELLED`, `TIMEOUT`, `BLOCKED`, `UNVERIFIED`. Treat `UNVERIFIED` as not-pass.
+
+## CI
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/ci/run` | Branch A: `{flow_ids}` → async executions; Branch B: `{diff_content}` or `{changed_files}` → synchronous diff-aware report. Options: `fail_on_healed`, `persona`, `timeout_seconds` (default 1800), `commit_sha`, `branch`, `pr_number`, `base_url` |
+| `POST` | `/ci/validate` | Async when `scope` present; synchronous targeted report when only diff/file inputs |
+| `GET` | `/ci/validate/{id}` | Poll status |
+| `GET` | `/ci/validate/{id}/report` | Full validation report |
+
+All CI routes require `ci:validate` scope and tester role.
+
+## Health
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/health` | `{"status":"ok",...}` — no auth |
+
+## Next
+
+- [CI/CD](ci-cd) — pipeline recipes and CLI exit codes
+- [Results and evidence](../guides/results-and-evidence) — how to read reports
+- [Troubleshooting](../troubleshooting) — common API failures

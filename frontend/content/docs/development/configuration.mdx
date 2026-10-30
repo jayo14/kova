@@ -1,0 +1,61 @@
+---
+title: "Configuration"
+description: "Environment variables for the API, workers, and frontend — what each one controls and what breaks without it."
+---
+
+# Configuration
+
+Kova is configured through environment variables. Backend variables live in `backend/.env` (see `backend/.env.example`); the frontend reads `frontend/.env.local` (see `frontend/.env.example`). Docker Compose loads `backend/.env` automatically.
+
+## Core (required)
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `DATABASE_URL` | API, worker | Postgres connection string, e.g. `postgresql+asyncpg://postgres:postgres@localhost:5432/kova` |
+| `REDIS_URL` | API, worker | Redis for events, frame storage, rate limiting (databases 0) |
+| `CELERY_BROKER_URL` | API, worker | Celery task broker — usually Redis |
+| `CELERY_RESULT_BACKEND` | worker | Celery result backend |
+| `JWT_SECRET_KEY` | API | HS256 JWT signing key — use a long random value; rotating it invalidates sessions |
+| `CREDENTIAL_ENCRYPTION_KEY` | API | Encrypts stored application credentials at rest |
+
+## Execution
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AGENT_EXECUTION_ENABLED` | `true` in Compose | Must be `true` for browser runs; workers refuse jobs when disabled |
+| `AGENT_EXECUTION_MAX_DURATION_SECONDS` | `600` in Render config | Hard cap per execution before `TIMEOUT` |
+
+## AI (optional)
+
+Model calls are optional for local exploration but required for AI-assisted action proposals. When misconfigured, runs still execute deterministic steps; AI suggestions degrade gracefully.
+
+| Variable | Purpose |
+|---|---|
+| `AI_PROVIDER` | Provider key (e.g. `openai`) |
+| `AI_API_KEY` | Provider API key |
+| `AI_MODEL` | Model name |
+| `AI_FALLBACK_PROVIDER` / `AI_FALLBACK_API_KEY` / `AI_FALLBACK_MODEL` | Optional failover chain |
+
+## Frontend
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | same-origin `/api` | Base URL for the Next.js app to reach the FastAPI backend |
+| `FRONTEND_URL` | `http://localhost:3000` | Used by the API for CORS allowlist and absolute links |
+
+## Observability (optional)
+
+| Variable | Purpose |
+|---|---|
+| `SENTRY_DSN` | Sentry error tracking (skipped when `ENVIRONMENT=test`) |
+
+## Security notes
+
+- Never commit real `.env` files. `.env.example` values are placeholders only.
+- `JWT_SECRET_KEY` and `CREDENTIAL_ENCRYPTION_KEY` must be distinct, long, and randomly generated.
+- In production, set `FRONTEND_URL` to the real origin so CORS and signed share links resolve correctly.
+
+## Next
+
+- [Local setup](local-setup) — where these variables are loaded
+- [Deployment](deployment) — production wiring and Render config

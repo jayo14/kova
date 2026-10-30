@@ -1,0 +1,161 @@
+---
+title: "Local setup"
+description: "Run Kova on your machine with Docker Compose or manual Postgres, Redis, FastAPI, Celery, and Next.js."
+---
+
+# Local setup
+
+Two options: **Docker Compose** (recommended for a quick start) or **manual** (full control over each service).
+
+## Prerequisites
+
+| Tool | Version |
+|---|---|
+| Docker | 24+ (for Compose path) |
+| Docker Compose | v2 |
+| Python | 3.12+ (for manual path) |
+| Node.js | 20+ (for manual path) |
+| PostgreSQL | 16 (for manual path) |
+| Redis | 7 (for manual path) |
+
+## Option A — Docker Compose (recommended)
+
+```bash
+git clone <repository-url>
+cd kova
+
+cp .env.example backend/.env
+# Edit backend/.env as needed (DATABASE_URL, JWT_SECRET_KEY, AI keys, etc.)
+
+docker compose up -d
+```
+
+Services started:
+
+| Service | URL / port |
+|---|---|
+| Frontend (Next.js) | http://localhost:3000 |
+| API (FastAPI) | http://localhost:8000 |
+| Health check | http://localhost:8000/health |
+| PostgreSQL | localhost:5432 (`postgres` / `postgres` / `kova`) |
+| Redis | localhost:6379 |
+
+Celery worker (`kova-worker`) runs Playwright/Chromium in an isolated container. The API process never launches browsers.
+
+### Verify
+
+```bash
+curl -s http://localhost:8000/health
+# {"status":"ok",...}
+
+open http://localhost:3000
+```
+
+Sign up at `/auth/signup`, complete onboarding, and run a first validation.
+
+## Option B — Manual setup
+
+### 1. Start Postgres and Redis
+
+Use your local installs, or Docker for infrastructure only:
+
+```bash
+docker run -d --name kova-postgres \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=kova \
+  -p 5432:5432 postgres:16-alpine
+
+docker run -d --name kova-redis -p 6379:6379 redis:7-alpine
+```
+
+### 2. Backend
+
+```bash
+cd backend
+
+python3.12 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
+pip install -e .
+
+# Install Playwright browser (Chromium)
+playwright install chromium
+
+# Configure environment
+cp .env.example .env
+# Edit .env: DATABASE_URL, JWT_SECRET_KEY, REDIS_URL, CELERY_BROKER_URL, CELERY_RESULT_BACKEND
+
+# Run migrations
+alembic upgrade head
+
+# Start API
+uvicorn app.main:app --reload --port 8000
+```
+
+In a second terminal, start the Celery worker (required for browser execution):
+
+```bash
+cd backend
+source .venv/bin/activate
+
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+```
+
+### 3. Frontend
+
+```bash
+cd frontend
+
+npm install
+
+# Point frontend at local API
+echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+
+npm run dev
+```
+
+Open http://localhost:3000.
+
+## Required environment variables
+
+Minimum set (from `docs/local-setup.md` and `backend/.env.example`):
+
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Postgres connection string |
+| `REDIS_URL` | Redis connection (events, frames, rate limiting) |
+| `CELERY_BROKER_URL` | Celery task broker (usually Redis) |
+| `CELERY_RESULT_BACKEND` | Celery result backend |
+| `JWT_SECRET_KEY` | Secret for signing JWTs — use a strong random value |
+| `CREDENTIAL_ENCRYPTION_KEY` | Encrypts stored application credentials |
+
+Optional but useful:
+
+| Variable | Purpose |
+|---|---|
+| `FRONTEND_URL` | Default `http://localhost:3000` — used for CORS and links |
+| `SENTRY_DSN` | Error tracking (skipped when `ENVIRONMENT=test`) |
+| `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` | LLM provider for agent reasoning |
+| `AGENT_EXECUTION_ENABLED` | Must be `true` for browser runs |
+
+See [Configuration](configuration) for the full list.
+
+## Smoke test
+
+```bash
+cd backend
+.venv/bin/pytest tests/smoke/ -v
+```
+
+## Troubleshooting
+
+- **API starts but runs stay `RUNNING` forever** — Celery worker is not running or not connected to the same Redis as the API.
+- **Playwright errors in worker logs** — run `playwright install chromium` inside the worker environment / container.
+- **Frontend cannot reach API** — confirm `NEXT_PUBLIC_API_URL=http://localhost:8000` and that CORS allows your frontend origin (`FRONTEND_URL`).
+
+See [Troubleshooting](../troubleshooting) for more.
+
+## Next
+
+- [Configuration](configuration) — environment variables in detail
+- [Architecture](architecture) — how services fit together
+- [Deployment](deployment) — production notes

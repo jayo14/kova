@@ -1,37 +1,121 @@
 ---
-title: "Quickstart Guide"
-description: "Get started with Kova continuous validation in under 5 minutes."
+title: "Quickstart"
+description: "Get a first validation running — on the web or from a local checkout."
 ---
 
-# Quickstart Guide
+# Quickstart
 
-Kova is an autonomous software-use and product-flow continuous validation platform. It automatically discovers your web app's interactive paths, builds a living Product Graph, and continuously validates user flows in CI/CD without brittle scripts.
+Two entry points: **web app** (recommended if you have a running Kova instance) or **local Docker/manual setup** for self-hosting. Both lead to the same first run: a project URL, optional credentials, discovery, and a validation that produces evidence.
 
-## 1. Create your Account & Project
+<div class="doc-cards">
+  <a class="doc-card" href="#path-a--web-app-first-run" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">language</span>
+    <span class="doc-card-title">Path A — Web app</span>
+    <p class="doc-card-desc">Sign up in the browser. No clone, no terminal. Default hosted instance: <code>kova-9269c6.rumptycloud.app</code>.</p>
+  </a>
+  <a class="doc-card" href="development/local-setup" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">laptop_mac</span>
+    <span class="doc-card-title">Path B — Local setup</span>
+    <p class="doc-card-desc">Clone the repo and run Docker Compose or manual services on your machine.</p>
+  </a>
+</div>
 
-1. Sign up at [https://app.kova.dev](https://app.kova.dev).
-2. Complete the initial 4-step setup wizard:
-   - Provide your application's base URL (e.g. `https://staging.acme.com`).
-   - Add test user credentials for authenticated routes.
-   - Run autonomous discovery to crawl routes and generate your Product Graph.
-   - Run your baseline continuous validation run.
+## Path A — Web app first run
 
-## 2. Generate a Scoped API Token
+Use this when you open a Kova instance in a browser. Default hosted instance: **`https://kova-9269c6.rumptycloud.app`**. Docs and app share the same origin you are reading from.
 
-1. Navigate to **Settings > API Tokens**.
-2. Click **Generate New Token**.
-3. Select the `ci:validate` scope.
-4. Copy your token (starts with `kova_tok_...`).
+### 1. Create an account
 
-## 3. Add to GitHub Actions
+Open [Sign up](/auth/signup) on your Kova instance and register with email and password. Then sign in at [Log in](/auth/login).
 
-Add `KOVA_API_TOKEN` to your repository's GitHub Secrets, then add this step to `.github/workflows/ci.yml`:
+### 2. Complete onboarding
 
-```yaml
-- name: Run Kova Continuous Validation
-  uses: kova-ai/action-validate@v1
-  with:
-    api-token: ${{ secrets.KOVA_API_TOKEN }}
-    project-id: ${{ vars.KOVA_PROJECT_ID }}
-    base-url: ${{ steps.deploy-preview.outputs.url }}
+After sign-in, open [Onboarding](/onboarding):
+
+1. **Project** — name and base URL of the application under test
+2. **Credentials** — optional login details for the application
+3. **Discovery** — Kova opens an isolated browser and explores the app
+4. **First validation** — run an initial check against the discovered flows
+
+You can re-open the wizard at any time.
+
+### 3. Explore and run validations
+
+<div class="doc-cards doc-cards-3">
+  <a class="doc-card" href="/dashboard" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">space_dashboard</span>
+    <span class="doc-card-title">Dashboard</span>
+    <p class="doc-card-desc">Overview</p>
+  </a>
+  <a class="doc-card" href="/projects" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">folder_open</span>
+    <span class="doc-card-title">Projects</span>
+    <p class="doc-card-desc">Projects and their flows</p>
+  </a>
+  <a class="doc-card" href="/explore?url=https://example.com" data-skip-style>
+    <span class="material-symbols-rounded doc-card-icon">explore</span>
+    <span class="doc-card-title">Explore</span>
+    <p class="doc-card-desc">Live exploratory session against a URL</p>
+  </a>
+</div>
+
+### 4. Create an API token (optional)
+
+For CI or scripts: [Settings → API tokens](/settings/tokens). Tokens look like `kova_tok_...`. The raw token is shown once; store it securely. See [Authentication](guides/authentication).
+
+## Path B — Local setup first run
+
+Use this when you clone the repository and want everything on your machine. Developers only.
+
+### Prerequisites
+
+- Docker 24+ and Docker Compose v2, **or**
+- Python 3.12+, Node 20+, PostgreSQL 16, Redis 7 (see [Local setup](development/local-setup) for manual steps)
+
+### Docker Compose
+
+```bash
+cp .env.example backend/.env
+# Optionally edit backend/.env (DATABASE_URL, JWT secrets, AI keys)
+docker compose up -d
 ```
+
+Services:
+
+| Service | URL |
+|---|---|
+| Frontend | http://localhost:3000 |
+| API | http://localhost:8000 |
+| Health check | http://localhost:8000/health |
+
+Open http://localhost:3000, sign up, and continue with Path A steps 2–4.
+
+### Manual (no Docker for app services)
+
+Follow [Local setup](development/local-setup): start Postgres and Redis, install backend deps, run migrations, start uvicorn + Celery, then `npm run dev` in `frontend/`. Point the frontend at the API with `NEXT_PUBLIC_API_URL=http://localhost:8000`.
+
+## First API-only smoke test
+
+Once you have a token and a project ID:
+
+```bash
+# Health
+curl -s http://localhost:8000/health
+
+# Register (local API; adjust host if not localhost)
+curl -s -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"your-password"}'
+```
+
+Then create a token via the UI or `POST /api/v1/auth/tokens`, and trigger a CI run as described in [CI/CD](integrations/ci-cd).
+
+## What “done” looks like
+
+A completed run shows status **COMPLETED** (or a terminal failure status), a step timeline, screenshots/frames, and a verification verdict. See [Results and evidence](guides/results-and-evidence).
+
+## Next steps
+
+- [Use Kova on the web](guides/for-vibe-coders) — full web workflow
+- [How Kova works](how-it-works) — execution model and evidence model
+- [Limitations](limitations) — what is verified vs not

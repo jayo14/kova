@@ -1,0 +1,144 @@
+---
+title: "Authentication"
+description: "Email/password login, API tokens (kova_tok_…), scopes, and how to authenticate scripts and CI."
+---
+
+# Authentication
+
+Kova supports two credentials types:
+
+1. **User session** (email/password) — for the web app and interactive use.
+2. **API tokens** (`kova_tok_…`) — for scripts, CI, and automation.
+
+Both are accepted as `Authorization: Bearer <credential>` on the API.
+
+## Email / password
+
+### Register
+
+```http
+POST /api/v1/auth/register
+Content-Type: application/json
+
+{ "email": "you@example.com", "password": "your-password", "name": "Optional Name" }
+```
+
+Response shape:
+
+```json
+{
+  "access_token": "…",
+  "token_type": "bearer",
+  "user": { "id": "…", "email": "you@example.com", "name": "…" }
+}
+```
+
+Errors: `400` if the email is already registered.
+
+### Login
+
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+
+{ "email": "you@example.com", "password": "your-password" }
+```
+
+Returns the same `TokenResponse` shape. Tokens are HS256 JWTs with a 7-day expiry by default.
+
+### Current user
+
+```http
+GET /api/v1/auth/me
+Authorization: Bearer <token>
+```
+
+## API tokens
+
+API tokens are long-lived, scoped credentials for automation. Prefix: **`kova_tok_`**.
+
+### Create a token (UI)
+
+Open **Settings → API tokens** (`/settings/tokens`) in the web app. The raw token is shown **once** — copy it immediately. You can revoke a token from the same page.
+
+### Create a token (API)
+
+```http
+POST /api/v1/auth/tokens
+Authorization: Bearer <session-or-token>
+Content-Type: application/json
+
+{ "name": "CI pipeline" }
+```
+
+Response includes the raw token once. Default name is `"Default Token"` if omitted. Default scopes are `["*"]` (full access).
+
+### List and revoke
+
+```http
+GET  /api/v1/auth/tokens
+DELETE /api/v1/auth/tokens/{token_id}
+```
+
+## Scopes
+
+| Scope | Grants |
+|---|---|
+| `*` | Full access (default) |
+| `flows:read` | Read flows |
+| `flows:write` | Create / update / delete flows |
+| `executions:read` | Read executions and reports |
+| `executions:write` | Start / cancel executions |
+| `ci:validate` | Call CI endpoints |
+| `integrations:manage` | Manage GitHub/GitLab integrations |
+| `org:manage` | Organization administration |
+
+Wildcard: `domain:*` grants all scopes under a domain (e.g. `flows:*` covers `flows:read` + `flows:write`).
+
+Set scopes when creating a token (pass `"scopes": ["ci:validate", "executions:read"]`). Omitting scopes defaults to full access — prefer least privilege for CI tokens.
+
+## Using tokens in scripts
+
+```bash
+export KOVA_API_TOKEN="kova_tok_..."
+export KOVA_PROJECT_ID="3fa85f64-5717-4562-b3fc-2c963f66afa6"
+
+# Health check (no auth required)
+curl -s http://localhost:8000/health
+
+# List flows
+curl -s http://localhost:8000/api/v1/flows/?project_id=$KOVA_PROJECT_ID \
+  -H "Authorization: Bearer $KOVA_API_TOKEN"
+```
+
+## Using tokens in CI
+
+Store the token as a secret in your CI system (`KOVA_API_TOKEN`). Never commit it. Example GitHub Actions step:
+
+```yaml
+- name: Kova validation
+  env:
+    KOVA_API_TOKEN: ${{ secrets.KOVA_API_TOKEN }}
+  run: |
+    python scripts/kova_ci.py \
+      --project-id "$KOVA_PROJECT_ID" \
+      --api-token "$KOVA_API_TOKEN" \
+      --scope targeted \
+      --changed-files src/Checkout.tsx
+```
+
+## Token security notes
+
+- Tokens are stored as **SHA-256 hashes**; the raw value is only returned at creation time.
+- `last_used_at` is updated on successful verification so you can audit usage.
+- Revoke compromised tokens immediately via the UI or `DELETE /api/v1/auth/tokens/{id}`.
+- Prefer a dedicated CI token with only `ci:validate` and `executions:read` scopes.
+
+## Session vs token in the browser
+
+The web app uses Supabase auth for the UI session and exchanges JWTs with the Kova API. For pure API automation, use API tokens; you do not need a browser session.
+
+## Related
+
+- [API](../integrations/api) — endpoint details
+- [CI/CD](../integrations/ci-cd) — pipeline wiring
