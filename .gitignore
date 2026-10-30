@@ -23,7 +23,7 @@ founder/
 .agents/
 skills-lock.json
 kova-launch-prompts/
-
+start.sh
 # Internal documentation, examples, and spec chunks
 /docs/
 /examples/

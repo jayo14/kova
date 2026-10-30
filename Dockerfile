@@ -20,7 +20,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     libgbm1 \
     libpango-1.0-0 \
-    libcairo2 \
     libasound2 \
     libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
@@ -28,15 +27,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/ .
 
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --default-timeout=100 --retries=5 --prefer-binary .
+    pip install --no-cache-dir --default-timeout=100 --retries=5 --prefer-binary . \
+    && pip install celery redis --no-cache-dir
 
 # Install Playwright browsers
 RUN playwright install chromium
 
 EXPOSE 8000
 
-# Default: API server. The same image runs the Celery worker with
-# `docker compose up kova-worker` (command override in docker-compose.yml)
-# or directly:
-#   celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+# Support multiple launch modes via ENV:
+#   CMD="api"       → uvicorn app.main:app (default)
+#   CMD="worker"    → celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+#   CMD="all"       → start redis + api + worker (use with docker compose)
+ENV CMD="api"
+
+# Default: API server
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
