@@ -80,16 +80,18 @@ export function DocsHeader({ navigation, onToggleMobileNav }: DocsHeaderProps) {
               <Link href="/status" className="hover:text-foreground transition-colors">
                 Status
               </Link>
-              <a
-                href="https://github.com/jayo14/kova"
-                target="_blank"
-                rel="noreferrer"
-                className="hover:text-foreground transition-colors inline-flex items-center gap-1"
-              >
-                GitHub
-                <MaterialIcon name="open_in_new" size={12} className="opacity-70" />
-              </a>
             </nav>
+
+            <a
+              className="github-button"
+              href="https://github.com/jayo14/kova"
+              data-icon="octicon-star"
+              data-size="large"
+              data-show-count="true"
+              aria-label="Star jayo14/kova on GitHub"
+            >
+              Star
+            </a>
 
             <Link
               href="/dashboard"
