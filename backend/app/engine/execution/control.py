@@ -179,6 +179,7 @@ async def _get_redis() -> aioredis.Redis | None:
         }
         if settings.REDIS_URL.startswith("rediss://"):
             kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_check_hostname"] = False
         client = aioredis.from_url(settings.REDIS_URL, **kwargs)
         await asyncio.wait_for(client.ping(), timeout=3.0)
         _redis = client

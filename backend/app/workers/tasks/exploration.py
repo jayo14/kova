@@ -426,7 +426,7 @@ async def _run_exploration_async(
             }
 
         except Exception as e:
-            logger.exception("Exploration flow failed for session %s: %s", session_id)
+            logger.exception("Exploration flow failed for session %s", session_id)
             engine.cancel_background()
             try:
                 if engine._browser:
