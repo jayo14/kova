@@ -534,19 +534,37 @@ class BrowserSession:
 
     # --- Interaction actions ---
 
-    async def click(self, target: str, *, role: str = "", strategy: ResolutionStrategy | None = None):
+    async def click(self, target: str, *, role: str = "", strategy: ResolutionStrategy | None = None, objective: str | None = None):
         """Click an element resolved by the target resolver.
 
-        Falls back to CSS selector if resolver finds no match.
+        Resolution ladder: DOM strategies (test id → role+name → label → text → CSS),
+        then a visual fallback (screenshot + VLM + hit test) when the DOM yields no
+        reliable match. Falls back to raw CSS only as a last resort.
         """
         resolver = TargetResolver(self.page)
         try:
             locator = await resolver.resolve(target, role=role, strategy=strategy)
             await locator.click()
+            logger.debug("Clicked %s via %s", target, resolver.last_resolution_strategy)
+            return
         except Exception:
-            # Fallback to raw CSS
+            pass
+        # Visual fallback: propose coordinates by screenshot+VLM, hit-test validate.
+        if objective:
+            try:
+                coords = await resolver.resolve_visual(objective)
+                if coords:
+                    x, y = coords
+                    await self.page.mouse.click(x, y)
+                    logger.debug("Clicked visual target at (%d, %d) for %s", x, y, objective[:60])
+                    return
+            except Exception:
+                pass
+        # Last resort: raw CSS click.
+        try:
             await self.page.click(target)
-        logger.debug("Clicked %s", target)
+        except Exception:
+            logger.debug("Click failed for %s", target)
 
     async def type(self, target: str, value: str, *, role: str = "", strategy: ResolutionStrategy | None = None):
         """Type text into an element resolved by the target resolver."""

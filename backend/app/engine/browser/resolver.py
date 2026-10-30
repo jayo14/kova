@@ -70,6 +70,9 @@ class TargetResolver:
 
     def __init__(self, page: Page):
         self.page = page
+        # Records which resolution ladder rung last succeeded (for diagnostics &
+        # learned replays). One of the ResolutionStrategy values or "visual".
+        self.last_resolution_strategy: str | None = None
 
     async def resolve(
         self,
@@ -112,6 +115,7 @@ class TargetResolver:
                 locator = await strat_fn(target, role)
                 count = await locator.count()
                 if count == 1:
+                    self.last_resolution_strategy = strat_name.value
                     logger.debug(
                         "Resolved '%s' via %s", target, strat_name.value
                     )
@@ -127,6 +131,7 @@ class TargetResolver:
                         except Exception:
                             pass
                     if len(visible_matches) == 1:
+                        self.last_resolution_strategy = strat_name.value
                         logger.debug(
                             "Resolved '%s' via single visible match in %s",
                             target,
@@ -147,6 +152,7 @@ class TargetResolver:
         try:
             healed = await self._resolve_resilient_fallback(target, role)
             if healed is not None:
+                self.last_resolution_strategy = ResolutionStrategy.CSS.value
                 logger.info("Resilient self-healing locator resolved '%s'", target)
                 return healed
         except AmbiguousTargetError:
@@ -374,3 +380,163 @@ class TargetResolver:
             except Exception:
                 selectors.append(f"element_{i}")
         return selectors
+
+    def _collect_visual_marks(
+        self, elements: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Build numbered SoM marks from elements that have usable bounding boxes."""
+        marks: list[dict[str, Any]] = []
+        index = 0
+        for el in elements:
+            if not isinstance(el, dict):
+                continue
+            box = el.get("bounding_box") or {}
+            if not isinstance(box, dict):
+                continue
+            w = box.get("width", 0)
+            h = box.get("height", 0)
+            x = box.get("x", 0)
+            y = box.get("y", 0)
+            if w <= 4 or h <= 4 or x < -10 or y < -10:
+                continue
+            index += 1
+            marks.append({
+                "index": index,
+                "x": int(x),
+                "y": int(y),
+                "width": int(w),
+                "height": int(h),
+                "type": el.get("type", "element"),
+                "role": el.get("role", ""),
+                "name": el.get("accessible_name") or el.get("name") or el.get("selector", ""),
+                "selector": el.get("selector", ""),
+            })
+            if index >= 30:
+                break
+        return marks
+
+    async def resolve_visual(
+        self, objective: str
+    ) -> tuple[float, float] | None:
+        """Visual fallback: screenshot + VLM propose coordinates, hit-test validate.
+
+        Last resort when no DOM resolution strategy matches. Returns (x, y)
+        viewport coordinates to click, or None. Gracefully returns None when no
+        VLM is configured (no API key / non-vision model).
+        """
+        from app.engine.visual.vlm_client import VLMClient
+
+        vlm = VLMClient()
+        if not vlm.has_vision_capability():
+            return None
+
+        try:
+            from app.engine.browser.observer import PageObserver
+            observation = await PageObserver(self.page).observe()
+        except Exception:
+            return None
+
+        marks = self._collect_visual_marks(
+            [e for e in observation.get("elements", []) if isinstance(e, dict)]
+        )
+        if not marks:
+            return None
+
+        js_payload = [
+            {"index": m["index"], "x": m["x"], "y": m["y"],
+             "width": m["width"], "height": m["height"]} for m in marks
+        ]
+        try:
+            await self.page.evaluate(
+                """(marks) => {
+                    const prev = document.getElementById('kova-som-container');
+                    if (prev) prev.remove();
+                    const container = document.createElement('div');
+                    container.id = 'kova-som-container';
+                    container.style.position = 'fixed';
+                    container.style.top = '0'; container.style.left = '0';
+                    container.style.width = '100vw'; container.style.height = '100vh';
+                    container.style.pointerEvents = 'none';
+                    container.style.zIndex = '2147483647';
+                    marks.forEach(m => {
+                        const box = document.createElement('div');
+                        box.style.position = 'absolute';
+                        box.style.left = m.x + 'px'; box.style.top = m.y + 'px';
+                        box.style.width = m.width + 'px'; box.style.height = m.height + 'px';
+                        box.style.border = '2px solid #ef4444';
+                        box.style.boxSizing = 'border-box';
+                        box.style.pointerEvents = 'none';
+                        container.appendChild(box);
+                        const badge = document.createElement('div');
+                        badge.innerText = String(m.index);
+                        badge.style.position = 'absolute';
+                        badge.style.left = Math.max(0, m.x - 2) + 'px';
+                        badge.style.top = Math.max(0, m.y - 14) + 'px';
+                        badge.style.backgroundColor = '#ef4444';
+                        badge.style.color = '#ffffff';
+                        badge.style.fontSize = '11px';
+                        badge.style.fontWeight = 'bold';
+                        badge.style.padding = '0px 4px';
+                        badge.style.borderRadius = '2px';
+                        badge.style.zIndex = '2147483647';
+                        badge.style.pointerEvents = 'none';
+                        badge.style.boxShadow = '0 1px 2px rgba(0,0,0,0.5)';
+                        container.appendChild(badge);
+                    });
+                    document.body.appendChild(container);
+                }""",
+                js_payload,
+            )
+            screenshot_bytes = await self.page.screenshot(full_page=False)
+        except Exception:
+            return None
+        finally:
+            try:
+                await self.page.evaluate(
+                    "() => { const el = document.getElementById('kova-som-container'); if (el) el.remove(); }"
+                )
+            except Exception:
+                pass
+
+        if not screenshot_bytes:
+            return None
+
+        import base64
+        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+
+        try:
+            result = await vlm.escalate_set_of_marks(
+                screenshot_b64=screenshot_b64,
+                marks=marks,
+                objective=objective,
+                reason="visual_fallback",
+            )
+        except Exception:
+            return None
+
+        selected = result.get("selected_mark") if isinstance(result, dict) else None
+        if not selected:
+            return None
+        mark = next((m for m in marks if m["index"] == selected), None)
+        if not mark:
+            return None
+
+        x = mark["x"] + mark["width"] / 2.0
+        y = mark["y"] + mark["height"] / 2.0
+
+        try:
+            hit = await self.page.evaluate(
+                """([x, y]) => {
+                    const el = document.elementFromPoint(x, y);
+                    if (!el) return null;
+                    return {tag: el.tagName.toLowerCase()};
+                }""",
+                [x, y],
+            )
+        except Exception:
+            return None
+        if not hit:
+            return None
+
+        self.last_resolution_strategy = "visual"
+        return (x, y)
