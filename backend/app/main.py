@@ -316,7 +316,7 @@ async def readiness():
             settings.REDIS_URL,
             socket_connect_timeout=2,
             socket_timeout=2,
-            ssl_cert_reqs=ssl.CERT_NONE if str(settings.REDIS_URL).startswith("rediss://") else None,
+            ssl_cert_reqs="none" if str(settings.REDIS_URL).startswith("rediss://") else None,
         )
         try:
             await redis.ping()

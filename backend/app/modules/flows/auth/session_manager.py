@@ -115,7 +115,7 @@ class SessionManager:
                 "socket_timeout": 0.2,
             }
             if redis_url.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+                kwargs["ssl_cert_reqs"] = "none"
             client = aioredis.from_url(redis_url, **kwargs)
             await asyncio.wait_for(client.ping(), timeout=0.2)
             self._redis = client

@@ -23,7 +23,7 @@ async def _get_redis() -> aioredis.Redis | None:
     try:
         kwargs: dict[str, Any] = {"decode_responses": True}
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+            kwargs["ssl_cert_reqs"] = "none"
         return aioredis.from_url(settings.REDIS_URL, **kwargs)
     except Exception as e:
         logger.debug("Failed to connect to redis: %s", e)

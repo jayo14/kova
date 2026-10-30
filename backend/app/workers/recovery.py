@@ -88,7 +88,7 @@ def _get_dispatch_redis() -> aioredis.Redis | None:
         "socket_timeout": 2.0,
     }
     if str(settings.REDIS_URL).startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+        kwargs["ssl_cert_reqs"] = "none"
     try:
         _dispatch_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
     except Exception:
@@ -112,7 +112,7 @@ def _get_broker_redis() -> aioredis.Redis | None:
         "socket_timeout": 2.0,
     }
     if str(settings.CELERY_BROKER_URL).startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+        kwargs["ssl_cert_reqs"] = "none"
     try:
         _broker_redis = aioredis.from_url(settings.CELERY_BROKER_URL, **kwargs)
     except Exception:

@@ -36,7 +36,7 @@ class OrganizationService:
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+                kwargs["ssl_cert_reqs"] = "none"
             client = aioredis.from_url(
                 settings.REDIS_URL,
                 socket_connect_timeout=0.2,

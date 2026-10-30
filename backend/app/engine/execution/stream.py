@@ -116,7 +116,7 @@ async def _text_client() -> aioredis.Redis:
             "socket_timeout": 3.0,
         }
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+            kwargs["ssl_cert_reqs"] = "none"
         _text_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _text_loop = loop
     return _text_redis
@@ -139,7 +139,7 @@ async def _bin_client() -> aioredis.Redis:
             "socket_timeout": 3.0,
         }
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = ssl.CERT_NONE
+            kwargs["ssl_cert_reqs"] = "none"
         _bin_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _bin_loop = loop
     return _bin_redis
