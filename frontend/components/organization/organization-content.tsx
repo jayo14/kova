@@ -19,6 +19,7 @@ import {
   mapOrganizationError,
 } from "@/lib/api/organization";
 import { createCheckout } from "@/lib/api/billing";
+import { Button } from "@/components/ui/button";
 import { WorkspaceInfo } from "./workspace-info";
 import { MemberList } from "./member-list";
 import { InviteDialog } from "./invite-dialog";
