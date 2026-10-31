@@ -311,7 +311,7 @@ async def get_screenshot(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
-    """Redirect to Supabase public URL for a screenshot.
+    """Redirect to the configured screenshot storage public URL.
 
     Ownership-checked: the exploration_id embedded in the key must belong to
     the requesting user. Unauthenticated access is refused — screenshots show
