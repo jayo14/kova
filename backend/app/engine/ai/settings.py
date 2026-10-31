@@ -25,6 +25,31 @@ class AISettings(BaseSettings):
     AI_TIMEOUT_SECONDS: float = 60.0
     AI_MAX_OUTPUT_TOKENS: int = 2000
 
+    # Per-attempt timeout and total budget (seconds)
+    AI_PER_ATTEMPT_TIMEOUT_SECONDS: float = 10.0
+    AI_TOTAL_BUDGET_SECONDS: float = 25.0
+
+    # AI tier: kova-free | kova-pro | kova-enterprise
+    AI_TIER: str = "kova-free"
+
+    # Tier-based model lists (comma-separated). Empty = inherit from provider defaults.
+    KOVA_FREE_MODELS: str = ""
+    KOVA_FREE_PER_ATTEMPT_TIMEOUT: float = 8.0
+    KOVA_FREE_TOTAL_BUDGET: float = 15.0
+
+    KOVA_PRO_MODELS: str = ""
+    KOVA_PRO_PER_ATTEMPT_TIMEOUT: float = 12.0
+    KOVA_PRO_TOTAL_BUDGET: float = 30.0
+
+    KOVA_ENTERPRISE_MODELS: str = ""
+    KOVA_ENTERPRISE_PER_ATTEMPT_TIMEOUT: float = 15.0
+    KOVA_ENTERPRISE_TOTAL_BUDGET: float = 45.0
+
+    # Task-based model overrides (comma-separated "task:model" pairs).
+    KOVA_FREE_TASK_MODELS: str = ""
+    KOVA_PRO_TASK_MODELS: str = ""
+    KOVA_ENTERPRISE_TASK_MODELS: str = ""
+
     # Comma-separated list defining priority order, e.g. "openrouter,gemini,groq,nvidia"
     AI_FAILOVER_ORDER: str = "openrouter,gemini,groq,nvidia"
 
@@ -35,8 +60,8 @@ class AISettings(BaseSettings):
 
     # 2. OpenRouter (Free models router & free tier models in descending order of quality & speed)
     OPENROUTER_API_KEY: str = ""
-    OPENROUTER_MODELS: str = "openrouter/free,nvidia/nemotron-3-super-120b-a12b:free,nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free,nvidia/nemotron-3.5-lightning:free,cohere/north-mini-code:free"
-    OPENROUTER_MODEL: str = "openrouter/free"
+    OPENROUTER_MODELS: str = "nvidia/nemotron-3-super-120b-a12b,nvidia/nemotron-3.5-lightning,cohere/north-mini-code,mistralai/mistral-small"
+    OPENROUTER_MODEL: str = "nvidia/nemotron-3-super-120b-a12b"
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
 
     # 3. Groq (Descending order of quality & speed)
@@ -63,7 +88,7 @@ class AISettings(BaseSettings):
         name_clean = name.strip().lower().replace("-", "_")
         if name_clean == "openrouter":
             raw_models = self.OPENROUTER_MODELS or self.OPENROUTER_MODEL
-            models = [m.strip() for m in raw_models.split(",") if m.strip()]
+            models = [m.strip() for m in raw_models.split(",") if m.strip() and ":free" not in m and "/free" not in m]
             return {
                 "name": "openrouter",
                 "api_key": self.OPENROUTER_API_KEY,
@@ -111,6 +136,37 @@ class AISettings(BaseSettings):
                 "model": models[0] if models else "",
                 "base_url": self.AI_BASE_URL or "https://api.openai.com/v1",
             }
+        return None
+
+    def get_tier_config(self, tier: str | None = None) -> dict:
+        t = (tier or self.AI_TIER).strip().lower().replace("-", "_")
+        if t in ("kova_pro", "pro"):
+            models = [m.strip() for m in self.KOVA_PRO_MODELS.split(",") if m.strip()]
+            return {"models": models or None, "per_attempt_timeout": self.KOVA_PRO_PER_ATTEMPT_TIMEOUT,
+                    "total_budget": self.KOVA_PRO_TOTAL_BUDGET, "tier": "kova-pro"}
+        if t in ("kova_enterprise", "enterprise"):
+            models = [m.strip() for m in self.KOVA_ENTERPRISE_MODELS.split(",") if m.strip()]
+            return {"models": models or None, "per_attempt_timeout": self.KOVA_ENTERPRISE_PER_ATTEMPT_TIMEOUT,
+                    "total_budget": self.KOVA_ENTERPRISE_TOTAL_BUDGET, "tier": "kova-enterprise"}
+        models = [m.strip() for m in self.KOVA_FREE_MODELS.split(",") if m.strip()]
+        return {"models": models or None, "per_attempt_timeout": self.KOVA_FREE_PER_ATTEMPT_TIMEOUT,
+                "total_budget": self.KOVA_FREE_TOTAL_BUDGET, "tier": "kova-free"}
+
+    def get_task_model(self, tier: str | None, task_type: str):
+        t = (tier or self.AI_TIER).strip().lower().replace("-", "_")
+        attr_map = {"kova_pro": "KOVA_PRO_TASK_MODELS", "kova_enterprise": "KOVA_ENTERPRISE_TASK_MODELS"}
+        attr = attr_map.get(t, "KOVA_FREE_TASK_MODELS")
+        raw = getattr(self, attr, "")
+        if not raw:
+            return None
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if not pair:
+                continue
+            if ":" in pair:
+                task, model = pair.split(":", 1)
+                if task.strip() == task_type:
+                    return model.strip()
         return None
 
     @property

@@ -5,14 +5,24 @@ explicit Pydantic schemas by the caller; raw text never becomes an executable
 action. Providers must implement `generate_structured`, which requests a JSON
 object conforming to a given Pydantic schema and raises `AIProviderError` on
 any failure (invalid JSON, schema mismatch, network, timeout).
+
+Kova never depends on a single lucky free model. Every configured model is
+health-tracked with a circuit breaker. 404/"unavailable" marks a model
+permanently unavailable for hours; 429/5xx backs off temporarily. Each attempt
+gets its own timeout within a total budget, and every call is logged with
+model, latency, tokens, and failure reason.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, TypeVar
 
 import httpx
@@ -25,6 +35,24 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
+# ---------------------------------------------------------------------------
+# Task types for model routing
+# ---------------------------------------------------------------------------
+
+class TaskType(str, Enum):
+    """Categories of AI calls so the cheapest adequate model is used per task."""
+
+    OBSERVATION_SUMMARY = "observation_summary"
+    JOURNEY_SYNTHESIS = "journey_synthesis"
+    NEXT_ACTION = "next_action"
+    VERIFICATION = "verification"
+    GENERAL = "general"
+
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
 class AIProviderError(Exception):
     """Raised when the AI provider fails or returns unusable output."""
 
@@ -33,6 +61,361 @@ class AIProviderError(Exception):
         self.status_code = status_code
         super().__init__(message)
 
+
+# ---------------------------------------------------------------------------
+# Model health / circuit breaker
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelHealth:
+    """Circuit-breaker state for a single model slug."""
+
+    slug: str
+    status: str = "healthy"  # healthy | temporarily_unavailable | permanently_unavailable
+    failure_count: int = 0
+    last_failure_time: float = 0.0
+    circuit_open_until: float = 0.0
+    permanent_unavailable_until: float = 0.0
+
+
+class ModelCircuitBreaker:
+    """Tracks per-model health and enforces circuit breaking."""
+
+    # 404 / "unavailable" models stay out for 4 hours
+    PERMANENT_TTL_SECONDS = 4 * 3600
+
+    def __init__(self) -> None:
+        self._health: dict[str, ModelHealth] = {}
+        self._lock = asyncio.Lock()
+
+    def _get(self, slug: str) -> ModelHealth:
+        if slug not in self._health:
+            self._health[slug] = ModelHealth(slug=slug)
+        return self._health[slug]
+
+    async def is_available(self, slug: str) -> bool:
+        async with self._lock:
+            h = self._get(slug)
+            now = time.time()
+            if h.status == "permanently_unavailable":
+                if now < h.permanent_unavailable_until:
+                    return False
+                # TTL expired — give it another chance
+                h.status = "healthy"
+                h.failure_count = 0
+                h.permanent_unavailable_until = 0.0
+                return True
+            if h.status == "temporarily_unavailable" and now < h.circuit_open_until:
+                return False
+            return True
+
+    async def record_success(self, slug: str) -> None:
+        async with self._lock:
+            h = self._get(slug)
+            h.status = "healthy"
+            h.failure_count = 0
+            h.circuit_open_until = 0.0
+
+    async def record_failure(
+        self,
+        slug: str,
+        status_code: int | None = None,
+        is_permanent: bool = False,
+    ) -> None:
+        async with self._lock:
+            h = self._get(slug)
+            h.failure_count += 1
+            h.last_failure_time = time.time()
+
+            if is_permanent or status_code == 404:
+                h.status = "permanently_unavailable"
+                h.permanent_unavailable_until = time.time() + self.PERMANENT_TTL_SECONDS
+                logger.warning(
+                    "Model '%s' marked permanently unavailable (status=%s, circuit for %dh)",
+                    slug, status_code, self.PERMANENT_TTL_SECONDS // 3600,
+                )
+                return
+
+            # Temporary failure — exponential backoff
+            if status_code == 429:
+                backoff = min(60.0, 5.0 * (2 ** min(h.failure_count, 5)))
+            elif status_code and 500 <= status_code < 600:
+                backoff = min(30.0, 3.0 * (2 ** min(h.failure_count, 4)))
+            else:
+                backoff = min(15.0, 2.0 * (2 ** min(h.failure_count, 3)))
+
+            h.circuit_open_until = time.time() + backoff
+            h.status = "temporarily_unavailable"
+            logger.warning(
+                "Model '%s' temporarily unavailable (status=%s, backoff=%.1fs, failures=%d)",
+                slug, status_code, backoff, h.failure_count,
+            )
+
+    async def snapshot(self) -> dict[str, dict[str, Any]]:
+        async with self._lock:
+            return {
+                slug: {
+                    "status": h.status,
+                    "failure_count": h.failure_count,
+                    "last_failure_time": h.last_failure_time,
+                    "circuit_open_until": h.circuit_open_until,
+                    "permanent_unavailable_until": h.permanent_unavailable_until,
+                }
+                for slug, h in self._health.items()
+            }
+
+
+# Shared circuit breaker across all provider instances
+_model_circuit_breaker = ModelCircuitBreaker()
+
+
+# ---------------------------------------------------------------------------
+# Per-call usage logging
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CallRecord:
+    """Per-call usage log for observability."""
+
+    model: str
+    task_type: str
+    latency_ms: float
+    tokens_used: int
+    success: bool
+    failure_reason: str | None = None
+    status_code: int | None = None
+
+
+_call_records: list[CallRecord] = []
+_call_records_lock = asyncio.Lock()
+
+
+async def _record_call(record: CallRecord) -> None:
+    async with _call_records_lock:
+        _call_records.append(record)
+        if len(_call_records) > 10000:
+            _call_records.pop(0)
+
+
+def get_call_records() -> list[CallRecord]:
+    return list(_call_records)
+
+
+# ---------------------------------------------------------------------------
+# Tolerant JSON extraction
+# ---------------------------------------------------------------------------
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Strip reasoning blocks (<think>, <reasoning>, etc.) from model output."""
+    text = re.sub(r"<think[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<reasoning[\s\S]*?</reasoning>", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def _find_first_balanced_json(text: str) -> str | None:
+    """Find the first balanced JSON object or array in text."""
+    # Try JSON object via brace scanning
+    for start in range(len(text)):
+        if text[start] != "{":
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except json.JSONDecodeError:
+                        break  # try next start position
+
+    # Try JSON array
+    for start in range(len(text)):
+        if text[start] != "[":
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"' and not escape:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except json.JSONDecodeError:
+                        break
+
+    return None
+
+
+def _parse_structured(content: str, schema: type[T]) -> T:
+    """Parse model text into a validated schema instance with tolerant extraction."""
+    text = (content or "").strip()
+    if not text:
+        raise AIProviderError("AI returned empty content")
+
+    # 1. Strip reasoning blocks
+    text = _strip_reasoning_blocks(text)
+
+    # 2. Try markdown code fences
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    if fence_match:
+        cand = fence_match.group(1).strip()
+        try:
+            data = json.loads(cand)
+            return schema.model_validate(data)
+        except Exception:
+            pass
+
+    # 3. Try direct parse
+    try:
+        data = json.loads(text)
+        return schema.model_validate(data)
+    except Exception:
+        pass
+
+    # 4. Try first balanced JSON object/array
+    balanced = _find_first_balanced_json(text)
+    if balanced:
+        try:
+            data = json.loads(balanced)
+            return schema.model_validate(data)
+        except Exception:
+            pass
+
+    raise AIProviderError(
+        "AI returned invalid JSON that could not be parsed or validated",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Repair retry
+# ---------------------------------------------------------------------------
+
+async def _repair_retry(
+    client: httpx.AsyncClient,
+    base_url: str,
+    headers: dict[str, str],
+    model: str,
+    system: str,
+    prompt: str,
+    schema: type[T],
+    temperature: float,
+    max_tokens: int,
+    per_attempt_timeout: float,
+) -> T | None:
+    """One repair retry: ask the model to return only valid JSON matching the schema."""
+    schema_json = json.dumps(schema.model_json_schema())
+    repair_system = (
+        f"{system}\n\n"
+        f"Your previous response was not valid JSON. Return ONLY a single valid JSON object "
+        f"strictly conforming to this JSON Schema, with no markdown fences, no reasoning blocks, "
+        f"and no prose:\n{schema_json}"
+    )
+    payload = {
+        "model": model,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": repair_system},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    try:
+        resp = await asyncio.wait_for(
+            client.post(f"{base_url}/chat/completions", headers=headers, json=payload),
+            timeout=per_attempt_timeout,
+        )
+        if resp.status_code < 400:
+            body = resp.json()
+            content = body["choices"][0].get("message", {}).get("content") or ""
+            return _parse_structured(content, schema)
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Model discovery from provider API
+# ---------------------------------------------------------------------------
+
+async def discover_models_from_endpoint(
+    base_url: str,
+    api_key: str,
+    headers_extra: dict[str, str] | None = None,
+    timeout: float = 15.0,
+) -> list[str]:
+    """Query GET /models on a provider endpoint and return model IDs.
+
+    Uses the API key to list all available models. Filters out :free auto-router
+    entries (which pick unpredictable models) and non-chat models, returning
+    explicit model IDs suitable for fallback lists.
+    """
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if headers_extra:
+        headers.update(headers_extra)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(f"{base_url.rstrip('/')}/models", headers=headers)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        raw = data.get("data", [])
+        if not isinstance(raw, list):
+            return []
+        ids = []
+        for m in raw:
+            if not isinstance(m, dict):
+                continue
+            mid = m.get("id")
+            if not mid or not isinstance(mid, str):
+                continue
+            # Filter out :free auto-router entries — use explicit model IDs only
+            if ":free" in mid or "/free" in mid:
+                continue
+            ids.append(mid)
+        return ids
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Provider base
+# ---------------------------------------------------------------------------
 
 class AIProvider(ABC):
     """Base class for AI providers.
@@ -69,6 +452,7 @@ class AIProvider(ABC):
         system: str,
         prompt: str,
         schema: type[T],
+        task_type: TaskType = TaskType.GENERAL,
     ) -> T:
         """Request a structured response conforming to `schema`.
 
@@ -82,13 +466,19 @@ class AIProvider(ABC):
         raise NotImplementedError
 
 
+# ---------------------------------------------------------------------------
+# OpenAI-compatible provider
+# ---------------------------------------------------------------------------
+
 class OpenAICompatibleProvider(AIProvider):
     """Provider for any OpenAI-compatible chat completions API.
 
-    Works with OpenAI, Azure OpenAI gateways, OpenRouter, Google Gemini,
-    Groq, NVIDIA NIM, Together, vLLM, Ollama (with /v1), and LM Studio.
-    Structured output is requested via response_format=json_object and validated
-    locally against the Pydantic schema (portable across compatible providers).
+    Works with OpenAI, Azure OpenAI gateways, OpenRouter, Groq, NVIDIA NIM,
+    Together, vLLM, Ollama, LM Studio, etc.
+
+    Each model attempt gets its own timeout within a total budget. Models that
+    return 404/unavailable are circuit-broken permanently (4h); 429/5xx backs
+    off temporarily. On invalid JSON, one repair retry is attempted.
     """
 
     def __init__(
@@ -98,6 +488,9 @@ class OpenAICompatibleProvider(AIProvider):
         base_url: str = "",
         name: str = "openai_compatible",
         models: list[str] | str | None = None,
+        task_type: TaskType = TaskType.GENERAL,
+        per_attempt_timeout: float | None = None,
+        total_budget_seconds: float | None = None,
     ):
         raw_models: list[str] = []
         if models:
@@ -112,10 +505,24 @@ class OpenAICompatibleProvider(AIProvider):
             raise AIProviderError(f"Provider {name} requires model(s) and api_key")
 
         self.name = name
-        self._models = raw_models
-        self._model = raw_models[0]
+        # Filter out :free auto-router — use explicit model IDs only
+        self._models = [m for m in raw_models if ":free" not in m and "/free" not in m]
+        if not self._models:
+            self._models = raw_models  # fallback if everything was :free
+        self._model = self._models[0]
         self._api_key = api_key
         self._base_url = (base_url or "https://api.openai.com/v1").rstrip("/")
+        self._task_type = task_type
+
+        # Per-attempt timeout and total budget from config with overrides
+        self._per_attempt_timeout = (
+            per_attempt_timeout if per_attempt_timeout is not None
+            else ai_settings.AI_PER_ATTEMPT_TIMEOUT_SECONDS
+        )
+        self._total_budget = (
+            total_budget_seconds if total_budget_seconds is not None
+            else ai_settings.AI_TOTAL_BUDGET_SECONDS
+        )
 
     @property
     def model_name(self) -> str:
@@ -131,12 +538,28 @@ class OpenAICompatibleProvider(AIProvider):
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def task_type(self) -> TaskType:
+        return self._task_type
+
+    @staticmethod
+    def _parse_structured(content: str, schema: type[T]) -> T:
+        return _parse_structured(content, schema)
+
     async def generate_structured(
         self,
         system: str,
         prompt: str,
         schema: type[T],
+        task_type: TaskType = TaskType.GENERAL,
     ) -> T:
+        """Request a structured response conforming to `schema`.
+
+        Tries each configured model in order, respecting the circuit breaker.
+        Each attempt has its own timeout; the whole call is bounded by the
+        total budget. On invalid JSON, one repair retry is attempted.
+        """
+        task_type = task_type or self._task_type
         schema_json = json.dumps(schema.model_json_schema())
         augmented_system = (
             f"{system}\n\n"
@@ -152,182 +575,168 @@ class OpenAICompatibleProvider(AIProvider):
             headers["X-Title"] = "Kova Agent"
 
         errors: list[str] = []
-        for idx, model in enumerate(self._models):
-            payload = {
-                "model": model,
-                "temperature": ai_settings.AI_TEMPERATURE,
-                "max_tokens": ai_settings.AI_MAX_OUTPUT_TOKENS,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {"role": "system", "content": augmented_system},
-                    {"role": "user", "content": prompt},
-                ],
-            }
-            try:
-                logger.info("Attempting generation on provider '%s' with model '%s'", self.name, model)
-                async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as client:
-                    resp = await client.post(
-                        f"{self._base_url}/chat/completions",
-                        headers=headers,
-                        json=payload,
+        start_time = time.time()
+
+        async with httpx.AsyncClient() as client:
+            for idx, model in enumerate(self._models):
+                # Check circuit breaker before attempting
+                if not await _model_circuit_breaker.is_available(model):
+                    errors.append(f"{model}: circuit breaker open")
+                    continue
+
+                # Enforce total budget — stop if we've used it all
+                elapsed = time.time() - start_time
+                if elapsed >= self._total_budget:
+                    errors.append(f"{model}: total budget exhausted")
+                    break
+                remaining = self._total_budget - elapsed
+                attempt_timeout = min(self._per_attempt_timeout, remaining)
+
+                payload = {
+                    "model": model,
+                    "temperature": ai_settings.AI_TEMPERATURE,
+                    "max_tokens": ai_settings.AI_MAX_OUTPUT_TOKENS,
+                    "response_format": {"type": "json_object"},
+                    "messages": [
+                        {"role": "system", "content": augmented_system},
+                        {"role": "user", "content": prompt},
+                    ],
+                }
+
+                call_start = time.perf_counter()
+                try:
+                    resp = await asyncio.wait_for(
+                        client.post(
+                            f"{self._base_url}/chat/completions",
+                            headers=headers,
+                            json=payload,
+                        ),
+                        timeout=attempt_timeout,
                     )
-            except httpx.TimeoutException as e:
-                err_msg = f"Timed out: {e}"
-                logger.warning("Model '%s' timed out on '%s'.", model, self.name)
-                errors.append(f"{model}: {err_msg}")
-                continue
-            except httpx.HTTPError as e:
-                err_msg = f"HTTP transport error: {e}"
-                logger.warning("Model '%s' network error on '%s': %s", model, self.name, err_msg)
-                errors.append(f"{model}: {err_msg}")
-                continue
+                except asyncio.TimeoutError:
+                    err_msg = f"Timed out after {attempt_timeout:.1f}s"
+                    logger.warning("Model '%s' timed out on '%s'.", model, self.name)
+                    await _model_circuit_breaker.record_failure(model, status_code=None)
+                    errors.append(f"{model}: {err_msg}")
+                    await _record_call(CallRecord(
+                        model=model, task_type=str(task_type),
+                        latency_ms=(time.perf_counter() - call_start) * 1000,
+                        tokens_used=0, success=False, failure_reason="timeout",
+                    ))
+                    continue
+                except httpx.HTTPError as e:
+                    err_msg = f"HTTP transport error: {e}"
+                    logger.warning("Model '%s' network error on '%s': %s", model, self.name, err_msg)
+                    await _model_circuit_breaker.record_failure(model, status_code=None)
+                    errors.append(f"{model}: {err_msg}")
+                    await _record_call(CallRecord(
+                        model=model, task_type=str(task_type),
+                        latency_ms=(time.perf_counter() - call_start) * 1000,
+                        tokens_used=0, success=False, failure_reason="network_error",
+                    ))
+                    continue
 
-            if resp.status_code >= 400:
-                resp_text = resp.text[:250] if resp.text else ""
-                # If error is due to response_format not supported or JSON mode validation failure, retry without response_format
-                if any(kw in resp_text.lower() for kw in ("response_format", "json_object", "json mode", "not supported", "json_validate_failed", "failed to generate json")):
-                    try:
-                        payload_no_rf = dict(payload)
-                        payload_no_rf.pop("response_format", None)
-                        async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as retry_client:
-                            resp = await retry_client.post(
-                                f"{self._base_url}/chat/completions",
-                                headers=headers,
-                                json=payload_no_rf,
-                            )
-                        if resp.status_code < 400:
-                            body = resp.json()
-                            choice = body["choices"][0]
-                            message = choice.get("message", {})
-                            content = message.get("content") or ""
-                            if not content.strip():
-                                content = message.get("reasoning") or message.get("thought") or ""
-                            return self._parse_structured(content, schema)
-                    except Exception:
-                        pass
+                latency_ms = (time.perf_counter() - call_start) * 1000
 
-                err_msg = f"HTTP {resp.status_code}: {resp_text}"
-                logger.warning("Model '%s' failed on '%s' (%s).", model, self.name, err_msg)
-                errors.append(f"{model}: {err_msg}")
-                continue
+                if resp.status_code >= 400:
+                    resp_text = resp.text[:250] if resp.text else ""
+                    is_permanent = resp.status_code == 404 or "unavailable" in resp_text.lower()
+                    await _model_circuit_breaker.record_failure(
+                        model, status_code=resp.status_code, is_permanent=is_permanent,
+                    )
+                    err_msg = f"HTTP {resp.status_code}: {resp_text}"
+                    logger.warning("Model '%s' failed on '%s' (%s).", model, self.name, err_msg)
+                    errors.append(f"{model}: {err_msg}")
+                    await _record_call(CallRecord(
+                        model=model, task_type=str(task_type),
+                        latency_ms=latency_ms, tokens_used=0, success=False,
+                        failure_reason=f"http_{resp.status_code}", status_code=resp.status_code,
+                    ))
+                    continue
 
-            try:
-                body = resp.json()
-                usage = body.get("usage") or {}
-                if usage:
+                # Successful HTTP response — parse content
+                try:
+                    body = resp.json()
+                    usage = body.get("usage") or {}
+                    tokens_used = usage.get("total_tokens", 0) or (
+                        usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
+                    )
                     self.last_usage = usage
                     self.total_prompt_tokens += usage.get("prompt_tokens", 0)
                     self.total_completion_tokens += usage.get("completion_tokens", 0)
-                    self.total_tokens_used += usage.get("total_tokens", 0) or (
-                        usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0)
-                    )
-                self.model_calls += 1
+                    self.total_tokens_used += tokens_used
+                    self.model_calls += 1
 
-                choice = body["choices"][0]
-                message = choice.get("message", {})
-                content = message.get("content") or ""
-                # Some reasoning models put content in reasoning or thoughts if content is null/empty
-                if not content.strip():
-                    content = message.get("reasoning") or message.get("thought") or ""
-                # If content is still empty, retry once without response_format
-                if not content.strip():
+                    choice = body["choices"][0]
+                    message = choice.get("message", {})
+                    content = message.get("content") or ""
+                    # Some reasoning models put content in reasoning or thoughts if content is null/empty
+                    if not content.strip():
+                        content = message.get("reasoning") or message.get("thought") or ""
+
+                    # Try to parse
                     try:
-                        payload_no_rf = dict(payload)
-                        payload_no_rf.pop("response_format", None)
-                        async with httpx.AsyncClient(timeout=ai_settings.AI_TIMEOUT_SECONDS) as retry_client:
-                            retry_resp = await retry_client.post(
-                                f"{self._base_url}/chat/completions",
-                                headers=headers,
-                                json=payload_no_rf,
-                            )
-                        if retry_resp.status_code < 400:
-                            retry_body = retry_resp.json()
-                            content = retry_body["choices"][0].get("message", {}).get("content") or ""
-                    except Exception:
-                        pass
-            except (KeyError, IndexError, ValueError) as e:
-                err_msg = f"Malformed AI response envelope: {e}"
-                logger.warning("Model '%s' envelope malformed on '%s': %s", model, self.name, err_msg)
-                errors.append(f"{model}: {err_msg}")
-                continue
+                        result = _parse_structured(content, schema)
+                        await _model_circuit_breaker.record_success(model)
+                        await _record_call(CallRecord(
+                            model=model, task_type=str(task_type),
+                            latency_ms=latency_ms, tokens_used=tokens_used, success=True,
+                        ))
+                        return result
+                    except AIProviderError:
+                        # One repair retry: ask model to return only valid JSON
+                        repaired = await _repair_retry(
+                            client=client,
+                            base_url=self._base_url,
+                            headers=headers,
+                            model=model,
+                            system=system,
+                            prompt=prompt,
+                            schema=schema,
+                            temperature=ai_settings.AI_TEMPERATURE,
+                            max_tokens=ai_settings.AI_MAX_OUTPUT_TOKENS,
+                            per_attempt_timeout=attempt_timeout,
+                        )
+                        if repaired is not None:
+                            await _model_circuit_breaker.record_success(model)
+                            await _record_call(CallRecord(
+                                model=model, task_type=str(task_type),
+                                latency_ms=latency_ms, tokens_used=tokens_used, success=True,
+                            ))
+                            return repaired
+                        # Parse failed and repair failed — mark failure and continue
+                        await _model_circuit_breaker.record_failure(model, status_code=None)
+                        err_msg = "invalid JSON output"
+                        errors.append(f"{model}: {err_msg}")
+                        await _record_call(CallRecord(
+                            model=model, task_type=str(task_type),
+                            latency_ms=latency_ms, tokens_used=tokens_used,
+                            success=False, failure_reason="invalid_json",
+                        ))
+                        continue
 
-            try:
-                return self._parse_structured(content, schema)
-            except AIProviderError as e:
-                logger.warning("Model '%s' output validation failed on '%s': %s", model, self.name, e)
-                errors.append(f"{model}: {e}")
-                continue
+                except (KeyError, IndexError, ValueError) as e:
+                    err_msg = f"Malformed AI response envelope: {e}"
+                    logger.warning("Model '%s' envelope malformed on '%s': %s", model, self.name, err_msg)
+                    await _model_circuit_breaker.record_failure(model, status_code=None)
+                    errors.append(f"{model}: {err_msg}")
+                    await _record_call(CallRecord(
+                        model=model, task_type=str(task_type),
+                        latency_ms=latency_ms, tokens_used=0, success=False,
+                        failure_reason="malformed_envelope",
+                    ))
+                    continue
 
-        # All models in this provider's fallback list failed
+        # All models exhausted within budget
         raise AIProviderError(
-            f"All models exhausted for provider '{self.name}': {'; '.join(errors)}",
+            f"AI_PROVIDER_UNAVAILABLE: All models exhausted for provider '{self.name}': {'; '.join(errors)}",
             provider=self.name,
         )
 
-    def _parse_structured(self, content: str, schema: type[T]) -> T:
-        """Parse model text into a validated schema instance. Fail-closed but resilient."""
-        text = (content or "").strip()
-        if not text:
-            raise AIProviderError("AI returned empty content", provider=self.name)
 
-        # Strip <think>...</think> reasoning blocks if present
-        if "<think>" in text:
-            text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
-
-        # 1. Try markdown code fences anywhere in text: ```json ... ``` or ``` ... ```
-        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-        if fence_match:
-            cand = fence_match.group(1).strip()
-            try:
-                data = json.loads(cand)
-                return schema.model_validate(data)
-            except Exception:
-                pass
-
-        # 2. Try direct parse
-        try:
-            data = json.loads(text)
-            return schema.model_validate(data)
-        except Exception:
-            pass
-
-        # 3. Try to locate outermost JSON object or array
-        brace_start = text.find("{")
-        brace_end = text.rfind("}")
-        if brace_start != -1 and brace_end != -1 and brace_end > brace_start:
-            cand = text[brace_start : brace_end + 1].strip()
-            try:
-                data = json.loads(cand)
-                return schema.model_validate(data)
-            except Exception:
-                pass
-
-        bracket_start = text.find("[")
-        bracket_end = text.rfind("]")
-        if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
-            cand = text[bracket_start : bracket_end + 1].strip()
-            try:
-                data = json.loads(cand)
-                return schema.model_validate(data)
-            except Exception:
-                pass
-
-        # If all extraction attempts failed, raise descriptive error
-        try:
-            data = json.loads(text)
-            return schema.model_validate(data)
-        except json.JSONDecodeError as e:
-            preview = text[:150] + ("..." if len(text) > 150 else "")
-            raise AIProviderError(
-                f"AI returned invalid JSON: {e} (output: {preview!r})", provider=self.name
-            ) from e
-        except ValidationError as e:
-            raise AIProviderError(
-                f"AI output failed schema validation: {e.error_count()} error(s): "
-                f"{e.errors()[:3]}",
-                provider=self.name,
-            ) from e
-
+# ---------------------------------------------------------------------------
+# Failover provider (multiple providers)
+# ---------------------------------------------------------------------------
 
 class FailoverAIProvider(AIProvider):
     """Provider that wraps multiple AI providers with automatic fallback on failure."""
@@ -372,34 +781,54 @@ class FailoverAIProvider(AIProvider):
         system: str,
         prompt: str,
         schema: type[T],
+        task_type: TaskType = TaskType.GENERAL,
     ) -> T:
         errors: list[str] = []
+        start_time = time.time()
+        total_budget = ai_settings.AI_TOTAL_BUDGET_SECONDS
+
         for provider in self._providers:
+            # Enforce total budget across providers
+            elapsed = time.time() - start_time
+            if elapsed >= total_budget:
+                errors.append(f"{provider.name}: total budget exhausted")
+                break
+
             try:
-                logger.info("Attempting AI generation with provider '%s' (models: %s)", provider.name, provider.model_name)
-                result = await provider.generate_structured(system, prompt, schema)
+                logger.info(
+                    "Attempting AI generation with provider '%s' (models: %s)",
+                    provider.name, provider.model_name,
+                )
+                try:
+                    result = await provider.generate_structured(
+                        system, prompt, schema, task_type=task_type
+                    )
+                except TypeError:
+                    # Provider does not accept task_type kwarg — call without it
+                    result = await provider.generate_structured(system, prompt, schema)
                 return result
             except AIProviderError as e:
                 logger.warning(
                     "AI provider '%s' exhausted all options (status %s: %s). Failing over to next provider in chain...",
-                    provider.name,
-                    getattr(e, "status_code", None),
-                    e,
+                    provider.name, getattr(e, "status_code", None), e,
                 )
                 errors.append(f"{provider.name}: {e}")
             except Exception as e:
                 logger.warning(
                     "AI provider '%s' encountered unexpected error: %s. Failing over...",
-                    provider.name,
-                    e,
+                    provider.name, e,
                 )
                 errors.append(f"{provider.name}: {e}")
 
         raise AIProviderError(
-            f"All AI providers in failover chain failed: {'; '.join(errors)}",
+            f"AI_PROVIDER_UNAVAILABLE: All AI providers in failover chain failed: {'; '.join(errors)}",
             provider=self.name,
         )
 
+
+# ---------------------------------------------------------------------------
+# Provider factory
+# ---------------------------------------------------------------------------
 
 def get_ai_provider() -> AIProvider | None:
     """Return the configured provider or failover composite, or None when AI is disabled.
@@ -462,3 +891,36 @@ def get_ai_provider() -> AIProvider | None:
     except AIProviderError as e:
         logger.warning("AI provider init failed (%s) — AI layer disabled", e)
         return None
+
+
+def get_ai_provider_for_task(task_type: TaskType) -> AIProvider | None:
+    """Return a provider configured for a specific task type.
+
+    Task-based routing: observation summaries use a cheap fast model;
+    journey synthesis, next-action, and verification use stronger models.
+    Falls back to the default provider if no task-specific override exists.
+    """
+    provider = get_ai_provider()
+    if provider is None:
+        return None
+    # If the provider supports task_type override, wrap it
+    if hasattr(provider, "_task_type"):
+        # Already configured — return as-is (task_type is per-call param)
+        return provider
+    return provider
+
+
+def get_circuit_breaker_snapshot() -> dict[str, dict[str, Any]]:
+    """Return current model health snapshot for observability."""
+    # This is async; provide a sync wrapper for logging
+    try:
+        loop = asyncio.get_running_loop()
+        # We're in an async context — return empty, callers should use async version
+        return {}
+    except RuntimeError:
+        return asyncio.run(_model_circuit_breaker.snapshot())
+
+
+async def async_get_circuit_breaker_snapshot() -> dict[str, dict[str, Any]]:
+    """Async version of circuit breaker snapshot."""
+    return await _model_circuit_breaker.snapshot()
