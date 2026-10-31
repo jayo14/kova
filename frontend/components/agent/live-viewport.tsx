@@ -4,6 +4,21 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { getApiBaseUrl, getBrowserSessionToken } from "@/lib/api/client";
+import {
+  applyServerMessage,
+  frameAgeMs,
+  initialViewportTruth,
+  isConfirmedHuman,
+  isFrameStale,
+  isPendingHandoff,
+  markFrameAcked,
+  markReturnRequested,
+  markTakeoverDeclined,
+  markTakeoverRequested,
+  maskingCopy,
+  resetViewportTruth,
+} from "@/lib/viewport/truth";
+import type { ServerMessage, ViewportTruth } from "@/lib/viewport/truth";
 
 type ViewportState =
   | "connecting"
@@ -17,14 +32,27 @@ type ViewportState =
   | "failed"
   | "disconnected";
 
-interface ViewportMessage {
-  type: "frame" | "state" | "control_changed" | "takeover_request" | "pong";
-  state?: string;
+interface ViewportMessage extends ServerMessage {
+  type:
+    | "frame"
+    | "state"
+    | "control_changed"
+    | "takeover_request"
+    | "takeover_granted"
+    | "takeover_rejected"
+    | "masking_status"
+    | "connection_quality"
+    | "control_error"
+    | "interaction_rejected"
+    | "pause_requested"
+    | "resume_requested"
+    | "lease_expired"
+    | "pong";
   url?: string;
   title?: string;
-  control?: string;
   cursor?: { x: number; y: number };
   loading?: boolean;
+  checkpoint?: { type: string; description: string; details?: unknown };
 }
 
 interface LiveViewportProps {
@@ -94,12 +122,30 @@ export function LiveViewport({
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
-  const [controlState, setControlState] = useState<"agent" | "human">("agent");
+  const [truth, setTruth] = useState<ViewportTruth>(initialViewportTruth);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
   const [checkpoint, setCheckpoint] = useState<{ type: string; description: string; details?: unknown } | null>(null);
-  const [takeoverError, setTakeoverError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const pendingFrameSeqRef = useRef<number | null>(null);
+  const truthRef = useRef(truth);
 
-  const isHumanControlled = controlState === "human" || state === "user_control";
+  // Server-confirmed truth only: the client never upgrades a pending handoff or
+  // an unknown masking state into a "safe"/"confirmed" claim on its own.
+  const isHumanControlled = isConfirmedHuman(truth);
+  const maskingInfo = maskingCopy(truth.masking);
+  const handoffPending = isPendingHandoff(truth);
+  const takeoverError = truth.handoff === "failed" ? truth.handoffError : null;
+  const frameAge = frameAgeMs(truth, now);
+  const frameStale = isFrameStale(truth, now);
+
+  useEffect(() => {
+    truthRef.current = truth;
+  }, [truth]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const sendInput = useCallback((msg: Record<string, unknown>) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -162,6 +208,10 @@ export function LiveViewport({
     ws.onopen = () => {
       ws.send(JSON.stringify({ type: "authenticate", ticket: wsTicket }));
       reconnectAttemptsRef.current = 0;
+      // Frame sequence numbers are per-connection; drop stale continuity.
+      setTruth((t) => resetViewportTruth(t));
+      pendingFrameSeqRef.current = null;
+      setHasReceivedFrame(false);
       setState((s) => (s === "disconnected" ? "disconnected" : "observing"));
     };
 
@@ -187,6 +237,14 @@ export function LiveViewport({
             }
           }
           URL.revokeObjectURL(objectUrl);
+          const ackSeq = pendingFrameSeqRef.current;
+          pendingFrameSeqRef.current = null;
+          // Acknowledge only frames we actually painted so the server relay can
+          // release its send window (MAX_UNACKED) without lying about delivery.
+          if (ackSeq !== null && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "frame_ack", seq: ackSeq }));
+            setTruth((t) => markFrameAcked(t, ackSeq));
+          }
           framePendingRef.current = false;
         };
         img.onerror = () => {
@@ -196,49 +254,78 @@ export function LiveViewport({
         img.src = objectUrl;
       } else {
         try {
-          const msg = JSON.parse(event.data);
+          const msg = JSON.parse(event.data) as ViewportMessage;
+
+          if (msg.type === "frame") {
+            // Header precedes the binary JPEG; record the seq so the paint
+            // handler acks exactly the frame it rendered.
+            const seq = typeof msg.seq === "number" ? msg.seq : Number(msg.seq);
+            pendingFrameSeqRef.current = Number.isFinite(seq) ? seq : null;
+            setTruth((t) => applyServerMessage(t, msg));
+            if (
+              msg.state &&
+              !isConfirmedHuman(truthRef.current) &&
+              truthRef.current.control !== "paused"
+            ) {
+              setState(msg.state as ViewportState);
+            }
+            return;
+          }
+
           if (msg.type === "takeover_granted") {
+            // Lease granted while the browser is still quiescing; only the
+            // server's later HUMAN_CONTROL confirms the handoff.
             leaseIdRef.current = msg.lease_id || null;
             if (msg.generation) generationRef.current = msg.generation;
-            setControlState("human");
-            setState("user_control");
-            setTakeoverError(null);
+            setTruth((t) => applyServerMessage(t, msg));
             onTakeover?.();
-          } else if (msg.type === "takeover_rejected") {
-            setTakeoverError(msg.reason || "Browser takeover unavailable");
-            setTimeout(() => setTakeoverError(null), 4000);
-          } else if (msg.type === "control_changed") {
+            return;
+          }
+
+          if (msg.type === "takeover_rejected") {
+            setTruth((t) => applyServerMessage(t, msg));
+            setTimeout(() => {
+              setTruth((t) => (t.handoff === "failed" ? markTakeoverDeclined(t) : t));
+            }, 4000);
+            return;
+          }
+
+          if (msg.type === "control_changed") {
             if (msg.lease_id) leaseIdRef.current = msg.lease_id;
             if (msg.generation) generationRef.current = msg.generation;
             if (msg.checkpoint !== undefined) setCheckpoint(msg.checkpoint);
+            setTruth((t) => applyServerMessage(t, msg));
             if (msg.control === "human") {
-              setControlState("human");
               setState("user_control");
-            } else if (msg.control === "paused") {
+            } else if (msg.control === "paused" || msg.control === "waiting_user") {
               setState("paused");
             } else if (msg.control === "agent") {
-              setControlState("agent");
               leaseIdRef.current = null;
               setState("resuming");
-              setTimeout(() => setState("executing"), 1500);
+              setTimeout(() => setState((s) => (s === "resuming" ? "executing" : s)), 1500);
             }
-          } else if (msg.type === "state") {
+            return;
+          }
+
+          if (msg.type === "state") {
             if (msg.checkpoint !== undefined) setCheckpoint(msg.checkpoint);
             if (msg.state) setState(msg.state as ViewportState);
             if (msg.url) setUrl(msg.url);
             if (msg.title) setTitle(msg.title);
-            if (msg.control === "human" || msg.control === "agent") {
-              setControlState(msg.control);
-            }
             if (msg.cursor) setCursor(msg.cursor);
             else if (msg.state !== "paused" && msg.state !== "user_control") setCursor(null);
-          } else if (msg.type === "frame") {
-            if (msg.state && controlState !== "human" && state !== "paused" && state !== "user_control") {
-              setState(msg.state as ViewportState);
-            }
-          } else if (msg.type === "takeover_request") {
-            setShowTakeoverDialog(true);
+            setTruth((t) => applyServerMessage(t, msg));
+            return;
           }
+
+          if (msg.type === "takeover_request") {
+            setShowTakeoverDialog(true);
+            return;
+          }
+
+          // masking_status, connection_quality, control_error,
+          // interaction_rejected, pause_requested, resume_requested, lease_expired.
+          setTruth((t) => applyServerMessage(t, msg));
         } catch {
           // Ignore parse errors
         }
@@ -280,37 +367,48 @@ export function LiveViewport({
   }, []);
 
   const handleTakeoverAccept = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "takeover_accept" }));
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "takeover_accept" }));
+    }
+    setTruth(markTakeoverRequested);
     setShowTakeoverDialog(false);
   }, []);
 
   const handleTakeoverReject = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "takeover_reject" }));
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "takeover_reject" }));
+    }
+    setTruth(markTakeoverDeclined);
     setShowTakeoverDialog(false);
     onRelease?.();
   }, [onRelease]);
 
   const handleReturnControl = useCallback(() => {
-    wsRef.current?.send(
-      JSON.stringify({
-        type: "return_control",
-        lease_id: leaseIdRef.current,
-      })
-    );
-    leaseIdRef.current = null;
-    setState("resuming");
-    setControlState("agent");
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "return_control",
+          lease_id: leaseIdRef.current,
+        })
+      );
+    }
+    // Remain in human control until the server confirms the agent resumed;
+    // the confirmed control_changed message releases the lease.
+    setTruth(markReturnRequested);
     onRelease?.();
   }, [onRelease]);
 
   const handlePause = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "pause" }));
-    setState("paused");
+    // Optimistic pause/pause UI would lie about a state only the server owns.
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "pause" }));
+    }
   }, []);
 
   const handleResume = useCallback(() => {
-    wsRef.current?.send(JSON.stringify({ type: "resume" }));
-    setState("resuming");
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "resume" }));
+    }
   }, []);
 
 
@@ -571,6 +669,38 @@ export function LiveViewport({
           </div>
         )}
 
+        {/* Server-confirmed handoff in progress (not yet human control) */}
+        {handoffPending && !checkpoint && (
+          <div className="absolute top-10 left-3 right-3 z-30 flex items-center gap-2 p-2.5 rounded-lg bg-background/90 border border-border text-caption text-muted-foreground backdrop-blur-md shadow-lg">
+            <MaterialIcon name="sync" size={16} className="animate-spin text-primary shrink-0" />
+            <span>Waiting for the server to confirm the control handoff…</span>
+          </div>
+        )}
+
+        {/* Masking honesty: only a server "masked" tag may claim protection */}
+        {hasReceivedFrame && maskingInfo.tone !== "protected" && (
+          <div
+            className={cn(
+              "absolute bottom-2 left-2 z-30 flex items-center gap-1.5 px-2 py-1 rounded border text-caption backdrop-blur-sm",
+              maskingInfo.tone === "exposed"
+                ? "bg-destructive/85 border-destructive text-destructive-foreground"
+                : "bg-background/85 border-border text-amber-200"
+            )}
+          >
+            <MaterialIcon name={maskingInfo.tone === "exposed" ? "visibility" : "help"} size={13} />
+            <span>{maskingInfo.label}</span>
+          </div>
+        )}
+
+        {/* Stale-frame overlay: the last painted frame is old */}
+        {hasReceivedFrame && frameStale && state !== "disconnected" && state !== "failed" && (
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 pointer-events-none">
+            <div className="rounded-md bg-background/90 border border-amber-500/50 px-3 py-1.5 text-caption text-amber-200 shadow-lg">
+              Frame is {Math.round((frameAge ?? 0) / 1000)}s old — waiting for the browser
+            </div>
+          </div>
+        )}
+
         {/* Takeover error notification */}
         {takeoverError && (
           <div className="absolute top-10 left-3 right-3 z-30 p-2.5 rounded-lg bg-destructive/90 border border-destructive text-destructive-foreground text-xs shadow-lg animate-in fade-in duration-200">
@@ -633,6 +763,13 @@ export function LiveViewport({
               ? "Execution paused"
               : "Kova is controlling"}
           </span>
+          {hasReceivedFrame && state !== "disconnected" && state !== "failed" && (
+            <span className="hidden sm:inline text-[11px] font-mono text-muted-foreground/60 shrink-0">
+              {truth.quality.fps !== null ? `${truth.quality.fps}fps` : "—"}
+              {truth.quality.rttMs !== null ? ` · ${truth.quality.rttMs}ms` : ""}
+              {frameAge !== null ? ` · ${Math.round(frameAge / 1000)}s` : ""}
+            </span>
+          )}
         </div>
         {state === "failed" || state === "disconnected" ? (
           <span className="text-caption text-muted-foreground/50 text-[11px] font-mono px-2 py-0.5 rounded border border-border/40">
