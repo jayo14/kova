@@ -1,16 +1,45 @@
 # Kova Architecture
 
-## Runtime topology
-- FastAPI API (`backend/app/main.py`) handles HTTP/WebSocket requests. Browser automation and long-running exploration/execution are not run in the API process for production paths.
-- Celery workers (`backend/app/workers/`) own Playwright/Chromium for executions and exploration (isolated browser contexts per job).
-- PostgreSQL for persistent state; Redis for control plane, pub/sub frames/state, and rate limiting.
-- Frontend Next.js app communicates via REST + WebSocket to API.
+## Runtime Topology
 
-## State machine (executions)
-Execution flows through states defined in `backend/app/engine/execution/state.py`. Control state machine in `backend/app/engine/execution/control.py` supports RUNNING, PAUSE_REQUESTED, PAUSED, QUIESCING, HUMAN_CONTROL, RECONCILING, WAITING_FOR_USER, RESUME_REQUESTED, and terminals (COMPLETED, FAILED, CANCELLED, TIMEOUT, BLOCKED, UNVERIFIED). Only one controller may hold a lease at a time (expiring lease with heartbeat).
+```
+frontend (Next.js) --HTTP/WS--> kova-api (FastAPI)
+kova-api --Celery broker--> redis (db 1)
+kova-api --events/frames--> redis (db 0)
+kova-api --SQL--> postgres
+kova-api --dispatch--> kova-worker (Celery, owns Chromium/Playwright)
+```
 
-## AI-proposes, code-disposes boundaries
-- Model outputs are parsed into Pydantic schemas and validated before any browser action (`backend/app/engine/ai/validator.py`). 
-- The agent/executor/verifier are deterministic; the model can propose actions/plans but cannot mark an execution COMPLETED.
-- Destructive actions require guard approval; tainted page content is sanitized; secrets are masked in logs/events.
-- Success is proven by deterministic verification against pre-registered expectations; VLM/semantic checks are advisory only and cannot override failed/missing deterministic checks.
+- **kova-api**: REST + SSE + WebSocket gateway. Never launches browsers.
+- **kova-worker**: Celery worker; owns Chromium. Each run = one isolated browser context + profile, deleted afterward unless persistence explicitly requested.
+- **redis**: broker (db 1) + ephemeral frames/state (db 0).
+- **postgres**: durable data (flows, executions, evidence, product graph).
+
+## State Machine (Execution Control)
+
+Execution control is authoritative in `engine/execution/control.py`:
+
+`RUNNING -> PAUSE_REQUESTED -> PAUSED -> RESUME_REQUESTED -> RUNNING`
+`RUNNING/PAUSED -> QUIESCING -> HUMAN_CONTROL -> RECONCILING -> RUNNING`
+
+- Human takeover reserves a lease; the agent quiesces at a safe boundary and reports outcome (idle/known/uncertain).
+- Reconciliation re-observes the live page before resuming; interrupted actions with unknown effects are flagged `pre_resume_uncertain`.
+- Terminal states (COMPLETED/FAILED/ERROR/CANCELLED/TIMEOUT) reject further control changes.
+
+## AI Proposes, Code Disposes
+
+- AI (reasoner/agent) proposes targets, actions, and plans as typed schemas (`engine/ai/schemas.py`).
+- Validator (`engine/ai/validator.py`) converts semantic targets to deterministic selectors and rejects unsafe proposals.
+- Egress guard (`engine/browser/egress.py`) resolves DNS once, pins IPs, blocks private/loopback/link-local/metadata at the network layer.
+- Only deterministic verification (verifier) can mark a run complete; AI output never grants success.
+
+## Browser Isolation
+
+- Non-root worker, read-only root fs, tmpfs for profiles, cap_drop ALL, no-new-privileges, CPU/memory limits.
+- Fresh context+profile per job; deleted after unless persistence requested.
+- Permissions denied by default (camera, mic, geo, notifications, clipboard, arbitrary downloads).
+- Downloads are job-scoped with type/size limits.
+
+## Validation Modes
+
+Per-flow `ValidationMode`: functional, workflow, regression, exploratory, visual. Each has distinct `SuccessCriteria` in `validation/success_criteria.py`. `ValidationScope` (targeted/expanded/full) is orthogonal and applies to regression breadth.
