@@ -84,10 +84,11 @@ async def test_frame_publish_subscribe_roundtrip(exec_id):
                     continue
                 data = message["data"]
                 sep = data.find(b"\x00")
-                state = data[:sep].decode("ascii", errors="replace")
+                from app.engine.execution.stream import decode_frame_tag
+                state, masking = decode_frame_tag(data[:sep])
                 frame = data[sep + 1:]
                 if not got.done():
-                    got.set_result((frame, state))
+                    got.set_result((frame, state, masking))
                 break
         finally:
             try:
@@ -99,8 +100,8 @@ async def test_frame_publish_subscribe_roundtrip(exec_id):
     consumer = asyncio.create_task(_consume())
     await asyncio.wait_for(subscribed.wait(), timeout=3.0)
     await asyncio.sleep(0.05)
-    await publish_frame(exec_id, jpeg, state="executing")
-    frame, state = await asyncio.wait_for(got, timeout=5.0)
+    await publish_frame(exec_id, jpeg, state="executing", masking="masked")
+    frame, state, masking = await asyncio.wait_for(got, timeout=5.0)
     consumer.cancel()
     try:
         await consumer
@@ -108,6 +109,7 @@ async def test_frame_publish_subscribe_roundtrip(exec_id):
         pass
     assert frame == jpeg
     assert state == "executing"
+    assert masking == "masked"
 
 
 @pytest.mark.asyncio

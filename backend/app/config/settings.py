@@ -142,6 +142,8 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_MINUTE: int = 300
     DISCOVERY_MAX_DEPTH: int = 3
     DISCOVERY_MAX_PAGES: int = 50
+    # Extra CSS selectors masked in live/screenshot captures (comma-separated).
+    LIVE_FRAME_EXTRA_SENSITIVE_SELECTORS: str = ""
 
     @field_validator("DISCOVERY_MAX_DEPTH", mode="before")
     @classmethod

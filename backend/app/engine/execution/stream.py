@@ -9,7 +9,9 @@ Channels (binary-safe):
   kova:viewport:state:{execution_id}  — JSON state/url/title/control updates
 
 Frame wire format on the Redis channel:
-  b"{state}\\x00{jpeg_bytes}"  (state is short ASCII tag)
+  b"{state}|{masking}\x00{jpeg_bytes}"  (two short ASCII tags; masking is
+  "masked", "off", or "unknown" — legacy publishers without a masking tag
+  decode as "unknown")
 """
 
 import asyncio
@@ -29,7 +31,7 @@ _bin_redis: aioredis.Redis | None = None
 _text_loop: asyncio.AbstractEventLoop | None = None
 _bin_loop: asyncio.AbstractEventLoop | None = None
 
-_memory_frame_subscribers: dict[str, set[asyncio.Queue[tuple[bytes, str]]]] = {}
+_memory_frame_subscribers: dict[str, set[asyncio.Queue[tuple[bytes, str, str]]]] = {}
 _memory_state_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
 
 FRAME_PREFIX = b"kova:viewport:frame"
@@ -145,8 +147,36 @@ async def _bin_client() -> aioredis.Redis:
     return _bin_redis
 
 
-async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "observing") -> None:
+def encode_frame_tag(state: str, masking: str) -> bytes:
+    """Wire-format tag for a frame: '{state}|{masking}'."""
+    state_tag = (state or "observing").encode("ascii", errors="replace")[:32]
+    masking_tag = (masking or "unknown").encode("ascii", errors="replace")[:16]
+    return state_tag + b"|" + masking_tag
+
+
+def decode_frame_tag(tag: bytes) -> tuple[str, str]:
+    """Decode a frame tag; legacy tags (no '|') decode with masking='unknown'."""
+    if b"|" in tag:
+        state_raw, masking_raw = tag.split(b"|", 1)
+        state = state_raw.decode("ascii", errors="replace") or "observing"
+        masking = masking_raw.decode("ascii", errors="replace") or "unknown"
+    else:
+        state = tag.decode("ascii", errors="replace") or "observing"
+        masking = "unknown"
+    return state, masking
+
+
+async def publish_frame(
+    execution_id: str,
+    frame_bytes: bytes,
+    state: str = "observing",
+    masking: str = "unknown",
+) -> None:
     """Publish a live viewport frame. Ephemeral — not persisted.
+
+    ``masking`` records whether the sensitive-field mask was applied to this
+    frame ("masked"), is unavailable ("off", frame should have been withheld),
+    or is unknown (producer predates masking).
 
     Degrades gracefully without raising or blocking when Redis is unavailable.
     """
@@ -162,13 +192,13 @@ async def publish_frame(execution_id: str, frame_bytes: bytes, state: str = "obs
             except asyncio.QueueEmpty:
                 pass
         try:
-            q.put_nowait((frame_bytes, state or "observing"))
+            q.put_nowait((frame_bytes, state or "observing", masking or "unknown"))
         except asyncio.QueueFull:
             pass
 
     try:
         r = await _bin_client()
-        tag = (state or "observing").encode("ascii", errors="replace")[:32]
+        tag = encode_frame_tag(state, masking)
         await asyncio.wait_for(
             r.publish(frame_channel(execution_id), tag + b"\x00" + frame_bytes),
             timeout=2.5,
@@ -223,8 +253,8 @@ async def publish_state(
 
 
 
-async def subscribe_frames(execution_id: str) -> AsyncIterator[tuple[bytes, str]]:
-    """Yield (jpeg_bytes, state) frames. Caller owns pubsub lifecycle."""
+async def subscribe_frames(execution_id: str) -> AsyncIterator[tuple[bytes, str, str]]:
+    """Yield (jpeg_bytes, state, masking) frames. Caller owns pubsub lifecycle."""
     r = await _bin_client()
     pubsub = r.pubsub()
     await pubsub.subscribe(frame_channel(execution_id))
@@ -237,10 +267,10 @@ async def subscribe_frames(execution_id: str) -> AsyncIterator[tuple[bytes, str]
                 continue
             sep = data.find(b"\x00")
             if sep < 0:
-                yield bytes(data), "observing"
+                yield bytes(data), "observing", "unknown"
             else:
-                state = data[:sep].decode("ascii", errors="replace") or "observing"
-                yield bytes(data[sep + 1:]), state
+                state, masking = decode_frame_tag(data[:sep])
+                yield bytes(data[sep + 1:]), state, masking
     finally:
         try:
             await pubsub.unsubscribe(frame_channel(execution_id))

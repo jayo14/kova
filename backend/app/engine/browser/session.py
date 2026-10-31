@@ -24,6 +24,7 @@ from playwright.async_api import (
 
 from app.config.settings import settings
 from app.engine.browser.egress import _is_safe_url, _redact_url, evaluate_url
+from app.engine.browser.masking import build_mask_locators, configured_extra_mask_selectors
 from app.engine.browser.observer import PageObserver
 from app.engine.browser.resolver import ResolutionStrategy, TargetResolver
 from app.engine.browser.executor import ActionExecutor
@@ -672,22 +673,7 @@ class BrowserSession:
         if not self._page:
             return (b"", "image/png", "no_page")
 
-        mask_locators = []
-        try:
-            mask_locators = [
-                self._page.locator(
-                    'input[type="password"], '
-                    'input[name*="password" i], '
-                    'input[autocomplete*="password" i], '
-                    'input[name*="otp" i], '
-                    'input[name*="token" i], '
-                    'input[name*="secret" i], '
-                    'input[data-testid*="otp" i], '
-                    'input[data-testid*="password" i]'
-                )
-            ]
-        except Exception:
-            mask_locators = []
+        mask_locators = build_mask_locators(self._page, configured_extra_mask_selectors())
 
         # 1. Full page screenshot
         try:

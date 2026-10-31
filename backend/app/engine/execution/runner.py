@@ -51,6 +51,7 @@ from app.engine.execution.context import ExecutionContext
 from app.engine.execution.state import ExecutionState, InvalidTransitionError
 from app.engine.verification.verifier import Verifier
 from app.modules.executions.event_types import EventTypes
+from app.engine.browser.masking import capture_masked_live_frame
 from app.engine.execution.stream import publish_frame, publish_state
 from app.engine.execution.control import (
     ControlState,
@@ -1958,8 +1959,14 @@ class FlowRunner:
 
         Latest-wins: Redis pub/sub drops slow consumers; frontend Queue(maxsize=1)
         discards stale frames. Never persists frames.
+
+        Honesty contract: every frame is captured with the shared sensitive-
+        field mask. If a masked capture is impossible, the frame is withheld
+        and viewers are told masking is off — no raw password/OTP frames ever
+        reach a viewer.
         """
         state = "observing"
+        masking_announced = False
         while True:
             try:
                 page = browser.page
@@ -1972,12 +1979,30 @@ class FlowRunner:
                         state = "paused"
                 except Exception as ctrl_err:
                     logger.debug("Control state read failed (graceful degradation): %s", ctrl_err)
-                ss_bytes = await page.screenshot(type="jpeg", quality=45, timeout=2000)
-                if ss_bytes:
+                masking_status, ss_bytes = await capture_masked_live_frame(page)
+                if masking_status == "masked" and ss_bytes:
+                    masking_announced = False
                     try:
-                        await publish_frame(execution_id, ss_bytes, state)
+                        await publish_frame(execution_id, ss_bytes, state, masking="masked")
                     except Exception as frame_err:
                         logger.debug("Frame broadcast failed (graceful degradation): %s", frame_err)
+                else:
+                    # Masked capture impossible — withhold the frame entirely and
+                    # tell viewers masking is off (once per outage, not per tick).
+                    if not masking_announced:
+                        masking_announced = True
+                        try:
+                            await publish_state(
+                                execution_id,
+                                state,
+                                masking="off",
+                                masking_note=(
+                                    "Sensitive-field masking unavailable; live frames are withheld "
+                                    "until masking is restored."
+                                ),
+                            )
+                        except Exception:
+                            pass
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -2193,15 +2218,26 @@ class FlowRunner:
         if action_type:
             snapshot_payload["action"] = action_type
 
-        try:
-            ss_bytes = await browser.page.screenshot(type="jpeg", quality=45, timeout=2000)
-            if ss_bytes:
-                try:
-                    await publish_frame(execution_id, ss_bytes, state)
-                except Exception as frame_err:
-                    logger.debug("Live frame publish failed (graceful degradation): %s", frame_err)
-        except Exception as ss_err:
-            logger.debug("Live frame capture failed: %s", ss_err)
+        masking_status, ss_bytes = await capture_masked_live_frame(browser.page)
+        if masking_status == "masked" and ss_bytes:
+            try:
+                await publish_frame(execution_id, ss_bytes, state, masking="masked")
+            except Exception as frame_err:
+                logger.debug("Live frame publish failed (graceful degradation): %s", frame_err)
+        else:
+            try:
+                await publish_state(
+                    execution_id,
+                    state,
+                    url=snapshot_payload.get("url", ""),
+                    masking="off",
+                    masking_note=(
+                        "Sensitive-field masking unavailable; live frames are withheld "
+                        "until masking is restored."
+                    ),
+                )
+            except Exception:
+                pass
 
         return snapshot_payload
 

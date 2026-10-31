@@ -22,6 +22,7 @@ from app.engine.execution.control import (
     ControlState,
     acquire_human_takeover,
     cleanup_control,
+    confirm_quiesced,
     get_control_record,
     is_cancel_requested,
     release_human_control,
@@ -90,10 +91,9 @@ async def test_live_viewport_frame_broadcasting():
                     continue
                 data = message.get("data") or b""
                 sep = data.find(b"\x00")
-                if sep >= 0:
-                    state = data[:sep].decode("ascii", errors="replace")
-                    frame = data[sep + 1:]
-                    got.set_result((frame, state))
+                state, masking = data[:sep].decode("ascii", errors="replace").split("|", 1) if b"|" in data[:sep] else (data[:sep].decode("ascii", errors="replace"), "unknown")
+                frame = data[sep + 1:]
+                got.set_result((frame, state, masking))
                 break
         finally:
             try:
@@ -105,8 +105,8 @@ async def test_live_viewport_frame_broadcasting():
     consumer = asyncio.create_task(_consume())
     await asyncio.wait_for(subscribed.wait(), timeout=5.0)
     await asyncio.sleep(0.05)
-    await publish_frame(exec_id, jpeg, state="executing")
-    frame, state = await asyncio.wait_for(got, timeout=5.0)
+    await publish_frame(exec_id, jpeg, state="executing", masking="masked")
+    frame, state, masking = await asyncio.wait_for(got, timeout=5.0)
     consumer.cancel()
     try:
         await consumer
@@ -114,6 +114,7 @@ async def test_live_viewport_frame_broadcasting():
         pass
     assert frame == jpeg
     assert state == "executing"
+    assert masking == "masked"
 
 
 @pytest.mark.asyncio
@@ -165,13 +166,16 @@ async def test_exclusive_human_takeover_lease_and_concurrency_rejection():
     exec_id = str(uuid.uuid4())
     await cleanup_control(exec_id)
 
-    # 1. Acquire takeover by User A
+    # 1. Acquire takeover by User A while agent is RUNNING → QUIESCING until
+    #    the agent reports a safe boundary (then HUMAN_CONTROL).
     ok1, lease1, rec1 = await acquire_human_takeover(exec_id, client_id="user-a", lease_duration_seconds=60.0)
     assert ok1 is True
     assert lease1 is not None
-    assert rec1.state == ControlState.HUMAN_CONTROL
     assert rec1.lease_id == lease1
     assert rec1.owner == "user-a"
+    assert rec1.state == ControlState.QUIESCING
+    rec_quiesced = await confirm_quiesced(exec_id)
+    assert rec_quiesced.state == ControlState.HUMAN_CONTROL
 
     # 2. Competing takeover attempt by User B must be rejected
     ok2, err2, rec2 = await acquire_human_takeover(exec_id, client_id="user-b", lease_duration_seconds=60.0)
@@ -203,9 +207,12 @@ async def test_human_interaction_validation():
     assert valid is False
     assert "not HUMAN_CONTROL" in reason
 
-    # 2. Acquire lease
-    ok, lease_id, _ = await acquire_human_takeover(exec_id, client_id="user-qa", lease_duration_seconds=60.0)
+    # 2. Acquire lease (agent RUNNING → QUIESCING) and confirm quiesce
+    ok, lease_id, rec_age = await acquire_human_takeover(exec_id, client_id="user-qa", lease_duration_seconds=60.0)
     assert ok is True
+    if rec_age.state == ControlState.QUIESCING:
+        rec_age = await confirm_quiesced(exec_id)
+    assert rec_age.state == ControlState.HUMAN_CONTROL
 
     # 3. Reject wrong lease id
     valid, reason = await validate_human_interaction(exec_id, lease_id="wrong_lease")
