@@ -263,7 +263,21 @@ def _deterministic_target(semantic_target: dict) -> dict:
     candidates = semantic_target.get("candidate_text") or []
     if isinstance(candidates, str):
         candidates = [candidates]
-    texts = [str(c)[:60] for c in candidates if c and len(str(c)) >= 2][:4]
+    # Guard against the model echoing the mission/goal text as a selector:
+    # real UI labels are short. Drop candidates that are too long or look like
+    # a sentence/mission description.
+    texts = []
+    for c in candidates:
+        s = str(c).strip()
+        if not s or len(s) < 2 or len(s) > 40:
+            continue
+        if len(s.split()) > 4:
+            continue
+        lowered = s.lower()
+        if any(phrase in lowered for phrase in ("verify core", "navigate to", "welcome back")):
+            continue
+        texts.append(s[:40])
+    texts = texts[:4]
     if texts:
         # Playwright text selector union across candidates — resolved
         # deterministically by TargetResolver with ambiguity handling.
