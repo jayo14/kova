@@ -35,6 +35,7 @@ from app.engine.execution.control import (
     publish_command,
     queue_user_input,
     release_human_control,
+    renew_human_control_lease,
     request_pause,
     request_resume,
     set_control_state,
@@ -349,6 +350,29 @@ async def viewport_stream(
             elif msg_type == "takeover_reject":
                 await websocket.send_json({"type": "control_changed", "control": "agent"})
                 logger.info("User takeover rejected by client for %s", execution_id)
+
+            elif msg_type in ("takeover_heartbeat", "lease_heartbeat", "heartbeat"):
+                lease = msg.get("lease_id") or active_lease_id
+                ok, lease_or_err, rec = await renew_human_control_lease(
+                    execution_id,
+                    client_id=str(user_id),
+                    lease_id=lease,
+                )
+                if ok:
+                    active_lease_id = lease_or_err or active_lease_id
+                    await websocket.send_json({
+                        "type": "lease_renewed",
+                        "lease_id": active_lease_id,
+                        "expires_at": rec.lease_expires_at,
+                        "generation": rec.generation,
+                    })
+                else:
+                    active_lease_id = None
+                    await websocket.send_json({
+                        "type": "lease_expired",
+                        "reason": lease_or_err,
+                    })
+                    logger.info("Lease renewal failed for %s: %s", execution_id, lease_or_err)
 
             elif msg_type in ("return_control", "release_control"):
                 lease = msg.get("lease_id") or active_lease_id

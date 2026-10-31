@@ -345,6 +345,40 @@ async def acquire_human_takeover(
 
 
 
+async def renew_human_control_lease(
+    execution_id: str,
+    client_id: str,
+    lease_id: str | None = None,
+    lease_duration_seconds: float = 300.0,
+) -> tuple[bool, str, ControlRecord]:
+    """Extend an active human control lease (heartbeat).
+
+    A lease that has already expired is never revived: the holder must take
+    control again explicitly so the generation counter advances and the runner
+    replans from the live page. Renewal never rewrites ownership.
+    """
+    async with _get_control_lock(execution_id):
+        record = await get_control_record(execution_id)
+
+        if record.state in TERMINAL_CONTROL_STATES:
+            return False, f"Execution is in terminal state ({record.state.value})", record
+        if record.state != ControlState.HUMAN_CONTROL:
+            return False, f"Execution is not under human control (currently {record.state.value})", record
+        if record.owner != client_id:
+            return False, "Browser control is exclusively held by another session", record
+        if lease_id and record.lease_id and record.lease_id != lease_id:
+            return False, "Mismatched or stale lease ID", record
+
+        now = time.time()
+        if record.lease_expires_at and now >= record.lease_expires_at:
+            return False, "Lease expired; take control again to resume", record
+
+        record.lease_expires_at = now + lease_duration_seconds
+        record.updated_at = now
+        await save_control_record(record)
+        return True, record.lease_id or "", record
+
+
 async def release_human_control(
     execution_id: str,
     client_id: str | None = None,

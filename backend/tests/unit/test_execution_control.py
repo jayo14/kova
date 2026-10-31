@@ -14,6 +14,7 @@ from app.engine.execution.control import (
     confirm_paused,
     acquire_human_takeover,
     release_human_control,
+    renew_human_control_lease,
     request_resume,
     confirm_resumed,
     validate_human_interaction,
@@ -301,5 +302,117 @@ async def test_command_pubsub_dispatch():
     assert len(received) == 2
     assert received[0]["command"] == "pause"
     assert received[1]["command"] == "resume"
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_extends_without_advancing_generation():
+    exec_id = "test-exec-lease-heartbeat"
+    await cleanup_control(exec_id)
+
+    await confirm_paused(exec_id)
+    ok, lease, rec = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=60
+    )
+    assert ok is True
+    first_expiry = rec.lease_expires_at
+
+    ok_renew, renewed_lease, rec_renew = await renew_human_control_lease(
+        exec_id, client_id="user-alice", lease_id=lease, lease_duration_seconds=600
+    )
+    assert ok_renew is True
+    assert renewed_lease == lease
+    assert rec_renew.generation == rec.generation
+    assert rec_renew.lease_expires_at > first_expiry
+    assert rec_renew.owner == "user-alice"
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_rejects_foreign_client():
+    exec_id = "test-exec-lease-foreign"
+    await cleanup_control(exec_id)
+
+    await confirm_paused(exec_id)
+    ok, lease, rec = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=60
+    )
+    assert ok is True
+
+    ok_renew, err, rec_renew = await renew_human_control_lease(
+        exec_id, client_id="user-bob", lease_id=lease
+    )
+    assert ok_renew is False
+    assert "another session" in err
+    assert rec_renew.owner == "user-alice"
+    assert rec_renew.lease_expires_at == rec.lease_expires_at
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_rejects_stale_lease_id():
+    exec_id = "test-exec-lease-stale"
+    await cleanup_control(exec_id)
+
+    await confirm_paused(exec_id)
+    ok, lease, _ = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=60
+    )
+    assert ok is True
+
+    ok_renew, err, _ = await renew_human_control_lease(
+        exec_id, client_id="user-alice", lease_id="stale-lease-token"
+    )
+    assert ok_renew is False
+    assert "lease" in err.lower()
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_never_revives_expired_lease():
+    exec_id = "test-exec-lease-expired-heartbeat"
+    await cleanup_control(exec_id)
+
+    await confirm_paused(exec_id)
+    ok, lease, _ = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=0.1
+    )
+    assert ok is True
+
+    await asyncio.sleep(0.15)
+
+    ok_renew, err, rec_renew = await renew_human_control_lease(
+        exec_id, client_id="user-alice", lease_id=lease
+    )
+    assert ok_renew is False
+    assert "expired" in err.lower()
+    assert rec_renew.state == ControlState.HUMAN_CONTROL
+    assert rec_renew.lease_expires_at < time.time()
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_lease_heartbeat_requires_human_control_state():
+    exec_id = "test-exec-lease-state-guard"
+    await cleanup_control(exec_id)
+
+    ok_renew, err, rec = await renew_human_control_lease(
+        exec_id, client_id="user-alice"
+    )
+    assert ok_renew is False
+    assert "not under human control" in err
+    assert rec.state == ControlState.RUNNING
+
+    await request_cancellation(exec_id)
+    ok_terminal, err_terminal, _ = await renew_human_control_lease(
+        exec_id, client_id="user-alice"
+    )
+    assert ok_terminal is False
+    assert "terminal" in err_terminal.lower()
 
     await cleanup_control(exec_id)

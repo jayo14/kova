@@ -189,3 +189,83 @@ async def test_viewport_stream_another_user_ticket(db_session: AsyncSession):
 
     assert ws.accepted is True
     assert ws.closed_code == 4003
+
+
+async def _open_stream_with_messages(db_session, execution_id, ticket, user_objs, messages):
+    for u in user_objs:
+        db_session.add(u)
+    await db_session.commit()
+
+    ws = DummyWebSocket(incoming=[_auth_message(ticket), *messages])
+    with patch("app.api.routes.viewport._pump_loop", new=AsyncMock()):
+        try:
+            await viewport_stream(ws, str(execution_id), db=db_session)
+        except Exception:
+            pass
+    return ws
+
+
+@pytest.mark.asyncio
+async def test_viewport_lease_heartbeat_renews(db_session: AsyncSession):
+    import json
+
+    from app.engine.execution.control import (
+        ControlState,
+        cleanup_control,
+        get_control_record,
+        set_control_state,
+    )
+
+    owner = User(id=uuid.uuid4(), email="owner-heartbeat@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.RUNNING.value)
+
+    ticket = create_ws_ticket(str(owner.id), ttl_seconds=30)
+    ws = await _open_stream_with_messages(
+        db_session,
+        execution.id,
+        ticket,
+        [owner, project, flow, execution],
+        [
+            json.dumps({"type": "takeover_accept"}),
+            json.dumps({"type": "takeover_heartbeat"}),
+        ],
+    )
+
+    types = [m["type"] for m in ws.sent_messages]
+    assert "takeover_granted" in types
+    assert "lease_renewed" in types
+    assert "lease_expired" not in types
+
+    rec = await get_control_record(str(execution.id))
+    assert rec.state == ControlState.HUMAN_CONTROL
+
+    await cleanup_control(str(execution.id))
+
+
+@pytest.mark.asyncio
+async def test_viewport_lease_heartbeat_without_control_is_rejected(db_session: AsyncSession):
+    import json
+
+    from app.engine.execution.control import cleanup_control
+
+    owner = User(id=uuid.uuid4(), email="owner-heartbeat-bad@kova.local")
+    project = Project(id=uuid.uuid4(), user_id=owner.id, name="Proj", base_url="https://example.com")
+    flow = Flow(id=uuid.uuid4(), project_id=project.id, name="Flow", steps=[])
+    execution = Execution(id=uuid.uuid4(), flow_id=flow.id, status=ExecutionStatus.RUNNING.value)
+
+    ticket = create_ws_ticket(str(owner.id), ttl_seconds=30)
+    ws = await _open_stream_with_messages(
+        db_session,
+        execution.id,
+        ticket,
+        [owner, project, flow, execution],
+        [json.dumps({"type": "lease_heartbeat", "lease_id": "nope"})],
+    )
+
+    types = [m["type"] for m in ws.sent_messages]
+    assert "lease_expired" in types
+    assert "lease_renewed" not in types
+
+    await cleanup_control(str(execution.id))
