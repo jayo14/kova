@@ -40,7 +40,7 @@ export function MissionDetailHeader({
       try {
         if (mission.active === false) {
           try {
-            await updateMission(mission.id, { active: true } as unknown);
+            await updateMission(mission.id, { active: true });
           } catch {
             // Ignore non-fatal update error
           }

@@ -14,12 +14,12 @@ describe("Run & Execution Control API Client", () => {
     const originalFetch = globalThis.fetch;
     let calledUrl = "";
     let calledMethod = "";
-    let calledBody: unknown = null;
+    let calledBody: Record<string, unknown> = {};
 
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       calledUrl = String(url);
       calledMethod = init?.method || "GET";
-      calledBody = init?.body ? JSON.parse(String(init.body)) : null;
+      calledBody = init?.body ? JSON.parse(String(init.body)) : {};
 
       return {
         ok: true,
@@ -110,13 +110,13 @@ describe("Run & Execution Control API Client", () => {
 
   test("execution control methods invoke respective endpoints", async () => {
     const originalFetch = globalThis.fetch;
-    const calls: { url: string; method: string; body: unknown }[] = [];
+    const calls: { url: string; method: string; body: Record<string, unknown> }[] = [];
 
     globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
       calls.push({
         url: String(url),
         method: init?.method || "GET",
-        body: init?.body ? JSON.parse(String(init.body)) : null,
+        body: init?.body ? JSON.parse(String(init.body)) : {},
       });
 
       return {

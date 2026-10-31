@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { getOrganization } from "@/lib/api/organization";
+import { getErrorMessage } from "@/lib/api/errors";
 
 interface AuditEvent {
   id: string;
@@ -56,7 +57,7 @@ export default function OrganizationAuditPage() {
       const data = await res.json();
       setEvents(data);
     } catch (err: unknown) {
-      setError(err.message || "Failed to fetch audit log");
+      setError(getErrorMessage(err, "Failed to fetch audit log"));
     } finally {
       setLoading(false);
     }

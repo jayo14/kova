@@ -13,6 +13,7 @@ import {
   type Subscription,
 } from "@/lib/api/billing";
 import { getUsage, type UsageSummary } from "@/lib/api/usage";
+import { getErrorMessage } from "@/lib/api/errors";
 
 interface BillingContentProps {
   user: {
@@ -44,7 +45,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
         if (usg) setUsage(usg);
         if (invs) setInvoices(invs);
       } catch (err: unknown) {
-        setError(err.message || "Failed to load billing details");
+        setError(getErrorMessage(err, "Failed to load billing details"));
       } finally {
         setLoading(false);
       }
@@ -60,7 +61,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
         window.location.href = res.checkout_url;
       }
     } catch (err: unknown) {
-      alert(err.message || "Failed to initiate checkout");
+      alert(getErrorMessage(err, "Failed to initiate checkout"));
       setActionLoading(null);
     }
   };
@@ -73,7 +74,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
         window.location.href = res.portal_url;
       }
     } catch (err: unknown) {
-      alert(err.message || "Failed to open billing portal");
+      alert(getErrorMessage(err, "Failed to open billing portal"));
       setActionLoading(null);
     }
   };

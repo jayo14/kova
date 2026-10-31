@@ -19,6 +19,7 @@ import {
   mapOrganizationError,
 } from "@/lib/api/organization";
 import { createCheckout } from "@/lib/api/billing";
+import { getErrorMessage } from "@/lib/api/errors";
 import { Button } from "@/components/ui/button";
 import { WorkspaceInfo } from "./workspace-info";
 import { MemberList } from "./member-list";
@@ -78,7 +79,7 @@ export function OrganizationContent({
       const res = await createCheckout(plan);
       if (res?.checkout_url) window.location.href = res.checkout_url;
     } catch (err: unknown) {
-      alert(err?.message || "Failed to initiate checkout");
+      alert(getErrorMessage(err, "Failed to initiate checkout"));
     } finally {
       setActionLoading(null);
     }

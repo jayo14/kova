@@ -365,6 +365,7 @@ export interface UpdateMissionInput {
   providesCapabilities?: string[];
   repeatability?: "repeatable" | "non_repeatable";
   resetStrategy?: string;
+  active?: boolean;
 }
 
 // ── Credentials ──────────────────────────────────────────

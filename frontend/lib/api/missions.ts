@@ -286,6 +286,7 @@ export async function updateMission(
   if (input.providesCapabilities !== undefined) patch.providesCapabilities = input.providesCapabilities;
   if (input.repeatability !== undefined) patch.repeatability = input.repeatability;
   if (input.resetStrategy !== undefined) patch.resetStrategy = input.resetStrategy;
+  if (input.active !== undefined) patch.active = input.active;
 
   const body = stripNulls(mapKeysToSnake(patch));
   try {

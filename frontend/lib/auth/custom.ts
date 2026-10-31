@@ -1,17 +1,31 @@
 import Cookies from "js-cookie";
 
-export type User = { id: string; email: string; name?: string; user_metadata?: unknown };
+export type UserMetadata = { name?: string; onboarding_step?: number };
+export type User = { id: string; email: string; name?: string; user_metadata?: UserMetadata };
 export type Session = { access_token: string; user: User };
+
+export type JwtPayload = {
+  sub?: string;
+  id?: string;
+  email?: string;
+  name?: string;
+  user_metadata?: UserMetadata;
+  exp?: number;
+};
 
 let _cachedUser: User | null = null;
 let _cachedToken: string | null = null;
 let _cachedUserExpiresAt = 0;
 let _lastRateLimitedAt = 0;
-let _inFlightUserPromise: Promise<{ data: { user: User | null }; error: unknown }> | null = null;
+let _inFlightUserPromise: Promise<{ data: { user: User | null }; error: Error | null }> | null = null;
 const USER_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_BACKOFF_MS = 30_000;
 
-function parseJwtPayload(token: string): unknown | null {
+function toError(err: unknown): Error {
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+function parseJwtPayload(token: string): JwtPayload | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
@@ -30,7 +44,7 @@ function parseJwtPayload(token: string): unknown | null {
 }
 
 export class CustomAuthClient {
-  private listeners: unknown[] = [];
+  private listeners: Array<(event: string, session: Session | null) => void> = [];
   
   public auth = {
     getUser: async () => {
@@ -58,7 +72,7 @@ export class CustomAuthClient {
         const payload = parseJwtPayload(token);
         if (payload && (payload.sub || payload.id)) {
           const fallbackUser: User = {
-            id: payload.sub || payload.id,
+            id: payload.sub || payload.id || "",
             email: payload.email || "",
             name: payload.user_metadata?.name || payload.name || undefined,
           };
@@ -90,7 +104,7 @@ export class CustomAuthClient {
             const payload = parseJwtPayload(token);
             if (payload && (payload.sub || payload.id)) {
               const fallbackUser: User = {
-                id: payload.sub || payload.id,
+                id: payload.sub || payload.id || "",
                 email: payload.email || "",
                 name: payload.user_metadata?.name || payload.name || undefined,
               };
@@ -101,7 +115,7 @@ export class CustomAuthClient {
             }
             return { data: { user: null }, error: new Error("Not logged in") };
           }
-          const user = await res.json();
+          const user = (await res.json()) as User;
           _cachedUser = user;
           _cachedToken = token;
           _cachedUserExpiresAt = Date.now() + USER_CACHE_TTL_MS;
@@ -111,13 +125,13 @@ export class CustomAuthClient {
           const payload = parseJwtPayload(token);
           if (payload && (payload.sub || payload.id)) {
             const fallbackUser: User = {
-              id: payload.sub || payload.id,
+              id: payload.sub || payload.id || "",
               email: payload.email || "",
               name: payload.user_metadata?.name || payload.name || undefined,
             };
             return { data: { user: fallbackUser }, error: null };
           }
-          return { data: { user: null }, error: err };
+          return { data: { user: null }, error: toError(err) };
         }
       })().finally(() => {
         _inFlightUserPromise = null;
@@ -144,7 +158,7 @@ export class CustomAuthClient {
           const payload = parseJwtPayload(token);
           if (payload && (payload.sub || payload.id)) {
             const fallbackUser: User = {
-              id: payload.sub || payload.id,
+              id: payload.sub || payload.id || "",
               email: payload.email || "",
               name: payload.name || undefined,
             };
@@ -154,11 +168,11 @@ export class CustomAuthClient {
         }
         return { data: { session: { access_token: token, user } }, error: null };
       } catch (err) {
-        return { data: { session: null }, error: err };
+        return { data: { session: null }, error: toError(err) };
       }
     },
     
-    signInWithPassword: async ({ email, password }: unknown) => {
+    signInWithPassword: async ({ email, password }: { email: string; password: string }) => {
       try {
         const res = await fetch("/api/v1/auth/login", {
           method: "POST",
@@ -172,11 +186,11 @@ export class CustomAuthClient {
         this.notify(data.session);
         return { data: { user: data.user, session: { access_token: data.access_token, user: data.user } }, error: null };
       } catch (err) {
-        return { data: { user: null }, error: err };
+        return { data: { user: null }, error: toError(err) };
       }
     },
     
-    signUp: async ({ email, password, options }: unknown) => {
+    signUp: async ({ email, password, options }: { email: string; password: string; options?: { data?: { name?: string } } }) => {
       try {
         const res = await fetch("/api/v1/auth/register", {
           method: "POST",
@@ -190,7 +204,7 @@ export class CustomAuthClient {
         this.notify(data.session);
         return { data: { user: data.user, session: { access_token: data.access_token, user: data.user } }, error: null };
       } catch (err) {
-        return { data: { user: null }, error: err };
+        return { data: { user: null }, error: toError(err) };
       }
     },
     
@@ -203,7 +217,7 @@ export class CustomAuthClient {
       return { error: null };
     },
     
-    onAuthStateChange: (callback: unknown) => {
+    onAuthStateChange: (callback: (event: string, session: Session | null) => void) => {
       this.listeners.push(callback);
       return {
         data: {
@@ -224,7 +238,7 @@ export class CustomAuthClient {
         if (!res.ok) return { data: { user: null }, error: new Error("Failed to send reset email") };
         return { data: { user: null }, error: null };
       } catch (err) {
-        return { data: { user: null }, error: err };
+        return { data: { user: null }, error: toError(err) };
       }
     },
     
@@ -236,7 +250,7 @@ export class CustomAuthClient {
       return { data: { session: null }, error: new Error("Invalid code or token") };
     },
     
-    updateUser: async (attrs: unknown) => {
+    updateUser: async (attrs: { password?: string; token?: string; email?: string; data?: Record<string, string> }) => {
       let token = "";
       if (typeof window !== "undefined") {
         token = Cookies.get("access_token") || "";
@@ -280,8 +294,8 @@ export class CustomAuthClient {
 
         const { data } = await this.auth.getUser();
         return { data: { user: data.user }, error: null };
-      } catch (err: unknown) {
-        return { data: { user: null }, error: err };
+      } catch (err) {
+        return { data: { user: null }, error: toError(err) };
       }
     },
     
@@ -303,8 +317,8 @@ export class CustomAuthClient {
         Cookies.remove("access_token", { path: "/" });
         this.notify(null);
         return { data: { user: null }, error: null };
-      } catch (err: unknown) {
-        return { data: { user: null }, error: err };
+      } catch (err) {
+        return { data: { user: null }, error: toError(err) };
       }
     },
 
@@ -319,7 +333,7 @@ export class CustomAuthClient {
     }
   };
 
-  private notify(session: unknown) {
+  private notify(session: Session | null) {
     this.listeners.forEach(cb => cb("SIGNED_IN", session));
   }
 }

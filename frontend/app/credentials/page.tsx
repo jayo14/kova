@@ -11,19 +11,20 @@ export const metadata: Metadata = {
   description: "Test accounts Kova can use when accessing your applications.",
 };
 
-interface CredentialsPageProps {
-  searchParams?: Promise<{
-    projectId?: string;
-    project?: string;
-  }>;
-}
+type CredentialsSearchParams = { projectId?: string; project?: string };
 
-export default async function CredentialsPage({ searchParams }: CredentialsPageProps) {
+export default async function CredentialsPage({
+  searchParams,
+}: {
+  params?: Promise<unknown>;
+  searchParams?: Promise<CredentialsSearchParams>;
+}) {
   const { session, user, organization } = await requireOrg("/credentials");
   const token = (await getAccessToken()) ?? session.access_token;
 
-  const resolvedParams = searchParams ? await searchParams : undefined;
-  const initialProjectId = resolvedParams?.projectId || resolvedParams?.project;
+  const resolvedParams = (await searchParams) ?? {};
+  const rawProjectId = resolvedParams.projectId ?? resolvedParams.project;
+  const initialProjectId = Array.isArray(rawProjectId) ? rawProjectId[0] : rawProjectId;
 
   const [credentials, projects] = await Promise.all([
     getCredentials(initialProjectId, token).catch(() => []),

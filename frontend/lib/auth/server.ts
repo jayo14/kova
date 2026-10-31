@@ -1,4 +1,4 @@
-import { createServerClient as createCustomServerClient } from "./custom-server";
+import { createServerClient as createCustomServerClient, type CookieToSet } from "./custom-server";
 import { cookies } from "next/headers";
 
 export async function createClient() {
@@ -12,11 +12,11 @@ export async function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet: unknown[]) {
+        setAll(cookiesToSet: CookieToSet[]) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            );
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options as Parameters<typeof cookieStore.set>[2]);
+            });
           } catch {
             // Server component — ignore
           }

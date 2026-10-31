@@ -16,19 +16,20 @@ export const metadata: Metadata = {
   description: "Product journeys mapped and monitored by Kova.",
 };
 
-interface FlowsPageProps {
-  searchParams?: Promise<{
-    projectId?: string;
-    project?: string;
-  }>;
-}
+type FlowsSearchParams = { projectId?: string; project?: string };
 
-export default async function FlowsPage({ searchParams }: FlowsPageProps) {
+export default async function FlowsPage({
+  searchParams,
+}: {
+  params?: Promise<unknown>;
+  searchParams?: Promise<FlowsSearchParams>;
+}) {
   const { session, user, organization } = await requireOrg("/flows");
   const token = (await getAccessToken()) ?? session.access_token;
 
-  const resolvedParams = searchParams ? await searchParams : undefined;
-  const initialProjectId = resolvedParams?.projectId || resolvedParams?.project;
+  const resolvedParams = (await searchParams) ?? {};
+  const rawProjectId = resolvedParams.projectId ?? resolvedParams.project;
+  const initialProjectId = Array.isArray(rawProjectId) ? rawProjectId[0] : rawProjectId;
 
   const [missions, projects] = await Promise.all([
     getMissions(undefined, token).catch(() => []),

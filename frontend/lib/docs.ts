@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { marked } from "marked";
+import { marked, type MarkedExtension } from "marked";
 
 export interface DocHeading {
   id: string;
@@ -224,8 +224,8 @@ marked.use({
           </a>
         </h${depth}>\n`;
     },
-  } as unknown,
-});
+  },
+} as MarkedExtension);
 
 export async function getDocBySlug(slugArray: string[]): Promise<DocPage | null> {
   const slug = slugArray.join("/");

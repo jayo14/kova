@@ -11,6 +11,7 @@ import {
   listTokens,
   type ApiToken,
 } from "@/lib/api/tokens";
+import { getErrorMessage } from "@/lib/api/errors";
 
 const AVAILABLE_SCOPES = [
   { id: "ci:validate", label: "ci:validate (Trigger CI runs & continuous validation)" },
@@ -63,7 +64,7 @@ export function TokensContent() {
       setDialogOpen(false);
       await loadTokens();
     } catch (err: unknown) {
-      alert(err.message || "Failed to create API token");
+      alert(getErrorMessage(err, "Failed to create API token"));
     } finally {
       setCreating(false);
     }
@@ -78,7 +79,7 @@ export function TokensContent() {
       await deleteToken(id);
       await loadTokens();
     } catch (err: unknown) {
-      alert(err.message || "Failed to revoke token");
+      alert(getErrorMessage(err, "Failed to revoke token"));
     } finally {
       setRevokingId(null);
     }

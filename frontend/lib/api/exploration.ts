@@ -14,7 +14,7 @@ import type {
   Credential,
 } from "@/lib/types";
 import { api, getApiBaseUrl, getBrowserSessionToken } from "./client";
-import { getErrorMessage } from "./errors";
+import { getErrorMessage, isApiError } from "./errors";
 import { backendToCredential, type BackendCredential } from "./credentials";
 import type { BackendFlow } from "./missions";
 
@@ -731,7 +731,7 @@ export async function startExploration(
         }
       } catch (err: unknown) {
         // Stop polling if session is not found (404) or on fatal abort
-        if (err?.status === 404 || (err?.message && String(err.message).includes("404"))) {
+        if ((isApiError(err) && err.status === 404) || getErrorMessage(err, "").includes("404")) {
           clearInterval(pollInterval);
         }
       }

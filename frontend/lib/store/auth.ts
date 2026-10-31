@@ -35,7 +35,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       initialized: true,
     });
 
-    supabase.auth.onAuthStateChange((_event: unknown, session: unknown) => {
+    supabase.auth.onAuthStateChange((_event, session) => {
       set({
         session,
         user: session?.user ?? null,
