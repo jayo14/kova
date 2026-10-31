@@ -112,100 +112,109 @@ async def _run_exploration_async(
         event_count = 0
         emit_lock = asyncio.Lock()
 
-        async def event_emitter(event_type: str, payload: dict):
-            nonlocal event_count
-            async with emit_lock:
+        async def _emit_write(event_type: str, payload: dict) -> None:
+            """Persist a single event using a short-lived session.
+
+            Never shares the caller's AsyncSession: each write opens its own
+            transaction so concurrent progress callbacks cannot cause
+            "Session is already flushing" errors on a shared session.
+            """
+            from app.infrastructure.database.session import async_session_factory
+            from app.modules.executions.reporting import sanitize_payload
+
+            async with async_session_factory() as write_db:
+                write_repo = ExplorationRepository(write_db)
+                write_event_repo = ExplorationEventRepository(write_db)
                 try:
-                    from app.modules.executions.reporting import sanitize_payload
                     sanitized_payload = sanitize_payload(payload) or {}
-                    await event_repo.create(
+                    await write_event_repo.create(
                         exploration_id=session_uuid,
                         event_type=event_type,
                         payload=sanitized_payload,
                     )
-                    event_count += 1
-                    await db.commit()
-
                     if event_type == "state_change" and isinstance(payload, dict):
                         status_val = payload.get("status")
                         if status_val:
                             try:
                                 status_enum = ExplorationStatus(status_val)
-                                await repo.update_status(
+                                await write_repo.update_status(
                                     session_id=session_uuid,
                                     status=status_enum,
                                 )
-                                await db.commit()
                             except ValueError:
                                 logger.warning("Unknown exploration status: %s", status_val)
                     elif event_type == "missions" and isinstance(payload, dict):
                         raw_missions = payload.get("missions")
                         if raw_missions is not None:
                             try:
-                                await repo.update_status(
+                                await write_repo.update_status(
                                     session_id=session_uuid,
                                     candidate_missions=raw_missions,
                                 )
-                                await db.commit()
                             except Exception as e:
                                 logger.warning("Failed to persist candidate missions: %s", e)
                     elif event_type == "discovery" and isinstance(payload, dict):
                         raw_discoveries = payload.get("discoveries")
                         if raw_discoveries is not None:
                             try:
-                                await repo.update_status(
+                                await write_repo.update_status(
                                     session_id=session_uuid,
                                     discoveries=raw_discoveries,
                                 )
-                                await db.commit()
                             except Exception as e:
                                 logger.warning("Failed to persist discoveries: %s", e)
                     elif event_type == "question" and isinstance(payload, dict):
                         raw_q = payload.get("question")
                         if raw_q is not None:
                             try:
-                                await repo.update_status(
+                                await write_repo.update_status(
                                     session_id=session_uuid,
                                     question=raw_q,
                                 )
-                                await db.commit()
                             except Exception as e:
                                 logger.warning("Failed to persist question: %s", e)
                     elif event_type == "auth.required" and isinstance(payload, dict):
                         raw_auth = payload.get("request") or payload
                         try:
-                            await repo.update_status(
+                            await write_repo.update_status(
                                 session_id=session_uuid,
                                 credential_request=raw_auth,
                             )
-                            await db.commit()
                         except Exception as e:
                             logger.warning("Failed to persist credential request: %s", e)
                     elif event_type == "budget.exceeded" and isinstance(payload, dict):
                         try:
-                            await repo.update_status(
+                            await write_repo.update_status(
                                 session_id=session_uuid,
                                 budget_used=payload.get("budget_used"),
                                 budget_cutoff=datetime.now(timezone.utc),
                             )
-                            await db.commit()
                         except Exception as e:
                             logger.warning("Failed to persist budget cutoff: %s", e)
                     elif event_type == "budget.progress" and isinstance(payload, dict):
                         try:
-                            await repo.update_status(
+                            await write_repo.update_status(
                                 session_id=session_uuid,
                                 budget_used=payload.get("budget_used"),
                             )
-                            await db.commit()
                         except Exception as e:
                             logger.warning("Failed to persist budget progress: %s", e)
+                    await write_db.commit()
                 except Exception as ex:
                     logger.warning("Failed to record event %s: %s", event_type, ex)
                     try:
-                        await db.rollback()
+                        await write_db.rollback()
                     except Exception:
                         pass
+
+        async def event_emitter(event_type: str, payload: dict):
+            nonlocal event_count
+            async with emit_lock:
+                try:
+                    await _emit_write(event_type, payload)
+                    event_count += 1
+                except Exception as ex:
+                    logger.warning("Failed to record event %s: %s", event_type, ex)
 
         engine = ExplorationEngine(
             exploration_id=session_uuid,
@@ -220,15 +229,25 @@ async def _run_exploration_async(
         exploration_task: asyncio.Task | None = None
 
         async def consume_control_commands():
-            """Apply live navigation and cancellation signals from Redis."""
-            async for message in subscribe_commands(session_id):
-                command = message.get("command")
-                if command == "navigate":
-                    await engine.navigate_browser(message.get("action", ""))
-                elif command == "pause" and exploration_task and not exploration_task.done():
-                    exploration_task.cancel()
-                elif command == "cancel" and exploration_task and not exploration_task.done():
-                    exploration_task.cancel()
+            """Apply live navigation and cancellation signals from Redis.
+
+            Non-fatal: any Redis or command error is logged as a warning.
+            A control-channel failure may disable pause/cancel but must not
+            fail or hide the exploration result.
+            """
+            try:
+                async for message in subscribe_commands(session_id):
+                    command = message.get("command")
+                    if command == "navigate":
+                        await engine.navigate_browser(message.get("action", ""))
+                    elif command == "pause" and exploration_task and not exploration_task.done():
+                        exploration_task.cancel()
+                    elif command == "cancel" and exploration_task and not exploration_task.done():
+                        exploration_task.cancel()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("Control command consumer failed for %s: %s", session_id, exc)
 
         async def report_budget_progress():
             while True:
@@ -426,7 +445,10 @@ async def _run_exploration_async(
             }
 
         except Exception as e:
-            logger.exception("Exploration flow failed for session %s", session_id)
+            try:
+                logger.exception("Exploration flow failed for session %s: %s", session_id, e)
+            except Exception:
+                logger.error("Exploration flow failed for session %s (logging failed)", session_id)
             engine.cancel_background()
             try:
                 if engine._browser:
@@ -454,10 +476,17 @@ async def _run_exploration_async(
         finally:
             for background_task in (control_task, budget_task, state_task):
                 background_task.cancel()
-                try:
-                    await background_task
-                except asyncio.CancelledError:
-                    pass
+            results = await asyncio.gather(
+                control_task, budget_task, state_task,
+                return_exceptions=True,
+            )
+            for task, result in zip((control_task, budget_task, state_task), results):
+                if isinstance(result, Exception):
+                    logger.warning(
+                        "Background task %s exited with error: %s",
+                        getattr(task, "_coro", task).__name__ if hasattr(task, "_coro") else task,
+                        result,
+                    )
             try:
                 if engine._browser and getattr(engine._browser, "is_started", False):
                     await engine._browser.close()

@@ -198,8 +198,54 @@ async def _get_redis() -> aioredis.Redis | None:
         _redis_checked = True
         _redis_available = False
         return None
+        return None
 
 
+_pubsub_redis: aioredis.Redis | None = None
+_pubsub_redis_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def _get_pubsub_redis() -> aioredis.Redis | None:
+    """Return a dedicated Redis client for pub/sub.
+
+    Pub/sub connections can stay idle for long periods, so they need
+    socket_timeout=None, health_check_interval, and socket_keepalive.
+    A separate client avoids competing with the shared command client.
+    """
+    global _pubsub_redis, _pubsub_redis_loop
+    loop = asyncio.get_running_loop()
+
+    if _pubsub_redis is not None and _pubsub_redis_loop is not None and _pubsub_redis_loop is not loop:
+        try:
+            await _pubsub_redis.aclose()
+        except Exception:
+            pass
+        _pubsub_redis = None
+        _pubsub_redis_loop = None
+
+    if _pubsub_redis is not None:
+        return _pubsub_redis
+
+    try:
+        kwargs: dict[str, Any] = {
+            "decode_responses": True,
+            "socket_connect_timeout": 5.0,
+            "socket_timeout": None,
+            "socket_keepalive": True,
+            "health_check_interval": 30,
+        }
+        if settings.REDIS_URL.startswith("rediss://"):
+            kwargs["ssl_cert_reqs"] = "none"
+            kwargs["ssl_check_hostname"] = False
+        client = aioredis.from_url(settings.REDIS_URL, **kwargs)
+        await asyncio.wait_for(client.ping(), timeout=5.0)
+        _pubsub_redis = client
+        _pubsub_redis_loop = loop
+        return _pubsub_redis
+    except Exception as exc:
+        logger.debug("Pub/sub Redis unavailable: %s", exc)
+        _pubsub_redis = None
+        return None
 
 
 def _state_key(execution_id: str) -> str:
@@ -898,31 +944,76 @@ async def publish_worker_command(execution_id: str, command: str, **data: Any) -
 
 
 async def subscribe_commands(execution_id: str) -> AsyncIterator[dict[str, Any]]:
-    """Subscribe to control commands. Yields command dictionaries."""
+    """Subscribe to control commands. Yields command dictionaries.
+
+    Uses a dedicated pub/sub Redis client with socket_timeout=None,
+    health_check_interval=30, and socket_keepalive so idle pub/sub
+    connections on managed rediss:// URLs do not time out. Implements
+    a reconnect loop with exponential backoff that resubscribes after
+    any disconnect.
+    """
     local_q: asyncio.Queue = asyncio.Queue()
     if execution_id not in _memory_command_subscribers:
         _memory_command_subscribers[execution_id] = set()
     _memory_command_subscribers[execution_id].add(local_q)
 
-    r = await _get_redis()
-    if r is not None:
-        pubsub = r.pubsub()
-        await pubsub.subscribe(f"{COMMAND_CHANNEL}:{execution_id}")
-        try:
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        yield json.loads(message["data"])
-                    except json.JSONDecodeError:
-                        pass
-        finally:
+    async def _run_pubsub():
+        backoff = 0.5
+        max_backoff = 30.0
+        while True:
+            r = await _get_pubsub_redis()
+            if r is None:
+                # Fall back to in-memory queue if Redis is unavailable
+                try:
+                    while True:
+                        msg = await local_q.get()
+                        yield msg
+                except asyncio.CancelledError:
+                    return
+                finally:
+                    _memory_command_subscribers.get(execution_id, set()).discard(local_q)
+                return
+
+            pubsub = r.pubsub()
             try:
-                await pubsub.unsubscribe(f"{COMMAND_CHANNEL}:{execution_id}")
-                await pubsub.aclose()
-            except Exception:
-                pass
-            _memory_command_subscribers.get(execution_id, set()).discard(local_q)
-    else:
+                await pubsub.subscribe(f"{COMMAND_CHANNEL}:{execution_id}")
+                backoff = 0.5  # reset on successful subscribe
+                async for message in pubsub.listen():
+                    if message["type"] == "message":
+                        try:
+                            yield json.loads(message["data"])
+                        except json.JSONDecodeError:
+                            pass
+            except asyncio.CancelledError:
+                try:
+                    await pubsub.unsubscribe(f"{COMMAND_CHANNEL}:{execution_id}")
+                except Exception:
+                    pass
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+                _memory_command_subscribers.get(execution_id, set()).discard(local_q)
+                return
+            except Exception as exc:
+                logger.warning("Pub/sub listen error for %s, retrying in %.1fs: %s", execution_id, backoff, exc)
+                try:
+                    await pubsub.unsubscribe(f"{COMMAND_CHANNEL}:{execution_id}")
+                except Exception:
+                    pass
+                try:
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+                await asyncio.sleep(backoff)
+                backoff = min(max_backoff, backoff * 2)
+                continue
+            finally:
+                _memory_command_subscribers.get(execution_id, set()).discard(local_q)
+
+    # If Redis is available, run pubsub loop; otherwise in-memory queue
+    r = await _get_pubsub_redis()
+    if r is None:
         # In-memory queue loop
         try:
             while True:
@@ -930,6 +1021,9 @@ async def subscribe_commands(execution_id: str) -> AsyncIterator[dict[str, Any]]
                 yield msg
         finally:
             _memory_command_subscribers.get(execution_id, set()).discard(local_q)
+    else:
+        async for msg in _run_pubsub():
+            yield msg
 
 
 async def set_execution_fail_on_healed(execution_id: str, fail_on_healed: bool) -> None:

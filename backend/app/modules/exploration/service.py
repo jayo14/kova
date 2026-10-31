@@ -91,6 +91,24 @@ class ExplorationService:
 
         queue = "kova-free"
         session = await self.repo.get_by_id(session_id)
+        if session is None:
+            logger.warning("Exploration session %s not found, skipping enqueue", session_id)
+            return
+        # Claim check: only enqueue if the session needs processing.
+        # CREATED = initial; AUTHENTICATING/DISCOVERING = resumable.
+        # Any other state means a task is already running or the session is done.
+        enqueuable = {
+            ExplorationStatus.CREATED.value,
+            ExplorationStatus.AUTHENTICATING.value,
+            ExplorationStatus.DISCOVERING.value,
+        }
+        if session.status not in enqueuable:
+            logger.info(
+                "Exploration %s already in %s, skipping enqueue",
+                session_id,
+                session.status,
+            )
+            return
         if session and session.project_id:
             project = await self.project_repo.get_by_id(session.project_id)
             if project and project.org_id:
