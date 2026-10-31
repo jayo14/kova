@@ -64,6 +64,9 @@ class EventTypes:
     CONTROL_CHANGED = "control.changed"
     HUMAN_CHECKPOINT_RAISED = "execution.human_checkpoint_raised"
     HUMAN_CHECKPOINT_RESOLVED = "execution.human_checkpoint_resolved"
+    RECONCILE_STARTED = "execution.reconcile_started"
+    RECONCILE_UNCERTAIN = "execution.reconcile_uncertain"
+    RECONCILE_COMPLETED = "execution.reconcile_completed"
 
 
     # Agent loop (AI layer — proposals and reasoning; never secrets)

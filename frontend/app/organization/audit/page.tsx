@@ -12,7 +12,7 @@ interface AuditEvent {
   event_type: string;
   action: string;
   target: string;
-  metadata: Record<string, any>;
+  metadata: Record<string, unknown>;
   created_at: string;
 }
 
@@ -55,7 +55,7 @@ export default function OrganizationAuditPage() {
       }
       const data = await res.json();
       setEvents(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(err.message || "Failed to fetch audit log");
     } finally {
       setLoading(false);

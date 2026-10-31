@@ -96,7 +96,7 @@ export function LiveViewport({
   const [showTakeoverDialog, setShowTakeoverDialog] = useState(false);
   const [controlState, setControlState] = useState<"agent" | "human">("agent");
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
-  const [checkpoint, setCheckpoint] = useState<{ type: string; description: string; details?: any } | null>(null);
+  const [checkpoint, setCheckpoint] = useState<{ type: string; description: string; details?: unknown } | null>(null);
   const [takeoverError, setTakeoverError] = useState<string | null>(null);
 
   const isHumanControlled = controlState === "human" || state === "user_control";

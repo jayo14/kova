@@ -13,6 +13,9 @@ from app.engine.execution.control import (
     request_pause,
     confirm_paused,
     acquire_human_takeover,
+    confirm_quiesced,
+    begin_reconcile,
+    confirm_reconciled,
     release_human_control,
     renew_human_control_lease,
     request_resume,
@@ -135,10 +138,13 @@ async def test_human_takeover_lease_expiration():
     exec_id = "test-exec-lease-expiry"
     await cleanup_control(exec_id)
 
-    # Client A acquires takeover with 0.1s TTL
+    # Client A acquires takeover with 0.1s TTL; the agent quiesces at the
+    # next safe boundary before the lease is live.
     ok_a, lease_a, rec_a = await acquire_human_takeover(exec_id, client_id="user-alice", lease_ttl_seconds=0.1)
     assert ok_a is True
     assert lease_a is not None
+    assert rec_a.state == ControlState.QUIESCING
+    rec_a = await confirm_quiesced(exec_id, outcome="known")
     assert rec_a.state == ControlState.HUMAN_CONTROL
 
     # Wait for lease to expire
@@ -414,5 +420,131 @@ async def test_lease_heartbeat_requires_human_control_state():
     )
     assert ok_terminal is False
     assert "terminal" in err_terminal.lower()
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_takeover_while_running_quiesces_then_grants():
+    exec_id = "test-exec-quiesce-grant"
+    await cleanup_control(exec_id)
+
+    before = await get_control_record(exec_id)
+    assert before.state == ControlState.RUNNING
+
+    ok, lease, rec = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=60
+    )
+    assert ok is True
+    assert rec.state == ControlState.QUIESCING
+    assert rec.generation > before.generation
+    assert await check_pause(exec_id) is True
+
+    allowed, reason = await validate_human_interaction(exec_id)
+    assert allowed is False
+    assert "QUIESCING" in reason
+
+    rec_ready = await confirm_quiesced(
+        exec_id, outcome="known", inflight_action="click", detail="step boundary"
+    )
+    assert rec_ready.state == ControlState.HUMAN_CONTROL
+    assert rec_ready.lease_id == lease
+    assert rec_ready.quiesce_report["outcome"] == "known"
+    assert rec_ready.quiesce_report["inflight_action"] == "click"
+    assert rec_ready.generation > rec.generation
+
+    allowed, _ = await validate_human_interaction(exec_id)
+    assert allowed is True
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_quiesce_rejects_unknown_outcome():
+    exec_id = "test-exec-quiesce-outcome-guard"
+    await cleanup_control(exec_id)
+    await acquire_human_takeover(exec_id, client_id="user-alice", lease_ttl_seconds=60)
+
+    with pytest.raises(ValueError):
+        await confirm_quiesced(exec_id, outcome="probably")
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_cancel_takeover_during_quiescing_returns_to_agent():
+    exec_id = "test-exec-quiesce-cancel"
+    await cleanup_control(exec_id)
+
+    ok, _, rec = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=60
+    )
+    assert ok is True and rec.state == ControlState.QUIESCING
+
+    released_ok, released_reason, released = await release_human_control(exec_id)
+    assert released_ok is True
+    assert "cancel" in released_reason.lower()
+    assert released.state == ControlState.RUNNING
+    assert released.owner == "agent"
+    assert released.lease_id is None
+    assert released.quiesce_report is None
+    assert released.generation > rec.generation
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_quiesce_with_expired_lease_keeps_agent_control():
+    exec_id = "test-exec-quiesce-expired-lease"
+    await cleanup_control(exec_id)
+
+    ok, _, rec = await acquire_human_takeover(
+        exec_id, client_id="user-alice", lease_ttl_seconds=0.1
+    )
+    assert ok is True and rec.state == ControlState.QUIESCING
+
+    await asyncio.sleep(0.15)
+
+    rec_done = await confirm_quiesced(exec_id, outcome="known")
+    assert rec_done.state == ControlState.RUNNING
+    assert rec_done.owner == "agent"
+    assert rec_done.lease_id is None
+    assert rec_done.quiesce_report is None
+
+    await cleanup_control(exec_id)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_lifecycle_clears_quiesce_report():
+    exec_id = "test-exec-reconcile-lifecycle"
+    await cleanup_control(exec_id)
+
+    await acquire_human_takeover(exec_id, client_id="user-alice", lease_ttl_seconds=60)
+    rec_human = await confirm_quiesced(
+        exec_id, outcome="uncertain", inflight_action="submit"
+    )
+    assert rec_human.state == ControlState.HUMAN_CONTROL
+
+    rec_resume = await confirm_resumed(exec_id)
+    assert rec_resume.state == ControlState.RUNNING
+
+    rec_reconciling = await begin_reconcile(exec_id)
+    assert rec_reconciling.state == ControlState.RECONCILING
+    assert rec_reconciling.generation > rec_resume.generation
+    assert rec_reconciling.quiesce_report["outcome"] == "uncertain"
+
+    # Takeover must not be granted while the agent re-observes.
+    ok, err, rec_blocked = await acquire_human_takeover(
+        exec_id, client_id="user-bob", lease_ttl_seconds=60
+    )
+    assert ok is False
+    assert "reconcil" in err.lower()
+    assert rec_blocked.state == ControlState.RECONCILING
+
+    rec_done = await confirm_reconciled(exec_id, replanned=True)
+    assert rec_done.state == ControlState.RUNNING
+    assert rec_done.owner == "agent"
+    assert rec_done.quiesce_report is None
+    assert rec_done.generation > rec_reconciling.generation
 
     await cleanup_control(exec_id)

@@ -689,7 +689,7 @@ export async function startExploration(
         const latest = await getExplorationSession(targetId, token);
         const normalizedState = normalizeExploreStatus(latest.status);
 
-        // Emit data events for any missed state BEFORE state_change
+        // Emit data events for unknown missed state BEFORE state_change
         if (latest.credential_request && normalizedState === "auth_required") {
           onEvent({ type: "auth_required", request: latest.credential_request });
           if (latest.error_message) {
@@ -729,7 +729,7 @@ export async function startExploration(
         ) {
           clearInterval(pollInterval);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Stop polling if session is not found (404) or on fatal abort
         if (err?.status === 404 || (err?.message && String(err.message).includes("404"))) {
           clearInterval(pollInterval);

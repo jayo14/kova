@@ -37,7 +37,7 @@ export function Navbar() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+    } = supabase.auth.onAuthStateChange((_event: unknown, session: unknown) => {
       setUser(session?.user ?? null);
     });
 

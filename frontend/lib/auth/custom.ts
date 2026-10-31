@@ -1,17 +1,17 @@
 import Cookies from "js-cookie";
 
-export type User = { id: string; email: string; name?: string; user_metadata?: any };
+export type User = { id: string; email: string; name?: string; user_metadata?: unknown };
 export type Session = { access_token: string; user: User };
 
 let _cachedUser: User | null = null;
 let _cachedToken: string | null = null;
 let _cachedUserExpiresAt = 0;
 let _lastRateLimitedAt = 0;
-let _inFlightUserPromise: Promise<{ data: { user: User | null }; error: any }> | null = null;
+let _inFlightUserPromise: Promise<{ data: { user: User | null }; error: unknown }> | null = null;
 const USER_CACHE_TTL_MS = 60_000;
 const RATE_LIMIT_BACKOFF_MS = 30_000;
 
-function parseJwtPayload(token: string): any | null {
+function parseJwtPayload(token: string): unknown | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
@@ -30,7 +30,7 @@ function parseJwtPayload(token: string): any | null {
 }
 
 export class CustomAuthClient {
-  private listeners: any[] = [];
+  private listeners: unknown[] = [];
   
   public auth = {
     getUser: async () => {
@@ -158,7 +158,7 @@ export class CustomAuthClient {
       }
     },
     
-    signInWithPassword: async ({ email, password }: any) => {
+    signInWithPassword: async ({ email, password }: unknown) => {
       try {
         const res = await fetch("/api/v1/auth/login", {
           method: "POST",
@@ -176,7 +176,7 @@ export class CustomAuthClient {
       }
     },
     
-    signUp: async ({ email, password, options }: any) => {
+    signUp: async ({ email, password, options }: unknown) => {
       try {
         const res = await fetch("/api/v1/auth/register", {
           method: "POST",
@@ -203,7 +203,7 @@ export class CustomAuthClient {
       return { error: null };
     },
     
-    onAuthStateChange: (callback: any) => {
+    onAuthStateChange: (callback: unknown) => {
       this.listeners.push(callback);
       return {
         data: {
@@ -214,7 +214,7 @@ export class CustomAuthClient {
       };
     },
 
-    resetPasswordForEmail: async (email: string, options?: any) => {
+    resetPasswordForEmail: async (email: string, options?: unknown) => {
       try {
         const res = await fetch("/api/v1/auth/reset-password", {
           method: "POST",
@@ -231,12 +231,12 @@ export class CustomAuthClient {
     exchangeCodeForSession: async (code: string) => {
       if (code) {
         Cookies.set("access_token", code, { expires: 1, path: "/" });
-        return { data: { session: { access_token: code, user: null as any } }, error: null };
+        return { data: { session: { access_token: code, user: null as unknown } }, error: null };
       }
       return { data: { session: null }, error: new Error("Invalid code or token") };
     },
     
-    updateUser: async (attrs: any) => {
+    updateUser: async (attrs: unknown) => {
       let token = "";
       if (typeof window !== "undefined") {
         token = Cookies.get("access_token") || "";
@@ -280,7 +280,7 @@ export class CustomAuthClient {
 
         const { data } = await this.auth.getUser();
         return { data: { user: data.user }, error: null };
-      } catch (err: any) {
+      } catch (err: unknown) {
         return { data: { user: null }, error: err };
       }
     },
@@ -303,7 +303,7 @@ export class CustomAuthClient {
         Cookies.remove("access_token", { path: "/" });
         this.notify(null);
         return { data: { user: null }, error: null };
-      } catch (err: any) {
+      } catch (err: unknown) {
         return { data: { user: null }, error: err };
       }
     },
@@ -319,7 +319,7 @@ export class CustomAuthClient {
     }
   };
 
-  private notify(session: any) {
+  private notify(session: unknown) {
     this.listeners.forEach(cb => cb("SIGNED_IN", session));
   }
 }

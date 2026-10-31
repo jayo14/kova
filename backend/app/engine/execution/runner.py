@@ -48,7 +48,7 @@ from app.engine.browser.executor import ActionExecutor
 from app.engine.browser.session import BrowserSession
 from app.engine.credentials.store import CredentialStore
 from app.engine.execution.context import ExecutionContext
-from app.engine.execution.state import ExecutionState
+from app.engine.execution.state import ExecutionState, InvalidTransitionError
 from app.engine.verification.verifier import Verifier
 from app.modules.executions.event_types import EventTypes
 from app.engine.execution.stream import publish_frame, publish_state
@@ -59,6 +59,9 @@ from app.engine.execution.control import (
     get_control_state,
     confirm_paused,
     confirm_resumed,
+    confirm_quiesced,
+    begin_reconcile,
+    confirm_reconciled,
     release_human_control,
     resolve_human_checkpoint,
     get_pending_input,
@@ -2549,7 +2552,12 @@ class FlowRunner:
         """
         rec = await get_control_record(execution_id)
         is_paused = (
-            rec.state in (ControlState.PAUSE_REQUESTED, ControlState.PAUSED, ControlState.HUMAN_CONTROL)
+            rec.state in (
+                ControlState.PAUSE_REQUESTED,
+                ControlState.PAUSED,
+                ControlState.HUMAN_CONTROL,
+                ControlState.QUIESCING,
+            )
             or await check_pause(execution_id)
         )
         if not is_paused:
@@ -2562,6 +2570,39 @@ class FlowRunner:
 
         # Flush pending telemetry before confirming paused state
         await self._emit_events(ctx, event_recorder)
+
+        # A human is taking over: this is a step boundary, so report honestly
+        # whether the agent was idle, finished a step normally, or was
+        # interrupted mid-action with unknown side effects.
+        if rec.state == ControlState.QUIESCING:
+            uncertain = bool(ctx.current_state.pop("action_outcome_uncertain", False))
+            inflight = ctx.current_state.pop("inflight_action", None)
+            outcome = "uncertain" if uncertain else "known"
+            detail = (
+                "Interrupted action has unknown effect; reconcile before repeating it"
+                if uncertain
+                else "Agent stopped at a step boundary; last action returned normally"
+            )
+            rec = await confirm_quiesced(
+                execution_id,
+                outcome=outcome,
+                inflight_action=inflight,
+                detail=detail,
+            )
+            ctx.record_event(EventTypes.EXECUTION_PAUSED, {
+                "reason": "human_takeover_quiesce",
+                "outcome": outcome,
+                "inflight_action": inflight,
+                "generation": rec.generation,
+            })
+            if rec.state != ControlState.HUMAN_CONTROL:
+                # Reserved lease expired before the handoff completed: the agent
+                # keeps control rather than waiting on an absent operator.
+                logger.warning(
+                    "Execution %s quiesced but takeover lease expired; agent keeps control",
+                    execution_id,
+                )
+                return False
 
         # Confirm paused in authoritative record
         if rec.state == ControlState.PAUSE_REQUESTED:
@@ -2658,8 +2699,44 @@ class FlowRunner:
         if rec.checkpoint:
             await resolve_human_checkpoint(execution_id)
 
+        # Reconcile before acting again: the page may have changed under us and
+        # an interrupted action may have had unknown side effects.
+        quiesce_report = rec.quiesce_report or {}
+        rec = await begin_reconcile(execution_id)
+        # The pause gate can fire from states that do not list RECONCILING as a
+        # successor; the control record already carries the reconciliation, so
+        # never fail the resume over an unavailable state tag.
+        try:
+            ctx.transition(ExecutionState.RECONCILING)
+        except InvalidTransitionError:
+            logger.debug(
+                "Execution %s cannot tag RECONCILING from %s; continuing",
+                execution_id,
+                ctx.state,
+            )
+        # The page moved on (and an interrupted action may have landed), so any
+        # plan and element references derived before the handoff are stale.
+        ctx.current_state["plan_invalidated"] = True
+        ctx.record_event(EventTypes.RECONCILE_STARTED, {
+            "generation": rec.generation,
+            "quiesce_outcome": quiesce_report.get("outcome"),
+        })
+        if quiesce_report.get("outcome") == "uncertain":
+            ctx.current_state["pre_resume_uncertain"] = True
+            ctx.current_state["uncertain_action"] = quiesce_report.get("inflight_action")
+            ctx.record_event(EventTypes.RECONCILE_UNCERTAIN, {
+                "inflight_action": quiesce_report.get("inflight_action"),
+                "detail": quiesce_report.get("detail"),
+                "url": browser.page.url if getattr(browser, "page", None) else "",
+            })
+            logger.warning(
+                "Execution %s resumed after an action with unknown outcome (%s); "
+                "inspecting the page before any repeat",
+                execution_id,
+                quiesce_report.get("inflight_action"),
+            )
+
         logger.info("Execution %s resuming; performing adaptive re-observation", execution_id)
-        ctx.transition(ExecutionState.RESUMING)
         ctx.control_state = "agent"
         ctx.record_event(EventTypes.EXECUTION_RESUMED, {"generation": rec.generation})
         page_url = browser.page.url if getattr(browser, "page", None) else ""
@@ -2693,6 +2770,22 @@ class FlowRunner:
         except Exception as e:
             logger.warning("Post-takeover observation failed: %s", e)
 
+        rec = await confirm_reconciled(
+            execution_id,
+            replanned=True,
+            detail=(
+                "Re-observed the live page after handoff"
+                if quiesce_report.get("outcome") != "uncertain"
+                else "Re-observed the live page after an action with unknown outcome"
+            ),
+        )
+        ctx.record_event(EventTypes.RECONCILE_COMPLETED, {
+            "generation": rec.generation,
+            "replanned": True,
+            "quiesce_outcome": quiesce_report.get("outcome"),
+        })
+        ctx.current_state.pop("pre_resume_uncertain", None)
+        ctx.current_state.pop("uncertain_action", None)
         ctx.transition(ExecutionState.RUNNING)
         page_url = browser.page.url if getattr(browser, "page", None) else ""
         await publish_state(execution_id, "executing", page_url, "", control="agent")

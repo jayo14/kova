@@ -86,7 +86,7 @@ export function formatFastApiDetail(detail: unknown): string | null {
 }
 
 /**
- * Maps any error or HTTP status code to a safe, user-friendly message.
+ * Maps unknown error or HTTP status code to a safe, user-friendly message.
  */
 export function getErrorMessage(err: unknown, fallback = "An unexpected error occurred."): string {
   if (isApiError(err)) {

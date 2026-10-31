@@ -237,7 +237,7 @@ export async function createMission(
     persona: input.persona ? { role: input.persona.trim() } : null,
     objective: input.objective?.trim() || input.name.trim(),
     steps: (input.steps ?? []).map(formatStepForBackend),
-    // Pass the structured condition through verbatim. Adding any wrapper here
+    // Pass the structured condition through verbatim. Adding unknown wrapper here
     // (e.g. {description: ...}) breaks verification downstream.
     successCondition: input.successCondition ?? null,
     preconditions: input.preconditions ?? null,

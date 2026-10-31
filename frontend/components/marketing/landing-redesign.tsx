@@ -27,7 +27,7 @@ export function LandingRedesign() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
+    } = supabase.auth.onAuthStateChange((_event: unknown, session: unknown) => {
       if (mounted) {
         setUser(session?.user ?? null);
       }

@@ -171,7 +171,7 @@ export interface RunControlStatus {
   run_id: string;
   state?: string;
   status?: string;
-  executions?: Record<string, any>;
+  executions?: Record<string, unknown>;
   active_executions?: number;
   paused_executions?: number;
   resumed_executions?: number;

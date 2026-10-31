@@ -254,7 +254,7 @@ export function ProjectSettingsDialog({
                   <select
                     className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-body-xs"
                     value={envTarget}
-                    onChange={(e) => setEnvTarget(e.target.value as any)}
+                    onChange={(e) => setEnvTarget(e.target.value as unknown)}
                     disabled={isPending || isDeleting}
                   >
                     <option value="development">Development</option>

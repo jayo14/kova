@@ -1,5 +1,5 @@
 export class CustomServerClient {
-  constructor(private cookiesRef: any) {}
+  constructor(private cookiesRef: unknown) {}
 
   public auth = {
     getUser: async () => {
@@ -8,7 +8,7 @@ export class CustomServerClient {
       const cookies = typeof this.cookiesRef.getAll === 'function' 
         ? this.cookiesRef.getAll() 
         : [];
-      const tokenObj = cookies.find((c: any) => c.name === "access_token");
+      const tokenObj = cookies.find((c: unknown) => c.name === "access_token");
       const token = tokenObj?.value;
       
       if (!token) return { data: { user: null }, error: null };
@@ -29,12 +29,12 @@ export class CustomServerClient {
       if (!userRes.data.user) return { data: { session: null }, error: null };
       
       const cookies = typeof this.cookiesRef.getAll === 'function' ? this.cookiesRef.getAll() : [];
-      const tokenObj = cookies.find((c: any) => c.name === "access_token");
+      const tokenObj = cookies.find((c: unknown) => c.name === "access_token");
       return { data: { session: { access_token: tokenObj?.value, user: userRes.data.user } }, error: null };
     }
   };
 }
 
-export function createServerClient(url: string, key: string, options: any) {
+export function createServerClient(url: string, key: string, options: unknown) {
   return new CustomServerClient(options.cookies);
 }

@@ -112,7 +112,7 @@ export function subscribeToExecution(
         }
       }
 
-      // Replay any events missed during disconnection
+      // Replay unknown events missed during disconnection
       for (const ev of existingEvents) {
         if (!seenEventIds.has(ev.id)) {
           seenEventIds.add(ev.id);

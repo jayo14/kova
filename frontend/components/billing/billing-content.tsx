@@ -43,7 +43,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
         if (sub) setSubscription(sub);
         if (usg) setUsage(usg);
         if (invs) setInvoices(invs);
-      } catch (err: any) {
+      } catch (err: unknown) {
         setError(err.message || "Failed to load billing details");
       } finally {
         setLoading(false);
@@ -59,7 +59,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
       if (res?.checkout_url) {
         window.location.href = res.checkout_url;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(err.message || "Failed to initiate checkout");
       setActionLoading(null);
     }
@@ -72,7 +72,7 @@ export function BillingContent({ user, organizationName }: BillingContentProps) 
       if (res?.portal_url) {
         window.location.href = res.portal_url;
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(err.message || "Failed to open billing portal");
       setActionLoading(null);
     }

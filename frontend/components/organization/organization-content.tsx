@@ -77,7 +77,7 @@ export function OrganizationContent({
     try {
       const res = await createCheckout(plan);
       if (res?.checkout_url) window.location.href = res.checkout_url;
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(err?.message || "Failed to initiate checkout");
     } finally {
       setActionLoading(null);

@@ -110,7 +110,7 @@ export function exploreReducer(
 
     case "ADD_ACTIVITY": {
       const isNewActive = action.activity.status === "active";
-      // If a new activity arrives as active, automatically mark any prior active activities as completed
+      // If a new activity arrives as active, automatically mark unknown prior active activities as completed
       const updatedPrior = isNewActive
         ? state.activities.map((a) =>
             a.status === "active" && a.id !== action.activity.id

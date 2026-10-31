@@ -57,7 +57,7 @@ const VALID_FRONTEND_STATUSES = new Set<ExecutionStatus>([
 ]);
 
 /**
- * Normalizes any backend or raw status string (e.g. "RUNNING", "Running", "browser_ready")
+ * Normalizes unknown backend or raw status string (e.g. "RUNNING", "Running", "browser_ready")
  * into the canonical frontend ExecutionStatus.
  */
 export function normalizeExecutionStatus(

@@ -35,7 +35,7 @@ export function TokensContent() {
     try {
       const data = await listTokens();
       setTokens(data);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Failed to load tokens", err);
     } finally {
       setLoading(false);
@@ -62,7 +62,7 @@ export function TokensContent() {
       setSelectedScopes(["ci:validate"]);
       setDialogOpen(false);
       await loadTokens();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(err.message || "Failed to create API token");
     } finally {
       setCreating(false);
@@ -77,7 +77,7 @@ export function TokensContent() {
     try {
       await deleteToken(id);
       await loadTokens();
-    } catch (err: any) {
+    } catch (err: unknown) {
       alert(err.message || "Failed to revoke token");
     } finally {
       setRevokingId(null);

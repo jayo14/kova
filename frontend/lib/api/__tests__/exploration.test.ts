@@ -56,7 +56,7 @@ describe("Exploration Session and Sandboxed Credential Management", () => {
 
   it("throws 'No active exploration session' only when no session id is provided or stored", async () => {
     setCurrentSessionId(null);
-    const events: any[] = [];
+    const events: unknown[] = [];
 
     await assert.rejects(
       async () => {
@@ -93,7 +93,7 @@ describe("Exploration Session and Sandboxed Credential Management", () => {
     setCurrentSessionId(null);
     assert.equal(getCurrentSessionId(), null);
 
-    const events: any[] = [];
+    const events: unknown[] = [];
     // Even if fetch fails because backend is not running, it must NOT throw "No active exploration session"
     // Instead it transitions state to authenticating, updates currentSessionId, and catches the network error.
     await submitCredential(

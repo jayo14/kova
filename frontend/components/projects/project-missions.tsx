@@ -60,7 +60,7 @@ export function ProjectMissions({
           </h2>
         </div>
         <p className="text-body-sm text-muted-foreground mb-5 leading-relaxed">
-          Kova hasn&apos;t mapped any missions for this product yet.
+          Kova hasn&apos;t mapped unknown missions for this product yet.
         </p>
         <Link
           href={`/explore?projectId=${projectId}&url=${encodeURIComponent(baseUrl)}`}

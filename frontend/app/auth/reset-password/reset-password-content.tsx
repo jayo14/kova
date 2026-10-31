@@ -32,7 +32,7 @@ export function ResetPasswordContent() {
     const supabase = createClient();
     supabase.auth
       .exchangeCodeForSession(code)
-      .then(({ error: authError }: any) => {
+      .then(({ error: authError }: unknown) => {
         if (authError) {
           setPhase("error");
           setError(formatAuthError(authError));
@@ -69,7 +69,7 @@ export function ResetPasswordContent() {
 
     try {
       const supabase = createClient();
-      const { error: authError }: any = await supabase.auth.updateUser({
+      const { error: authError }: unknown = await supabase.auth.updateUser({
         password: cleanPassword,
       });
 
@@ -80,7 +80,7 @@ export function ResetPasswordContent() {
       }
 
       setPhase("success");
-    } catch (err: any) {
+    } catch (err: unknown) {
       setError(formatAuthError(err));
       setStatus("idle");
     }

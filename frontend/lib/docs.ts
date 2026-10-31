@@ -224,7 +224,7 @@ marked.use({
           </a>
         </h${depth}>\n`;
     },
-  } as any,
+  } as unknown,
 });
 
 export async function getDocBySlug(slugArray: string[]): Promise<DocPage | null> {

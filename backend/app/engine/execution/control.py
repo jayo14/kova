@@ -88,6 +88,10 @@ class ControlRecord:
     lease_expires_at: float | None = None
     generation: int = 1
     checkpoint: dict[str, Any] | None = None
+    # Outcome report recorded when the agent reaches a safe boundary during a
+    # human takeover: {"outcome": "idle"|"known"|"uncertain", "inflight_action",
+    # "detail", "at", "generation"}. Survives until reconciliation completes.
+    quiesce_report: dict[str, Any] | None = None
     updated_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict[str, Any]:
@@ -99,6 +103,7 @@ class ControlRecord:
             "lease_expires_at": self.lease_expires_at,
             "generation": self.generation,
             "checkpoint": self.checkpoint,
+            "quiesce_report": self.quiesce_report,
             "updated_at": self.updated_at,
         }
 
@@ -117,6 +122,7 @@ class ControlRecord:
             lease_expires_at=data.get("lease_expires_at"),
             generation=int(data.get("generation", 1)),
             checkpoint=data.get("checkpoint"),
+            quiesce_report=data.get("quiesce_report"),
             updated_at=float(data.get("updated_at", time.time())),
         )
 
@@ -266,7 +272,13 @@ async def request_pause(execution_id: str, requester: str = "user", reason: str 
             logger.warning("Cannot pause execution %s in terminal state %s", execution_id, record.state)
             return record
 
-        if record.state in (ControlState.PAUSED, ControlState.HUMAN_CONTROL):
+        if record.state in (
+            ControlState.PAUSED,
+            ControlState.HUMAN_CONTROL,
+            ControlState.QUIESCING,
+            ControlState.RECONCILING,
+            ControlState.PAUSE_REQUESTED,
+        ):
             return record
 
         record.state = ControlState.PAUSE_REQUESTED
@@ -281,6 +293,8 @@ async def confirm_paused(execution_id: str) -> ControlRecord:
     async with _get_control_lock(execution_id):
         record = await get_control_record(execution_id)
         if record.state in TERMINAL_CONTROL_STATES:
+            return record
+        if record.state in (ControlState.QUIESCING, ControlState.HUMAN_CONTROL, ControlState.RECONCILING):
             return record
 
         record.state = ControlState.PAUSED
@@ -300,7 +314,11 @@ async def acquire_human_takeover(
 
     Enforces exclusive ownership:
     - If another human already owns control, returns (False, error, record).
-    - If running, immediately transitions to PAUSE_REQUESTED and initiates safe takeover.
+    - If the agent is idle at a safe boundary (PAUSED), grants HUMAN_CONTROL at once.
+    - If the agent may still be acting (RUNNING / PAUSE_REQUESTED / ...), enters
+      QUIESCING: the lease is reserved for the caller but human input stays
+      rejected until the agent reports a safe boundary via ``confirm_quiesced``.
+    - RECONCILING rejects the request: the agent is already re-observing.
     - Issues a unique lease_id and advances the generation counter.
     """
     if lease_ttl_seconds is not None:
@@ -312,11 +330,15 @@ async def acquire_human_takeover(
         if record.state in TERMINAL_CONTROL_STATES:
             return False, f"Execution is in terminal state ({record.state.value})", record
 
-        # Check if already held by another client
         now = time.time()
-        if record.state == ControlState.HUMAN_CONTROL:
+
+        if record.state == ControlState.RECONCILING:
+            return False, "Agent is reconciling the browser after handoff; try again shortly", record
+
+        # Check if already held (or reserved) by another client
+        if record.state in (ControlState.HUMAN_CONTROL, ControlState.QUIESCING):
             if record.owner == client_id:
-                # Same client renewing lease
+                # Same client renewing lease, including while quiescing
                 record.lease_expires_at = now + lease_duration_seconds
                 record.updated_at = now
                 await save_control_record(record)
@@ -327,7 +349,8 @@ async def acquire_human_takeover(
 
         # Grant takeover
         lease_id = f"lease_{uuid.uuid4().hex[:12]}"
-        record.state = ControlState.HUMAN_CONTROL
+        pending = record.state not in (ControlState.PAUSED, ControlState.HUMAN_CONTROL)
+        record.state = ControlState.QUIESCING if pending else ControlState.HUMAN_CONTROL
         record.owner = client_id
         record.lease_id = lease_id
         record.lease_expires_at = now + lease_duration_seconds
@@ -336,13 +359,141 @@ async def acquire_human_takeover(
 
         await publish_command(
             execution_id,
-            "human_takeover_granted",
+            "human_takeover_quiescing" if pending else "human_takeover_granted",
             client_id=client_id,
             lease_id=lease_id,
             generation=record.generation,
         )
         return True, lease_id, record
 
+
+async def confirm_quiesced(
+    execution_id: str,
+    outcome: str = "known",
+    inflight_action: str | None = None,
+    detail: str = "",
+) -> ControlRecord:
+    """Worker reports that the agent reached a safe boundary during takeover.
+
+    ``outcome`` must be honest:
+    - ``"idle"``: no action was running when the handoff was requested.
+    - ``"known"``: the last action completed and its result is trustworthy.
+    - ``"uncertain"``: an action was interrupted and its effect is unknown; the
+      reconciler must inspect the page before repeating anything.
+
+    Transitions QUIESCING -> HUMAN_CONTROL and records the report for the
+    reconciler. If the reserved lease already expired, control returns to the
+    agent instead of granting it to an absent operator.
+    """
+    if outcome not in ("idle", "known", "uncertain"):
+        raise ValueError(f"Invalid quiesce outcome: {outcome!r}")
+
+    async with _get_control_lock(execution_id):
+        record = await get_control_record(execution_id)
+        if record.state in TERMINAL_CONTROL_STATES:
+            return record
+
+        if record.state != ControlState.QUIESCING:
+            logger.warning(
+                "confirm_quiesced ignored for %s: state is %s", execution_id, record.state.value
+            )
+            return record
+
+        now = time.time()
+        if record.lease_expires_at and now >= record.lease_expires_at:
+            record.state = ControlState.RUNNING
+            record.owner = "agent"
+            record.lease_id = None
+            record.lease_expires_at = None
+            record.generation += 1
+            await save_control_record(record)
+            await publish_command(
+                execution_id, "human_takeover_expired", generation=record.generation
+            )
+            return record
+
+        record.quiesce_report = {
+            "outcome": outcome,
+            "inflight_action": inflight_action,
+            "detail": detail,
+            "at": now,
+            "generation": record.generation,
+            "reserved_lease_id": record.lease_id,
+        }
+        record.state = ControlState.HUMAN_CONTROL
+        record.generation += 1
+        await save_control_record(record)
+        await publish_command(
+            execution_id,
+            "human_takeover_granted",
+            client_id=record.owner,
+            lease_id=record.lease_id,
+            generation=record.generation,
+            quiesce_outcome=outcome,
+        )
+        return record
+
+
+async def begin_reconcile(execution_id: str) -> ControlRecord:
+    """Enter RECONCILING while the agent re-observes the live page after handoff."""
+    async with _get_control_lock(execution_id):
+        record = await get_control_record(execution_id)
+        if record.state in TERMINAL_CONTROL_STATES:
+            return record
+        if record.state == ControlState.RECONCILING:
+            return record
+        if record.state == ControlState.QUIESCING:
+            return record
+
+        record.state = ControlState.RECONCILING
+        record.owner = "agent"
+        record.lease_id = None
+        record.lease_expires_at = None
+        record.generation += 1
+        await save_control_record(record)
+        await publish_command(
+            execution_id, "reconciling", generation=record.generation
+        )
+        return record
+
+
+async def confirm_reconciled(
+    execution_id: str,
+    replanned: bool = True,
+    detail: str = "",
+) -> ControlRecord:
+    """Finish reconciliation: RUNNING again, with the handoff report archived.
+
+    The quiesce report is cleared so a later takeover cannot mistake a stale
+    outcome for the current one; it is echoed in the published command instead.
+    """
+    async with _get_control_lock(execution_id):
+        record = await get_control_record(execution_id)
+        if record.state in TERMINAL_CONTROL_STATES:
+            return record
+        if record.state != ControlState.RECONCILING:
+            logger.warning(
+                "confirm_reconciled ignored for %s: state is %s", execution_id, record.state.value
+            )
+            return record
+
+        report = record.quiesce_report or {}
+        record.state = ControlState.RUNNING
+        record.owner = "agent"
+        record.lease_id = None
+        record.lease_expires_at = None
+        record.quiesce_report = None
+        record.generation += 1
+        await save_control_record(record)
+        await publish_command(
+            execution_id,
+            "reconciled",
+            generation=record.generation,
+            replanned=replanned,
+            quiesce_outcome=report.get("outcome"),
+            detail=detail,
+        )
+        return record
 
 
 async def renew_human_control_lease(
@@ -362,7 +513,7 @@ async def renew_human_control_lease(
 
         if record.state in TERMINAL_CONTROL_STATES:
             return False, f"Execution is in terminal state ({record.state.value})", record
-        if record.state != ControlState.HUMAN_CONTROL:
+        if record.state not in (ControlState.HUMAN_CONTROL, ControlState.QUIESCING):
             return False, f"Execution is not under human control (currently {record.state.value})", record
         if record.owner != client_id:
             return False, "Browser control is exclusively held by another session", record
@@ -386,6 +537,8 @@ async def release_human_control(
 ) -> tuple[bool, str, ControlRecord]:
     """Release human control lease and transition to RESUME_REQUESTED.
 
+    Releases issued while the takeover is still QUIESCING cancel the pending
+    handoff and put the agent straight back to RUNNING, since it never stopped.
     Validates lease ownership if provided.
     """
     async with _get_control_lock(execution_id):
@@ -394,25 +547,36 @@ async def release_human_control(
         if record.state in TERMINAL_CONTROL_STATES:
             return False, "Execution already terminated", record
 
-        if record.state not in (ControlState.HUMAN_CONTROL, ControlState.PAUSED, ControlState.PAUSE_REQUESTED):
+        if record.state not in (
+            ControlState.HUMAN_CONTROL,
+            ControlState.QUIESCING,
+            ControlState.PAUSED,
+            ControlState.PAUSE_REQUESTED,
+        ):
             return False, f"Execution not in human control or paused (currently {record.state.value})", record
 
         if lease_id and record.lease_id and record.lease_id != lease_id:
             return False, "Mismatched or stale lease ID", record
 
-        record.state = ControlState.RESUME_REQUESTED
+        pending_handoff = record.state == ControlState.QUIESCING
+        record.state = ControlState.RUNNING if pending_handoff else ControlState.RESUME_REQUESTED
         record.owner = "agent"
         record.lease_id = None
         record.lease_expires_at = None
+        record.quiesce_report = None
         record.generation += 1
         await save_control_record(record)
 
         await publish_command(
             execution_id,
-            "resume",
+            "takeover_cancelled" if pending_handoff else "resume",
             generation=record.generation,
         )
-        return True, "Control returned to agent", record
+        return True, (
+            "Takeover cancelled; control remains with agent"
+            if pending_handoff
+            else "Control returned to agent"
+        ), record
 
 
 
@@ -461,8 +625,18 @@ async def raise_human_checkpoint(
         record = await get_control_record(execution_id)
         if record.state in TERMINAL_CONTROL_STATES:
             return record
+        if record.state in (ControlState.QUIESCING, ControlState.RECONCILING):
+            logger.info(
+                "Skipping checkpoint %s for %s: handoff in progress (%s)",
+                checkpoint_type,
+                execution_id,
+                record.state.value,
+            )
+            return record
 
-        record.state = ControlState.PAUSED
+        already_human = record.state == ControlState.HUMAN_CONTROL
+        if not already_human:
+            record.state = ControlState.PAUSED
         cp_dict: dict[str, Any] = {
             "type": checkpoint_type,
             "description": description,
@@ -473,7 +647,8 @@ async def raise_human_checkpoint(
             cp_dict.update(checkpoint)
             cp_dict["raised_at"] = cp_dict.get("raised_at", time.time())
         record.checkpoint = cp_dict
-        record.generation += 1
+        if not already_human:
+            record.generation += 1
 
         await save_control_record(record)
 
@@ -564,6 +739,8 @@ async def validate_human_interaction(
     record = await get_control_record(execution_id)
 
     if record.state != ControlState.HUMAN_CONTROL:
+        if record.state == ControlState.QUIESCING:
+            return False, "Cannot interact: browser handoff is still in progress (QUIESCING)"
         return False, f"Cannot interact: execution is in {record.state.value} state (not HUMAN_CONTROL)"
 
     if record.lease_expires_at and time.time() > record.lease_expires_at:
@@ -665,7 +842,12 @@ async def get_control_state(execution_id: str) -> str:
 async def check_pause(execution_id: str) -> bool:
     """Check if execution should pause or enter human control."""
     record = await get_control_record(execution_id)
-    return record.state in (ControlState.PAUSE_REQUESTED, ControlState.PAUSED, ControlState.HUMAN_CONTROL)
+    return record.state in (
+        ControlState.PAUSE_REQUESTED,
+        ControlState.PAUSED,
+        ControlState.HUMAN_CONTROL,
+        ControlState.QUIESCING,
+    )
 
 
 async def wait_for_resume(execution_id: str, timeout: float = 300.0) -> bool:

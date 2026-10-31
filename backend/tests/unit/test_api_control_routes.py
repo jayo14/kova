@@ -30,6 +30,7 @@ from app.api.routes.viewport import (
 from app.engine.execution.control import (
     ControlState,
     cleanup_control,
+    confirm_quiesced,
     get_control_record,
     get_pending_input,
 )
@@ -89,10 +90,15 @@ async def test_execution_rest_control_lifecycle(test_user, test_execution):
             user=test_user,
             db=db,
         )
-        assert takeover_res.state == "HUMAN_CONTROL"
+        assert takeover_res.state in ("QUIESCING", "HUMAN_CONTROL")
         assert takeover_res.owner == str(test_user.id)
         assert takeover_res.lease_id is not None
         lease_id = takeover_res.lease_id
+
+        # Simulate the worker reporting a safe boundary so control becomes human.
+        await confirm_quiesced(exec_id, outcome="known")
+        rec = await get_control_record(exec_id)
+        takeover_res.generation = rec.generation
 
         # 4. Competing takeover attempt by another user is rejected with 409
         other_user = User(email="other@example.com", name="Other", password_hash="pw")
