@@ -2428,6 +2428,110 @@ class FlowRunner:
         except Exception as e:
             logger.debug("Failed to get pending input: %s", e)
 
+    # Deterministic operator instructions per human-only challenge class. The
+    # agent never attempts to satisfy these itself; it hands control over.
+    HUMAN_CHALLENGE_GUIDANCE = {
+        "captcha_bot_check": "Complete the bot-protection challenge in the live view.",
+        "mfa_push": "Approve the push notification on your authenticator device.",
+        "passkey": "Use your passkey or security key to continue.",
+        "payment_prompt": "Review and confirm the payment prompt in the live view.",
+    }
+
+    async def _enforce_human_challenge_gate(
+        self,
+        ctx: ExecutionContext,
+        browser: BrowserSession,
+        step_index: int,
+        event_recorder: Callable | None,
+    ) -> None:
+        """Pause for human-only challenges instead of trying to solve them.
+
+        Detection is deterministic (generic DOM/text signals only). The agent
+        never solves, bypasses or evades a CAPTCHA, MFA push, passkey or payment
+        prompt — it hands control to a human and keeps the browser on the
+        challenge page. At most two handoffs are allowed per checkpoint; after
+        that the run is BLOCKED with an explicit error rather than looping.
+        """
+        if not getattr(browser, "page", None) or not getattr(browser, "is_started", False):
+            return
+
+        from app.engine.browser.auth import detect_human_challenge
+        from app.engine.execution.control import raise_human_checkpoint
+
+        try:
+            challenge = await detect_human_challenge(browser.page, browser.page.url)
+        except Exception as detect_err:
+            logger.debug("Human challenge detection failed: %s", detect_err)
+            return
+
+        if challenge is None:
+            return
+
+        current_url = getattr(browser.page, "url", "")
+        guidance = self.HUMAN_CHALLENGE_GUIDANCE.get(
+            challenge.kind, "Complete the verification step in the live view."
+        )
+
+        for attempt in range(1, 3):
+            if await is_cancel_requested(ctx.execution_id):
+                return
+            try:
+                await raise_human_checkpoint(
+                    execution_id=ctx.execution_id,
+                    checkpoint_type=challenge.kind,
+                    description=(
+                        f"{guidance} Kova will resume automatically once it is cleared."
+                    ),
+                    details={
+                        "url": current_url,
+                        "challenge": challenge.kind,
+                        "confidence": challenge.confidence,
+                        "evidence": challenge.evidence,
+                        "step": step_index,
+                        "attempt": attempt,
+                    },
+                )
+            except Exception as checkpoint_err:
+                logger.warning("Failed to raise human checkpoint: %s", checkpoint_err)
+                return
+
+            ctx.record_event(EventTypes.HUMAN_CHECKPOINT_RAISED, {
+                "checkpoint_type": challenge.kind,
+                "step": step_index,
+                "url": current_url,
+                "description": guidance,
+                "attempt": attempt,
+            })
+            await self._emit_events(ctx, event_recorder)
+
+            resumed = await self._check_and_handle_pause(
+                ctx, browser, ctx.execution_id, event_recorder
+            )
+            # Cancellation takes priority: do not raise (that would report
+            # FAILED) — the step-boundary cancel gate owns the CANCELLED path.
+            if not resumed or await is_cancel_requested(ctx.execution_id):
+                return
+
+            try:
+                challenge = await detect_human_challenge(browser.page, browser.page.url)
+            except Exception as detect_err:
+                logger.debug("Post-resume challenge detection failed: %s", detect_err)
+                return
+            if challenge is None:
+                return
+            current_url = getattr(browser.page, "url", "")
+
+        try:
+            ctx.transition(ExecutionState.BLOCKED)
+        except Exception:
+            ctx.state = ExecutionState.BLOCKED
+        raise ExecutionError(
+            "Human verification was required but the challenge remained unresolved "
+            "after two handoffs.",
+            error_code="HUMAN_CHALLENGE_UNRESOLVED",
+            state=ctx.state.value if hasattr(ctx.state, "value") else str(ctx.state),
+        )
+
     async def _check_and_handle_pause(
         self,
         ctx: ExecutionContext,
@@ -2885,6 +2989,12 @@ class FlowRunner:
             "observation": observation,
         })
         await self._emit_events(ctx, event_recorder)
+
+        # Human-only challenges (CAPTCHA, MFA push, passkey, payment) must be
+        # handed to a person — never solved or bypassed by the agent.
+        await self._enforce_human_challenge_gate(ctx, browser, step_index, event_recorder)
+        if await is_cancel_requested(ctx.execution_id):
+            return
 
         # Map old/string format to new format if needed
         raw_action = self._normalize_step(step, target_url=ctx.target_url)

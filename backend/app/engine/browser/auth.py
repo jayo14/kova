@@ -14,7 +14,7 @@ import re
 from urllib.parse import urlparse
 from typing import Any
 
-from app.engine.ai.schemas import AuthPageClassification
+from app.engine.ai.schemas import AuthPageClassification, HumanChallengeClassification
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +101,10 @@ class AuthSignalBundle:
     oauth_button_texts: list[str] = field(default_factory=list)
     magic_link_form_markers: list[str] = field(default_factory=list)
     submit_button_texts: list[str] = field(default_factory=list)
+    captcha_markers: list[str] = field(default_factory=list)
+    mfa_push_markers: list[str] = field(default_factory=list)
+    passkey_markers: list[str] = field(default_factory=list)
+    payment_markers: list[str] = field(default_factory=list)
     url: str = ""
 
 
@@ -125,6 +129,10 @@ async def observe_auth_signals(page: Any, url: str | None = None) -> AuthSignalB
     oauth_button_texts: list[str] = []
     magic_link_form_markers: list[str] = []
     submit_button_texts: list[str] = []
+    captcha_markers: list[str] = []
+    mfa_push_markers: list[str] = []
+    passkey_markers: list[str] = []
+    payment_markers: list[str] = []
 
     if page is not None and hasattr(page, "locator"):
         # Password inputs
@@ -215,6 +223,90 @@ async def observe_auth_signals(page: Any, url: str | None = None) -> AuthSignalB
         except Exception:
             pass
 
+        # CAPTCHA / bot-check widgets. Only visible interactive widgets count:
+        # invisible auto-solving variants must not force a human pause.
+        try:
+            captcha_loc = page.locator(
+                'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], '
+                'iframe[src*="turnstile" i], iframe[title*="captcha" i], '
+                '[class*="captcha" i], [id*="captcha" i], [data-sitekey]'
+            )
+            count = captcha_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = captcha_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    captcha_markers.append("captcha_widget")
+                    break
+        except Exception:
+            pass
+
+        # Payment / card entry prompts
+        try:
+            pay_loc = page.locator(
+                'input[autocomplete="cc-number"], input[autocomplete="cc-csc"], '
+                'input[name*="card_number" i], input[name*="cardnumber" i], '
+                'input[id*="card_number" i], input[name*="cvc" i], input[name*="cvv" i]'
+            )
+            count = pay_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = pay_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if vis:
+                    payment_markers.append("card_field")
+                    break
+        except Exception:
+            pass
+
+        # Interactive control markers (push approval, passkey). These are
+        # phrased generically and never tied to a specific provider.
+        push_terms = [
+            "approve on your phone",
+            "approve the sign-in",
+            "approve sign in",
+            "check your phone",
+            "push notification",
+            "notification sent",
+            "tap yes",
+            "verify it's you",
+            "confirm it's you",
+        ]
+        passkey_terms = ["passkey", "security key", "biometric", "use your device"]
+        try:
+            ctrl_loc = page.locator('button, [role="button"], a, input[type="submit"]')
+            count = ctrl_loc.count()
+            if inspect.isawaitable(count):
+                count = await count
+            for i in range(count):
+                el = ctrl_loc.nth(i)
+                vis = el.is_visible(timeout=300)
+                if inspect.isawaitable(vis):
+                    vis = await vis
+                if not vis:
+                    continue
+                txt_call = el.inner_text(timeout=300)
+                if inspect.isawaitable(txt_call):
+                    txt_raw = await txt_call
+                else:
+                    txt_raw = txt_call or ""
+                lower = (txt_raw or "").strip().lower()
+                if not lower:
+                    continue
+                if any(t in lower for t in push_terms):
+                    mfa_push_markers.append(lower)
+                if any(t in lower for t in passkey_terms):
+                    passkey_markers.append(lower)
+        except Exception:
+            pass
+
         # Buttons and submit markers
         try:
             btn_loc = page.locator('button, [role="button"], input[type="submit"]')
@@ -256,6 +348,10 @@ async def observe_auth_signals(page: Any, url: str | None = None) -> AuthSignalB
         oauth_button_texts=oauth_button_texts,
         magic_link_form_markers=magic_link_form_markers,
         submit_button_texts=submit_button_texts,
+        captcha_markers=captcha_markers,
+        mfa_push_markers=mfa_push_markers,
+        passkey_markers=passkey_markers,
+        payment_markers=payment_markers,
         url=current_url,
     )
 
@@ -327,6 +423,61 @@ def classify_auth_page(bundle: AuthSignalBundle) -> AuthPageClassification:
         confidence=1.0,
         reasoning="No authentication inputs, credentials, or auth endpoint patterns detected.",
     )
+
+
+def classify_human_challenge(bundle: AuthSignalBundle) -> HumanChallengeClassification | None:
+    """Classify a human-only challenge that the agent must not attempt to solve.
+
+    Detection is deterministic and generic (DOM markers only). Precedence puts
+    gating bot checks first, because they block every other path on the page.
+    A passkey option that sits next to a usable password form is not blocking
+    and is therefore not treated as a challenge.
+    """
+    if bundle.captcha_markers:
+        return HumanChallengeClassification(
+            kind="captcha_bot_check",
+            confidence=1.0,
+            description="A CAPTCHA or bot-verification challenge is blocking this page.",
+            evidence={"markers": bundle.captcha_markers[:3]},
+        )
+
+    if bundle.payment_markers:
+        return HumanChallengeClassification(
+            kind="payment_prompt",
+            confidence=1.0,
+            description="A payment or card-detail prompt requires a human decision.",
+            evidence={"markers": bundle.payment_markers[:3]},
+        )
+
+    if bundle.mfa_push_markers:
+        return HumanChallengeClassification(
+            kind="mfa_push",
+            confidence=1.0,
+            description="Multi-factor approval needs to be confirmed by the account owner.",
+            evidence={"markers": bundle.mfa_push_markers[:3]},
+        )
+
+    if (
+        bundle.passkey_markers
+        and bundle.visible_password_input_count == 0
+        and bundle.visible_otp_input_count == 0
+    ):
+        return HumanChallengeClassification(
+            kind="passkey",
+            confidence=0.9,
+            description="Sign-in requires a passkey or security key held by the account owner.",
+            evidence={"markers": bundle.passkey_markers[:3]},
+        )
+
+    return None
+
+
+async def detect_human_challenge(page: Any, url: str | None = None) -> HumanChallengeClassification | None:
+    """Observe the live page and return a human-only challenge if one is present."""
+    if page is None:
+        return None
+    bundle = await observe_auth_signals(page, url)
+    return classify_human_challenge(bundle)
 
 
 async def is_auth_page(page: Any, url: str | None = None) -> bool:

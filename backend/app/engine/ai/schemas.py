@@ -321,6 +321,25 @@ class AuthPageClassification(BaseModel):
     reasoning: str = ""
 
 
+class HumanChallengeClassification(BaseModel):
+    """A human-only challenge that must never be automated.
+
+    CAPTCHA/bot checks, MFA push approvals, passkey and payment prompts cannot
+    be solved or evaded by the agent. They pause the run and hand control to the
+    operator.
+    """
+
+    kind: Literal[
+        "captcha_bot_check",
+        "mfa_push",
+        "passkey",
+        "payment_prompt",
+    ]
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    description: str = ""
+    evidence: dict[str, Any] = Field(default_factory=dict)
+
+
 class SubmitButtonProposal(BaseModel):
     """Proposal for form submit button selector."""
 
