@@ -751,27 +751,38 @@ class OpenAICompatibleProvider(AIProvider):
                             model=model, task_type=str(task_type),
                             latency_ms=latency_ms, tokens_used=tokens_used, success=True,
                         ))
+                        logger.info(
+                            "AI call succeeded: model=%s task=%s latency=%.1fms tokens=%d",
+                            model, task_type, latency_ms, tokens_used,
+                        )
                         return result
                     except AIProviderError:
                         # One repair retry: ask model to return only valid JSON
-                        repaired = await _repair_retry(
-                            client=client,
-                            base_url=self._base_url,
-                            headers=headers,
-                            model=model,
-                            system=system,
-                            prompt=prompt,
-                            schema=schema,
-                            temperature=ai_settings.AI_TEMPERATURE,
-                            max_tokens=ai_settings.AI_MAX_OUTPUT_TOKENS,
-                            per_attempt_timeout=attempt_timeout,
-                        )
+                        repair_remaining = self._total_budget - (time.time() - start_time)
+                        repaired = None
+                        if repair_remaining > 0:
+                            repaired = await _repair_retry(
+                                client=client,
+                                base_url=self._base_url,
+                                headers=headers,
+                                model=model,
+                                system=system,
+                                prompt=prompt,
+                                schema=schema,
+                                temperature=ai_settings.AI_TEMPERATURE,
+                                max_tokens=ai_settings.AI_MAX_OUTPUT_TOKENS,
+                                per_attempt_timeout=min(attempt_timeout, repair_remaining),
+                            )
                         if repaired is not None:
                             await _model_circuit_breaker.record_success(model)
                             await _record_call(CallRecord(
                                 model=model, task_type=str(task_type),
                                 latency_ms=latency_ms, tokens_used=tokens_used, success=True,
                             ))
+                            logger.info(
+                                "AI call succeeded after repair: model=%s task=%s latency=%.1fms tokens=%d",
+                                model, task_type, latency_ms, tokens_used,
+                            )
                             return repaired
                         # Parse failed and repair failed — mark failure and continue
                         await _model_circuit_breaker.record_failure(model, status_code=None)
@@ -782,6 +793,10 @@ class OpenAICompatibleProvider(AIProvider):
                             latency_ms=latency_ms, tokens_used=tokens_used,
                             success=False, failure_reason="invalid_json",
                         ))
+                        logger.warning(
+                            "AI call failed (invalid JSON): model=%s task=%s latency=%.1fms",
+                            model, task_type, latency_ms,
+                        )
                         continue
 
                 except (KeyError, IndexError, ValueError) as e:
