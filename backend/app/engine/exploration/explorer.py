@@ -3173,20 +3173,17 @@ class ExplorationEngine:
         if ai_reasoner and (route_map or interactive_elements) and mission_count < max_missions:
             try:
                 # Feed synthesis the observed SiteMap + capabilities from Prompt 4
-                # exploration instead of landing-page text. Budgeted timeout.
-                ai_journeys_result = await asyncio.wait_for(
-                    ai_reasoner.synthesize_journeys(
-                        base_url=current_url,
-                        title=title,
-                        goal=self.goal,
-                        persona=persona_name,
-                        routes=route_map[:8],
-                        site_map=site_map,
-                        capabilities=agent_capabilities or [],
-                        max_journeys=max_missions - mission_count,
-                        time_budget_seconds=30.0,
-                    ),
-                    timeout=30.0,
+                # exploration instead of landing-page text. Budgeted timeout managed by AI provider.
+                ai_journeys_result = await ai_reasoner.synthesize_journeys(
+                    base_url=current_url,
+                    title=title,
+                    goal=self.goal,
+                    persona=persona_name,
+                    routes=route_map[:8],
+                    site_map=site_map,
+                    capabilities=agent_capabilities or [],
+                    max_journeys=max_missions - mission_count,
+                    time_budget_seconds=ai_settings.AI_TOTAL_BUDGET_SECONDS,
                 )
                 if ai_journeys_result and ai_journeys_result.journeys:
                     self._ai_recommendation_reason = ai_journeys_result.recommendation_reason
@@ -3240,7 +3237,7 @@ class ExplorationEngine:
                         target.recommended = True
                     mission_count = len(missions)
             except asyncio.TimeoutError:
-                logger.warning("AI journey synthesis timed out after 25s, falling back to heuristics")
+                logger.warning("AI journey synthesis timed out within budget (%.1fs), falling back to heuristics", ai_settings.AI_TOTAL_BUDGET_SECONDS)
             except Exception as e:
                 err_msg = str(e) or type(e).__name__
                 logger.warning("AI journey synthesis failed, falling back to heuristics: %s", err_msg)

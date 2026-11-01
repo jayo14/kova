@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 from app.engine.ai.memory import AgentMemory
 from app.engine.ai.observation import build_semantic_observation
 from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
-from app.engine.ai.provider import AIProvider, AIProviderError
+from app.engine.ai.provider import AIProvider, AIProviderError, TaskType
 from app.engine.ai.schemas import (
     ActionProposal,
     AIGeneratedJourney,
@@ -382,13 +382,12 @@ class AgentReasoner:
         )
 
         try:
-            return await asyncio.wait_for(
-                self.provider.generate_structured(system, user_prompt, AIGeneratedJourneyList),
-                timeout=time_budget_seconds,
+            return await self.provider.generate_structured(
+                system,
+                user_prompt,
+                AIGeneratedJourneyList,
+                task_type=TaskType.JOURNEY_SYNTHESIS,
             )
-        except asyncio.TimeoutError:
-            logger.warning("AI journey synthesis timed out after %.0fs", time_budget_seconds)
-            return None
         except AIProviderError as e:
             logger.warning("AI journey synthesis failed: %s", e)
             return None
