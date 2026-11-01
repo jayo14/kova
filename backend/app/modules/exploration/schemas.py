@@ -49,6 +49,7 @@ class DiscoveredMission(BaseModel):
     capability_id: str | None = None
     control_hints: list[str] = Field(default_factory=list, description="Observed control labels the executor resolves at run time.")
     is_core: bool = False
+    repaired: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -63,6 +63,7 @@ export function ExplorePage() {
     setQuestion,
     setDiscoveries,
     setMissions,
+    setAiSynthesisFailed,
     updateMission,
     setMissionCreated,
     addScreenshot,
@@ -150,13 +151,14 @@ export function ExplorePage() {
           setDiscoveries(event.discoveries);
           break;
         case "missions":
-          setMissions(event.missions, event.recommendation);
+          setMissions(event.missions, event.recommendation, event.ai_synthesis_failed);
           break;
         case "ai_synthesis_failed":
+          setAiSynthesisFailed(true);
           addActivity({
             id: `ai-fail-${Date.now()}`,
             status: "failed",
-            message: `AI Journey Synthesis Warning: ${event.error || "Model error"}. Falling back to grounded heuristic journeys.`,
+            message: event.message || "AI planning unavailable: showing basic page checks only",
           });
           break;
         case "error":
@@ -172,7 +174,7 @@ export function ExplorePage() {
           break;
       }
     },
-    [addActivity, transition, addScreenshot, setPage, setAuthRequired, setQuestion, setDiscoveries, setMissions, fail, setAuthMode, state.state]
+    [addActivity, transition, addScreenshot, setPage, setAuthRequired, setQuestion, setDiscoveries, setMissions, setAiSynthesisFailed, fail, setAuthMode, state.state]
   );
 
   const handleEventRef = useRef(handleEvent);
@@ -879,6 +881,8 @@ export function ExplorePage() {
               projectName={cleanProjectName}
               sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
               projectId={resolvedProjectId || getCurrentProjectId() || undefined}
+              isBasicChecks={state.aiSynthesisFailed}
+              onRetry={() => handleSubmit({ rawInput: state.url || initialUrl || "", url: state.url || initialUrl, goal: null })}
               onRun={handleRunMissions}
               onOpenProject={handleOpenProject}
               onUpdateMission={updateMission}
@@ -896,7 +900,7 @@ export function ExplorePage() {
             className="shadow-xl font-medium px-6 py-3 rounded-full flex items-center gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <MaterialIcon name="auto_awesome" size={20} />
-            <span>Review {state.missions.length} Flows</span>
+            <span>Review {state.missions.length} {state.aiSynthesisFailed ? "Basic Checks" : "Flows"}</span>
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse ml-1" />
           </Button>
         </div>

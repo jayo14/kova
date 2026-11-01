@@ -16,6 +16,8 @@ interface MissionSuggestionsProps {
   projectName?: string;
   sessionId?: string;
   projectId?: string;
+  isBasicChecks?: boolean;
+  onRetry?: () => void;
   onRun: (missionIds: string[], parallel: boolean) => void;
   onOpenProject?: () => void;
   onUpdateMission?: (mission: SuggestedMission) => void;
@@ -28,6 +30,8 @@ export function MissionSuggestions({
   projectName,
   sessionId,
   projectId,
+  isBasicChecks,
+  onRetry,
   onRun,
   onOpenProject,
   onUpdateMission,
@@ -135,22 +139,52 @@ export function MissionSuggestions({
 
   return (
     <div className="w-full max-w-2xl mx-auto animate-in fade-in zoom-in-95 duration-300">
+      {/* Fallback Banner when AI Synthesis Fails */}
+      {isBasicChecks && (
+        <div className="mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-2.5">
+            <MaterialIcon name="warning" size={20} className="text-amber-400 shrink-0" />
+            <span className="text-body-sm font-medium">
+              AI planning unavailable: showing basic page checks only
+            </span>
+          </div>
+          {onRetry && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onRetry}
+              className="border-amber-500/40 text-amber-100 hover:bg-amber-500/20 font-medium shrink-0 h-8"
+            >
+              <MaterialIcon name="refresh" size={16} className="mr-1.5" />
+              Retry AI Planning
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Editorial Header */}
       <div className="text-center mb-8">
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-3 py-1 text-caption text-muted-foreground mb-4">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-600" />
-          <span>{projectName ? `${projectName} is ready` : "Exploration complete"}</span>
+          <span>{projectName ? `${projectName} is ready` : isBasicChecks ? "Basic checks complete" : "Exploration complete"}</span>
         </div>
 
         <h2 className="text-h2 font-semibold text-foreground mb-2">
           {missions.length === 0
-            ? "No executable flows discovered."
+            ? (isBasicChecks ? "No basic page checks discovered." : "No executable flows discovered.")
+            : isBasicChecks
+            ? `Basic Page Checks (${missions.length})`
             : `I mapped ${missions.length} user flow${missions.length > 1 ? "s" : ""}.`}
         </h2>
 
         {recommendation ? (
           <p className="text-body-sm text-muted-foreground max-w-lg mx-auto leading-relaxed">
             {recommendation}
+          </p>
+        ) : isBasicChecks ? (
+          <p className="text-body-sm text-muted-foreground">
+            AI planning unavailable: showing basic page checks only. Review the automated checks below.
           </p>
         ) : (
           <p className="text-body-sm text-muted-foreground">
@@ -197,19 +231,19 @@ export function MissionSuggestions({
         <div>
           <p className="text-body-sm font-medium text-foreground">
             {missions.length === 0
-              ? "Zero flows discovered"
+              ? (isBasicChecks ? "Zero basic checks discovered" : "Zero flows discovered")
               : selected.size === 0
-              ? "No flow selected"
+              ? (isBasicChecks ? "No check selected" : "No flow selected")
               : selectedRunnable.length > 0
-              ? `Ready to verify ${selectedRunnable.length} flow${selectedRunnable.length > 1 ? "s" : ""}`
-              : `${selectedBlocked.length} flow${selectedBlocked.length > 1 ? "s" : ""} selected (blocked by prerequisites)`}
+              ? `Ready to verify ${selectedRunnable.length} ${isBasicChecks ? "basic check" : "flow"}${selectedRunnable.length > 1 ? (isBasicChecks ? "s" : "s") : ""}`
+              : `${selectedBlocked.length} ${isBasicChecks ? "check" : "flow"}${selectedBlocked.length > 1 ? "s" : ""} selected (blocked by prerequisites)`}
           </p>
           <p className="text-caption text-muted-foreground">
             {missions.length === 0
-              ? "No executable workflows were discovered on this application."
+              ? (isBasicChecks ? "No basic checks were discovered on this application." : "No executable workflows were discovered on this application.")
               : selectedRunnable.length === 0 && selectedBlocked.length > 0
-              ? "Selected flows require test credentials or external authentication before execution."
-              : "Kova will run the steps autonomously and generate visual proof (screenshots & step logs)"}
+              ? (isBasicChecks ? "Selected checks require test credentials before execution." : "Selected flows require test credentials or external authentication before execution.")
+              : (isBasicChecks ? "Kova will run basic checks autonomously and generate visual proof" : "Kova will run the steps autonomously and generate visual proof (screenshots & step logs)")}
           </p>
         </div>
 

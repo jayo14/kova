@@ -45,3 +45,25 @@
 - id: saucedemo_practice
   url: https://www.saucedemo.com/
   permission_source: https://docs.saucelabs.com/web-apps/automated-testing/selenium/sample-scripts/
+- id: dripp
+  name: Dripp
+  url: https://dripp.pxxl.click/
+  permission_source: https://dripp.pxxl.click/
+  labeled_expected_journeys:
+    - browse a product list
+    - open a product
+    - add to cart
+    - view cart
+    - start checkout
+    - contact-form validation
+  acceptance_minimum_journeys: 5
+- id: huntly
+  name: Huntly
+  url: https://huntly-0pgj.onrender.com/
+  permission_source: https://huntly-0pgj.onrender.com/
+  labeled_expected_journeys:
+    - signup validation
+    - login with wrong credentials
+    - "'Get started' leads to signup"
+    - pricing plans visible with functional buttons
+  acceptance_minimum_journeys: 4

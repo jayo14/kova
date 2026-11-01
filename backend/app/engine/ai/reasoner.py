@@ -278,16 +278,17 @@ class AgentReasoner:
             return None
 
         # Compact representation of observed page states (SiteMap nodes): forms with fields,
-        # primary actions, and interactive controls. Chunk if needed to stay within budget.
+        # primary actions, interactive controls, and key sections (pricing, products, forms).
         compact_states = []
         for node in (site_map or [])[:40]:
             forms_summary = []
-            for f in (node.get("forms") or [])[:6]:
+            for f in (node.get("forms") or [])[:10]:
                 fields = []
-                for field in (f.get("fields") or f.get("inputs") or [])[:8]:
+                for field in (f.get("fields") or f.get("inputs") or [])[:12]:
                     fields.append({
                         "name": field.get("name") or field.get("label") or "",
                         "type": field.get("type", "text"),
+                        "required": bool(field.get("required")),
                     })
                 forms_summary.append({
                     "action": f.get("action") or f.get("id") or "",
@@ -299,15 +300,18 @@ class AgentReasoner:
                     "label": a.get("name") or a.get("text") or "",
                     "type": a.get("type") or a.get("role") or "",
                 }
-                for a in (node.get("primary_actions") or [])[:10]
+                for a in (node.get("primary_actions") or [])[:25]
             ]
             controls_summary = [
                 {
                     "label": el.get("name") or el.get("text") or "",
                     "type": el.get("type") or el.get("role") or "",
                 }
-                for el in (node.get("interactive_elements") or [])[:15]
+                for el in (node.get("interactive_elements") or node.get("elements") or [])[:40]
             ]
+            key_sections_summary = node.get("key_sections") or []
+            page_text_summary = node.get("page_summary") or node.get("text_summary") or page_summary or ""
+
             compact_states.append({
                 "url": node.get("url") or node.get("url_norm") or "",
                 "title": node.get("title"),
@@ -315,6 +319,8 @@ class AgentReasoner:
                 "forms": forms_summary,
                 "primary_actions": actions_summary,
                 "controls": controls_summary,
+                "key_sections": key_sections_summary,
+                "page_summary": page_text_summary[:2000] if page_text_summary else "",
             })
 
         compact_routes = [
@@ -324,7 +330,7 @@ class AgentReasoner:
                 "category": r.get("category"),
                 "requires_auth": r.get("requires_auth", False),
             }
-            for r in (routes or [])[:20]
+            for r in (routes or [])[:25]
             if r.get("path")
         ]
 
@@ -343,46 +349,49 @@ class AgentReasoner:
 
         system = (
             "You are an expert QA and product automation architect. Synthesize HIGH-VALUE, "
-            "PURPOSEFUL user journeys that test real features of the web application.\\n\\n"
-            "GROUNDING RULES (non-negotiable):\\n"
-            "1. BASE EVERY JOURNEY ON OBSERVED EVIDENCE ONLY: use the page states, forms with "
-            "their fields, primary actions, controls, routes, and discovered capabilities "
-            "provided below. Never invent pages, controls, or domain concepts not observed.\\n"
-            "2. JOURNEYS ARE GOALS, NOT SCRIPTS: each journey declares an objective, preconditions\\n"
-            "(needs_login? needs_data?), a concrete observable expected outcome, a risk level,\\n"
-            "and evidence refs. Do NOT ask the model to invent CSS selectors; steps reference\\n"
-            "observed control labels (control_hints) that the executor resolves at run time.\\n"
-            "3. NO PRODUCT-SPECIFIC KEYWORDS OR EXAMPLES: do not reference any particular product, brand, or feature name.\\n"
-            "Logic must work for any site. Infer features purely from observed forms, inputs, actions, and content.\\n"
-            "for any site. Infer features purely from observed forms, inputs, actions, and content.\\n"
-            "4. CLASSIFICATION HONESTY: assign each journey a kind — smoke (page loads), navigation,\\n"
-            "read workflow, or write workflow. A journey may only be titled or described as a\\n"
-            "workflow if its steps and success condition actually exercise one. A navigation-only\\n"
-            "mission must be titled as such (e.g. 'Open X', 'Browse X'), never 'Create X' unless\\n"
-            "it actually submits and proves a persisted/visible result.\\n"
-            "5. CONCRETE OUTCOMES: expected outcomes and success conditions must NEVER be vague\\n"
-            "(never 'Verify visible feedback', 'Verify page loaded', 'Expected results present').\\n"
-            "State precisely what concrete data, record, document, calculation, or status is expected.\\n"
-            "6. AUTH AS A PREREQUISITE: treat auth as a prerequisite unless the user goal explicitly\\n"
-            "requests testing authentication. Do not include auth steps in feature workflows.\\n"
-            "7. STEPS: use only these actions — navigate, click, fill, select, wait. Targets must be\\n"
-            "control labels from control_hints, never CSS selectors.\\n"
-            "8. Output ONLY JSON matching the AIGeneratedJourneyList schema.\\n"
+            "PURPOSEFUL user journeys that test real features of the web application.\n\n"
+            "GROUNDING RULES (non-negotiable):\n"
+            "1. BASE EVERY JOURNEY ON OBSERVED EVIDENCE ONLY: use the page states, key section text "
+            "(pricing plans, product lists, form fields), primary actions, controls, routes, and discovered capabilities "
+            "provided below. Never invent pages, controls, or domain concepts not observed.\n"
+            "2. GENERIC CAPABILITY CHECKLIST (categories, not products):\n"
+            "   Check the observed evidence against each of the following generic categories and propose a journey "
+            "for EVERY category the evidence supports:\n"
+            "   - Signup and login validation: validation on empty/invalid inputs or required fields.\n"
+            "   - Wrong-credentials error: attempting login with invalid credentials and verifying error feedback/alert.\n"
+            "   - Forgot password: navigating password recovery flow, entering email/identity.\n"
+            "   - Browse to detail: browsing product/item catalog, selecting an item, opening item detail view.\n"
+            "   - Add to cart and checkout start: adding an item to cart, viewing cart, initiating checkout flow.\n"
+            "   - Forms such as contact: filling contact/support form fields and submitting.\n"
+            "   - Search: entering search query, verifying matching results appear.\n"
+            "   - Pricing and call-to-action destinations: comparing pricing tiers, clicking functional plan selection buttons.\n"
+            "   - Navigation integrity: navigating between primary sections and verifying views load.\n"
+            "3. STRICT ANTI-PATTERNS (DO NOT GENERATE):\n"
+            "   - NEVER treat skip links ('Skip to main content', 'Skip to content', 'Skip navigation') as journeys or objectives.\n"
+            "   - NEVER treat same-page anchors (#solution, #pricing, #main-content) as journeys or objectives.\n"
+            "   - NEVER use the site's marketing tagline, H1 slogan, or 'Verify core journeys for: <tagline>' as journey names or objectives.\n"
+            "4. EVIDENCE REFS & CONCRETE OUTCOMES:\n"
+            "   - Every journey MUST include non-empty evidence_refs referencing specific observed DOM elements, sections, or routes.\n"
+            "   - Expected outcomes must NEVER be vague placeholders (never 'Verify visible feedback', 'Verify page loaded').\n"
+            "   - State precisely what concrete data, record, error message, calculation, or status change is expected.\n"
+            "5. JOURNEYS ARE GOALS, NOT SCRIPTS: each journey declares an objective, preconditions, concrete observable outcome, "
+            "and evidence refs. Steps reference observed control labels (control_hints) that the executor resolves at run time.\n"
+            "6. Output ONLY JSON matching the AIGeneratedJourneyList schema.\n"
         )
 
         user_prompt = (
-            f"Application URL: {base_url}\\n"
-            f"Page Title: {title}\\n"
-            f"Primary Persona: {persona}\\n"
-            f"User Goal: {goal or 'Thoroughly test core application features'}\\n"
-            f"Time budget: {time_budget_seconds:.0f}s\\n\\n"
-            f"Observed Page States (SiteMap nodes):\\n{json.dumps(compact_states, indent=1)}\\n\\n"
-            f"Discovered Routes:\\n{json.dumps(compact_routes, indent=1)}\\n\\n"
-            f"Discovered Capabilities (from exploration):\\n{json.dumps(compact_capabilities, indent=1)}\\n\\n"
-            f"Generate up to {max_journeys} grounded, high-value user journeys. Designate exactly "
-            "ONE primary core feature workflow as recommended=True with high confidence. "
+            f"Application URL: {base_url}\n"
+            f"Page Title: {title}\n"
+            f"Primary Persona: {persona}\n"
+            f"User Goal: {goal or 'Thoroughly test core application features'}\n"
+            f"Time budget: {time_budget_seconds:.0f}s\n\n"
+            f"Observed Page States (SiteMap nodes with key sections & form fields):\n{json.dumps(compact_states, indent=1)}\n\n"
+            f"Discovered Routes:\n{json.dumps(compact_routes, indent=1)}\n\n"
+            f"Discovered Capabilities (from exploration):\n{json.dumps(compact_capabilities, indent=1)}\n\n"
+            f"Generate up to {max_journeys} grounded, high-value user journeys covering every capability category supported by the evidence above. "
+            "Designate exactly ONE primary core feature workflow as recommended=True with high confidence. "
             "Do NOT recommend auth/signup unless explicitly requested. Focus on the core value "
-            "proposition grounded in observed evidence.\\n"
+            "proposition grounded in observed evidence.\n"
         )
 
         try:

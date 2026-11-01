@@ -31,6 +31,7 @@ export interface ExploreMachineState {
   missions: SuggestedMission[];
   recommendationNote?: string;
   selectedMissionIds: string[];
+  aiSynthesisFailed: boolean;
   error: string | null;
   createdProjectId: string | null;
   screenshots: ScreenshotEntry[];
@@ -47,7 +48,8 @@ export type ExploreAction =
   | { type: "SET_AUTH_MODE"; mode: AuthMode }
   | { type: "SET_QUESTION"; question: AgentQuestionItem }
   | { type: "SET_DISCOVERIES"; discoveries: DiscoveryItem[] }
-  | { type: "SET_MISSIONS"; missions: SuggestedMission[]; recommendation?: string }
+  | { type: "SET_MISSIONS"; missions: SuggestedMission[]; recommendation?: string; aiSynthesisFailed?: boolean }
+  | { type: "SET_AI_SYNTHESIS_FAILED"; failed: boolean }
   | { type: "TOGGLE_MISSION"; id: string }
   | { type: "SELECT_ALL_MISSIONS" }
   | { type: "UPDATE_MISSION"; mission: SuggestedMission }
@@ -70,6 +72,7 @@ export const initialExploreState: ExploreMachineState = {
   missions: [],
   recommendationNote: undefined,
   selectedMissionIds: [],
+  aiSynthesisFailed: false,
   error: null,
   createdProjectId: null,
   screenshots: [],
@@ -184,6 +187,7 @@ export function exploreReducer(
           missions: incoming,
           recommendationNote: action.recommendation,
           selectedMissionIds: defaultSelected,
+          aiSynthesisFailed: action.aiSynthesisFailed ?? state.aiSynthesisFailed,
         };
       }
 
@@ -217,8 +221,15 @@ export function exploreReducer(
         missions: mergedMissions,
         recommendationNote: action.recommendation || state.recommendationNote,
         selectedMissionIds: finalSelected,
+        aiSynthesisFailed: action.aiSynthesisFailed ?? state.aiSynthesisFailed,
       };
     }
+
+    case "SET_AI_SYNTHESIS_FAILED":
+      return {
+        ...state,
+        aiSynthesisFailed: action.failed,
+      };
 
     case "TOGGLE_MISSION": {
       const isSelected = state.selectedMissionIds.includes(action.id);
@@ -336,11 +347,15 @@ export function useExploreMachine(initialUrl?: string, initialIntent?: string) {
   }, []);
 
   const setMissions = useCallback(
-    (missions: SuggestedMission[], recommendation?: string) => {
-      dispatch({ type: "SET_MISSIONS", missions, recommendation });
+    (missions: SuggestedMission[], recommendation?: string, aiSynthesisFailed?: boolean) => {
+      dispatch({ type: "SET_MISSIONS", missions, recommendation, aiSynthesisFailed });
     },
     []
   );
+
+  const setAiSynthesisFailed = useCallback((failed: boolean) => {
+    dispatch({ type: "SET_AI_SYNTHESIS_FAILED", failed });
+  }, []);
 
   const toggleMission = useCallback((id: string) => {
     dispatch({ type: "TOGGLE_MISSION", id });
@@ -389,6 +404,7 @@ export function useExploreMachine(initialUrl?: string, initialIntent?: string) {
     setQuestion,
     setDiscoveries,
     setMissions,
+    setAiSynthesisFailed,
     toggleMission,
     selectAllMissions,
     updateMission,

@@ -856,11 +856,6 @@ class ExplorationEngine:
                 meta_desc = extracted_data.get("metaDesc", "")
                 h1 = extracted_data.get("h1", "")
                 self._discovered_sections = sections
-                if not self.goal and (h1 or meta_desc):
-                    inferred = h1 or meta_desc
-                    if len(inferred) > 80:
-                        inferred = inferred[:77] + "..."
-                    self.goal = f"Verify core journeys for: {inferred}"
 
             # 1. Smoothly scroll through sections covering the entire document height
             max_scroll = max(0, doc_height - view_height)
@@ -2930,6 +2925,70 @@ class ExplorationEngine:
 
         return sitemap_routes
 
+    def _extract_key_sections(self, observation: dict, discovered_sections: list[dict] | None = None) -> list[dict]:
+        """Extract structured summaries for pricing plans, product lists, and form fields."""
+        sections = []
+        elements = observation.get("elements", [])
+        forms = observation.get("forms", [])
+        headings = observation.get("headings", [])
+
+        # 1. Forms summary (contact, search, login, signup, feedback)
+        for f in forms[:8]:
+            inputs_summary = [
+                {
+                    "name": inp.get("name") or inp.get("label") or inp.get("placeholder") or "",
+                    "type": inp.get("type", "text"),
+                    "required": bool(inp.get("required")),
+                }
+                for inp in (f.get("fields") or f.get("inputs") or [])[:12]
+            ]
+            sections.append({
+                "type": "form",
+                "name": f.get("name") or f.get("id") or "Form",
+                "action": f.get("action", ""),
+                "inputs": inputs_summary,
+            })
+
+        # 2. Pricing plans summary
+        pricing_indicators = ["pricing", "plan", "$", "/mo", "free", "pro", "enterprise", "starter", "tier", "month"]
+        pricing_elements = [
+            el for el in elements
+            if any(ind in el.get("name", "").lower() for ind in pricing_indicators)
+        ]
+        if pricing_elements or any("pricing" in h.lower() for h in headings):
+            sections.append({
+                "type": "pricing",
+                "name": "Pricing & Plans",
+                "items": [el.get("name") for el in pricing_elements[:10]],
+                "description": "Subscription tiers, pricing options, and upgrade/selection CTAs",
+            })
+
+        # 3. Product catalog / items summary
+        product_indicators = ["product", "cart", "shop", "blend", "roast", "item", "add to cart", "checkout", "coffee", "store", "price"]
+        product_elements = [
+            el for el in elements
+            if any(ind in el.get("name", "").lower() for ind in product_indicators)
+        ]
+        if product_elements or any("product" in h.lower() or "shop" in h.lower() for h in headings):
+            sections.append({
+                "type": "products",
+                "name": "Product Catalog & Cart",
+                "items": [el.get("name") for el in product_elements[:15]],
+                "description": "Product listings, item selection, add to cart, and checkout start",
+            })
+
+        # 4. Discovered semantic sections from page evaluation
+        for sec in (discovered_sections or [])[:8]:
+            sec_label = sec.get("label", "")
+            if sec_label and not any(s.get("name") == sec_label for s in sections):
+                sections.append({
+                    "type": sec.get("tag", "section"),
+                    "name": sec_label,
+                    "interactive_count": sec.get("interactiveCount", 0),
+                })
+
+        return sections
+
     async def _extract_page_links(self, page, base_parsed) -> list[dict]:
         """Extract all internal links and SPA navigation anchors from current page DOM."""
         links = []
@@ -2943,7 +3002,12 @@ class ExplorationEngine:
             for (const n of linkNodes) {
                 const href = n.getAttribute('href') || n.getAttribute('data-href') || n.getAttribute('data-to') || '';
                 const text = (n.innerText || n.getAttribute('aria-label') || n.getAttribute('title') || '').trim();
+                const tLower = text.toLowerCase();
+                if (tLower.startsWith('skip to') || tLower.startsWith('skip navigation') || tLower.startsWith('skip content')) continue;
                 if (!href || href === '#' || href.startsWith('javascript:')) continue;
+                // Never treat same-page fragment anchors as navigable routes (e.g. #solution, #pricing, #main-content)
+                if (href.startsWith('#') && !href.startsWith('#/')) continue;
+                if (href.startsWith('/#') && !href.startsWith('/#/')) continue;
                 results.push({href, text, is_button: false});
             }
 
@@ -2989,11 +3053,20 @@ class ExplorationEngine:
                 continue
 
             href = link.get("href") or ""
-            if not href or href == "/":
+            text_lower = (link.get("text") or "").lower()
+            if any(sk in text_lower for sk in ["skip to", "skip navigation", "skip content", "skip main"]):
+                continue
+            if not href or href == "/" or href.startswith("javascript:"):
                 continue
 
-            # Support hash-based SPA sections (e.g. /#explore, #quizzes)
-            if href.startswith("/#") or (href.startswith("#") and len(href) > 2):
+            # Drop same-page fragment anchors like #solution, #pricing, #main-content
+            if href.startswith("#") and not href.startswith("#/"):
+                continue
+            if href.startswith("/#") and not href.startswith("/#/"):
+                continue
+
+            # Support hash-based SPA routing (e.g. /#/explore, #/quizzes)
+            if href.startswith("/#/") or href.startswith("#/"):
                 clean_hash = href if href.startswith("/") else f"/{href}"
                 path = clean_hash
                 full_url = f"{base_parsed.scheme}://{base_parsed.netloc}{clean_hash}"
@@ -3002,8 +3075,13 @@ class ExplorationEngine:
                 full_url = f"{base_parsed.scheme}://{base_parsed.netloc}{href}"
             elif base_parsed.netloc in href:
                 parsed = urlparse(href)
-                path = parsed.path + (f"#{parsed.fragment}" if parsed.fragment else "")
-                full_url = href
+                # Drop in-page anchors on the current host
+                if parsed.fragment and not parsed.fragment.startswith("/"):
+                    path = parsed.path
+                    full_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                else:
+                    path = parsed.path + (f"#{parsed.fragment}" if parsed.fragment else "")
+                    full_url = href
             else:
                 continue
 
@@ -3242,9 +3320,21 @@ class ExplorationEngine:
         title = observation.get("title", "")
         current_url = getattr(page, "url", self.url)
 
+        # Extract page text and section summaries for synthesis
+        page_text = observation.get("text", "")
+        headings = observation.get("headings", [])
+        page_summary = f"Page Title: {title}\n"
+        if headings:
+            page_summary += "Key Headings: " + " | ".join(headings[:10]) + "\n"
+        if page_text:
+            page_summary += "Page Text Snippet:\n" + page_text[:2000]
+
+        # Extract structured key sections (pricing plans, product lists, form fields)
+        key_sections = self._extract_key_sections(observation, getattr(self, "_discovered_sections", []))
+
         # Build a grounded SiteMap view from the current observation so journey
-        # synthesis is fed by observed page states (forms, actions, controls)
-        # rather than landing-page text.
+        # synthesis is fed by observed page states (forms, actions, controls, key sections)
+        # rather than starved landing-page text.
         site_map = [
             {
                 "url": current_url,
@@ -3252,7 +3342,9 @@ class ExplorationEngine:
                 "needs_auth": bool(observation.get("needs_auth")),
                 "forms": observation.get("forms") or [],
                 "primary_actions": observation.get("primary_actions") or [],
-                "interactive_elements": observation.get("interactive_elements") or [],
+                "interactive_elements": observation.get("interactive_elements") or observation.get("elements") or [],
+                "key_sections": key_sections,
+                "page_summary": page_summary,
             }
         ]
 
@@ -3373,12 +3465,18 @@ class ExplorationEngine:
             name = el.get("name", "").strip()
             if not name or len(name) < 3 or len(name) > 60:
                 continue
+            name_lower = name.lower()
+            if any(sk in name_lower for sk in ["skip to", "skip content", "skip navigation", "skip main"]):
+                continue
+            href = str(el.get("href") or "").strip()
+            if href.startswith("#") and not href.startswith("#/"):
+                continue
             if is_infrastructure_control(name):
                 continue
-            if name.lower() in {"sign out", "logout", "close", "cancel", "ok", "yes", "no", "back"}:
+            if name_lower in {"sign out", "logout", "close", "cancel", "ok", "yes", "no", "back"}:
                 continue
-            if name.lower() not in seen_labels:
-                seen_labels.add(name.lower())
+            if name_lower not in seen_labels:
+                seen_labels.add(name_lower)
                 interactive_elements.append(el)
 
         # Cache discovery state for fast DiscoveryResult synthesis
@@ -3418,7 +3516,7 @@ class ExplorationEngine:
 
         # Phase 3: Generate intelligent user journeys (AI-synthesized feature journeys first)
         mission_count = 0
-        max_missions = 6
+        max_missions = 7
 
         # Step 3a: Goal-directed mission (highest priority when explicitly requested by user)
         if self.goal and mission_count < max_missions:
@@ -3453,10 +3551,11 @@ class ExplorationEngine:
                     title=title,
                     goal=self.goal,
                     persona=persona_name,
-                    routes=route_map[:8],
+                    routes=route_map[:12],
                     site_map=site_map,
+                    page_summary=page_summary,
                     capabilities=agent_capabilities or [],
-                    max_journeys=max_missions - mission_count,
+                    max_journeys=max(max_missions - mission_count, 6),
                     time_budget_seconds=ai_settings.AI_TOTAL_BUDGET_SECONDS,
                 ))
                 if ai_journeys_result and ai_journeys_result.journeys:
@@ -3512,9 +3611,11 @@ class ExplorationEngine:
                     mission_count = len(missions)
                 else:
                     err_msg = "Model returned 0 journeys"
-                    logger.warning("AI journey synthesis returned empty result, falling back to heuristics: %s", err_msg)
+                    logger.warning("AI journey synthesis returned empty result, falling back to basic page checks: %s", err_msg)
+                    self._ai_synthesis_failed = True
                     await self._emit("ai_synthesis_failed", {
                         "error": err_msg,
+                        "message": "AI planning unavailable: showing basic page checks only",
                         "traceback": "",
                     })
             except asyncio.CancelledError:
@@ -3522,15 +3623,19 @@ class ExplorationEngine:
             except asyncio.TimeoutError:
                 err_msg = f"Timed out within budget ({getattr(ai_settings, 'AI_TOTAL_BUDGET_SECONDS', 25.0):.1f}s)"
                 logger.exception("AI journey synthesis timed out within budget: %s", err_msg)
+                self._ai_synthesis_failed = True
                 await self._emit("ai_synthesis_failed", {
                     "error": err_msg,
+                    "message": "AI planning unavailable: showing basic page checks only",
                     "traceback": traceback.format_exc(),
                 })
             except Exception as e:
                 err_msg = str(e) or type(e).__name__
-                logger.exception("AI journey synthesis failed, falling back to heuristics: %s", err_msg)
+                logger.exception("AI journey synthesis failed, falling back to basic page checks: %s", err_msg)
+                self._ai_synthesis_failed = True
                 await self._emit("ai_synthesis_failed", {
                     "error": err_msg,
+                    "message": "AI planning unavailable: showing basic page checks only",
                     "traceback": traceback.format_exc(),
                 })
 
@@ -3762,7 +3867,14 @@ class ExplorationEngine:
         # Run journey quality validation, repair, deduplication, and explainable ranking
         # Live dry-run: drop missions whose entry point/controls are not in the observed SiteMap.
         unique = validate_missions_against_site_map(unique, site_map)
-        unique = deduplicate_and_rank_journeys(unique, goal=self.goal)
+        unique = deduplicate_and_rank_journeys(unique, capabilities=agent_capabilities, goal=self.goal)
+
+        if getattr(self, "_ai_synthesis_failed", False):
+            for m in unique:
+                m.classification = "basic_check"
+                m.kind = "smoke" if m.kind in ("smoke", "navigation") else "basic_check"
+                m.expectation_source = "heuristic_fallback"
+                m.review_required = True
 
         return discovered_areas, unique
 
@@ -4196,11 +4308,17 @@ class ExplorationEngine:
         ]
 
         is_matching = bool(matching_el)
-        target_pattern = re.sub(r'[^a-zA-Z0-9]+', '.*', el_name.lower()) if el_name else ".*"
-        success_condition = {
-            "url_changed_to": True,
-            "url_matches": {"pattern": target_pattern if target_pattern != ".*" else ".*"},
-        }
+        target_href = str((matching_el or {}).get("href") or "").strip()
+        if target_href and not target_href.startswith("#") and not target_href.startswith("javascript:"):
+            clean_pat = target_href.lstrip("/").split("?")[0]
+            success_condition = {
+                "url_changed_to": True,
+                "url_matches": {"pattern": clean_pat},
+            }
+        else:
+            success_condition = {
+                "url_changed_to": True,
+            }
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
             name=goal,
@@ -5157,8 +5275,9 @@ class ExplorationEngine:
             target_route = (element or {}).get("href") or ""
             if (element or {}).get("type") in ("link", "a") or target_route.startswith("/"):
                 target_path = target_route or "/signup"
+                mission_name = "Navigate to registration" if "get started" in el_name.lower() else f"Navigate to {el_name}"
                 return {
-                    "name": f"Navigate to {el_name}",
+                    "name": mission_name,
                     "description": f"Use '{el_name}' to navigate to the user registration page.",
                     "objective": f"Verify that {persona} can navigate to account creation",
                     "category": "navigation",
@@ -5596,9 +5715,11 @@ class ExplorationEngine:
                     {"type": "click", "target": selector},
                     {"type": "wait", "value": "500"},
                 ],
-                "success_condition": {
-                    "url_matches": {"pattern": target_route.lstrip("/") if target_route and not target_route.startswith("#") else ".*"},
-                },
+                "success_condition": (
+                    {"url_matches": {"pattern": target_route.lstrip("/")}}
+                    if target_route and not target_route.startswith("#")
+                    else {"page_loaded": True}
+                ),
                 "confidence": 0.65,
                 "estimated_time": 10,
                 "user_goal": f"Navigate to {el_name}",
@@ -5650,6 +5771,8 @@ class ExplorationEngine:
         }
 
     def _generate_recommendation(self, missions: list[DiscoveredMission]) -> str:
+        if getattr(self, "_ai_synthesis_failed", False):
+            return "AI planning unavailable: showing basic page checks only"
         if getattr(self, "_ai_recommendation_reason", None):
             return self._ai_recommendation_reason
         if self.goal:

@@ -220,7 +220,7 @@ class AIGeneratedJourney(BaseModel):
         default="navigation",
         description="Honest mission kind: smoke (page loads), navigation, read workflow, or write workflow.",
     )
-    category: Literal["feature", "dashboard", "content", "settings", "workflow", "crud", "auth"] = "feature"
+    category: Literal["feature", "dashboard", "content", "settings", "workflow", "crud", "auth", "form"] = "feature"
     journey: list[str] = Field(
         default_factory=list,
         description="Numbered or sequential high-level user actions",

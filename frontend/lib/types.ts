@@ -95,7 +95,7 @@ export interface SuggestedMission {
   user_goal?: string;
   rankingRationale?: string;
   ranking_rationale?: string;
-  classification?: "functional" | "workflow" | "auth" | "navigation";
+  classification?: "functional" | "workflow" | "auth" | "navigation" | "basic_check";
   isCore?: boolean;
   is_core?: boolean;
   kind?: "control_exploration" | "navigation_test" | "feature_test" | "end_to_end_journey";
@@ -147,9 +147,9 @@ export type ExplorationEvent =
   | { type: "auth_required"; request: CredentialRequest }
   | { type: "question"; question: AgentQuestionItem }
   | { type: "discovery"; discoveries: DiscoveryItem[] }
-  | { type: "missions"; missions: SuggestedMission[]; recommendation?: string }
+  | { type: "missions"; missions: SuggestedMission[]; recommendation?: string; ai_synthesis_failed?: boolean }
   | { type: "completed"; projectName: string }
-  | { type: "ai_synthesis_failed"; error: string; traceback?: string }
+  | { type: "ai_synthesis_failed"; error: string; message?: string; traceback?: string }
   | { type: "error"; message: string };
 
 // ── Project ───────────────────────────────────────────────
