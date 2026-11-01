@@ -105,10 +105,35 @@ class BrowserSession:
             await browser.close()
     """
 
-    def __init__(self, headless: bool = True, browser_settings: Any = None, job_id: str | None = None):
+    BLOCKED_ANALYTICS_HOSTS = (
+        "google-analytics.com",
+        "googletagmanager.com",
+        "analytics.google.com",
+        "segment.io",
+        "segment.com",
+        "mixpanel.com",
+        "amplitude.com",
+        "sentry.io",
+        "hotjar.com",
+        "datadoghq.com",
+        "intercom.io",
+        "clarity.ms",
+        "vercel-insights.com",
+        "speed-insights.vercel.app",
+        "vitals.vercel-insights.com",
+    )
+
+    def __init__(
+        self,
+        headless: bool = True,
+        browser_settings: Any = None,
+        job_id: str | None = None,
+        block_heavy_resources: bool = False,
+    ):
         self._headless = headless
         self._browser_settings = browser_settings
         self.job_id = job_id
+        self.block_heavy_resources = block_heavy_resources
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
@@ -316,6 +341,17 @@ class BrowserSession:
             if req.url.startswith(("about:", "data:", "blob:")):
                 await route.continue_()
                 return
+
+            # Block heavy resources (fonts, media) and analytics during exploration
+            if self.block_heavy_resources:
+                if req.resource_type in ("font", "media"):
+                    await route.abort("blockedbyclient")
+                    return
+                req_host = (urlparse(req.url).hostname or "").lower()
+                if any(req_host == bh or req_host.endswith("." + bh) for bh in self.BLOCKED_ANALYTICS_HOSTS):
+                    await route.abort("blockedbyclient")
+                    return
+
             verdict = evaluate_url(req.url)
             if not verdict.safe:
                 logger.warning("SSRF: Aborting browser request to unsafe destination")
