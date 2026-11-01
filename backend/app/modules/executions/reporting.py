@@ -93,7 +93,13 @@ def sanitize_payload(payload: object) -> object:
     if isinstance(payload, dict):
         return {
             str(key): "[REDACTED]" if _is_sensitive_key(str(key))
-            else sanitize_payload(value)
+            else (
+                value
+                if str(key) in ("screenshot", "screenshot_data_uri", "data_uri", "image")
+                and isinstance(value, str)
+                and value.startswith("data:image/")
+                else sanitize_payload(value)
+            )
             for key, value in payload.items()
         }
     if isinstance(payload, (list, tuple, set)):

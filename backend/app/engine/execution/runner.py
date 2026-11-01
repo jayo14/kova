@@ -74,8 +74,8 @@ from app.engine.execution.control import (
 
 logger = logging.getLogger(__name__)
 
-# Maximum execution duration in seconds (PRD §22)
-EXECUTION_TIMEOUT_SECONDS = 300  # 5 minutes
+# Maximum execution duration in seconds (PRD §22) - patient 600s buffer for sleeping/slow hosts
+EXECUTION_TIMEOUT_SECONDS = 600  # 10 minutes
 
 # Failed checks of these types mean no outcome could be established. Any other
 # failed check is positive evidence that the requirement was disproved.
@@ -913,7 +913,7 @@ class FlowRunner:
                 }
 
         exec_id = str(execution_id)
-        browser = BrowserSession(browser_settings=ctx.browser_settings, job_id=exec_id)
+        browser = BrowserSession(browser_settings=ctx.browser_settings, job_id=exec_id, block_heavy_resources=True)
         frame_task: asyncio.Task | None = None
         nav_unbind: Callable[[], None] | None = None
         try:

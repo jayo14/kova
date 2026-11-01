@@ -687,7 +687,8 @@ class OpenAICompatibleProvider(AIProvider):
                     ))
                     continue
                 except httpx.HTTPError as e:
-                    err_msg = f"HTTP transport error: {e}"
+                    err_detail = str(e) or repr(e) or type(e).__name__
+                    err_msg = f"HTTP transport error ({type(e).__name__}): {err_detail}"
                     logger.warning("Model '%s' network error on '%s': %s", model, self.name, err_msg)
                     await _model_circuit_breaker.record_failure(model, status_code=None)
                     errors.append(f"{model}: {err_msg}")
@@ -840,6 +841,7 @@ class FailoverAIProvider(AIProvider):
         if not providers:
             raise AIProviderError("FailoverAIProvider requires at least one provider")
         self._providers = providers
+        self._last_successful_provider: str | None = None
 
     @property
     def model_name(self) -> str:
@@ -880,12 +882,32 @@ class FailoverAIProvider(AIProvider):
         start_time = time.time()
         total_budget = ai_settings.AI_TOTAL_BUDGET_SECONDS
 
-        for provider in self._providers:
+        # Order providers by recent success: prioritize the last working provider
+        providers_to_try = list(self._providers)
+        if self._last_successful_provider:
+            providers_to_try.sort(
+                key=lambda p: 0 if p.name == self._last_successful_provider else 1
+            )
+
+        for provider in providers_to_try:
             # Enforce total budget across providers
             elapsed = time.time() - start_time
             if elapsed >= total_budget:
                 errors.append(f"{provider.name}: total budget exhausted")
                 break
+
+            # Skip open circuits quietly (debug level) if all models are unavailable
+            if isinstance(provider, OpenAICompatibleProvider):
+                models = provider.get_models_for_task(task_type)
+                all_broken = True
+                for m in models:
+                    if await _model_circuit_breaker.is_available(m):
+                        all_broken = False
+                        break
+                if all_broken:
+                    logger.debug("Skipping provider '%s': all models circuit-broken", provider.name)
+                    errors.append(f"{provider.name}: all models circuit-broken")
+                    continue
 
             try:
                 logger.info(
@@ -899,6 +921,9 @@ class FailoverAIProvider(AIProvider):
                 except TypeError:
                     # Provider does not accept task_type kwarg — call without it
                     result = await provider.generate_structured(system, prompt, schema)
+
+                # Record success to prioritize this provider for subsequent calls
+                self._last_successful_provider = provider.name
                 return result
             except AIProviderError as e:
                 logger.warning(

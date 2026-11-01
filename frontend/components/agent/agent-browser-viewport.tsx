@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
+import { LiveViewport } from "@/components/agent/live-viewport";
 import type { ExploreState, CredentialRequest } from "@/lib/types";
 import type { ScreenshotEntry } from "@/components/explore/explore-state-machine";
 import type { AuthMode } from "@/components/explore/explore-state-machine";
@@ -137,10 +138,34 @@ export function AgentBrowserViewport({
         </div>
       </div>
 
-      {/* ── Viewport: real Playwright screenshots ───────────────── */}
+      {/* ── Viewport: real Playwright live viewport or screenshots ───────────────── */}
       <div className="relative flex-1 min-h-[380px] md:min-h-[460px] bg-background overflow-hidden select-none flex items-center justify-center">
 
-        {latestScreenshot ? (
+        {sessionId ? (
+          <div className="relative w-full h-full flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden">
+            <LiveViewport
+              executionId={sessionId}
+              fallbackScreenshot={latestScreenshot}
+              hideHeader={true}
+              className="w-full h-full border-0 rounded-none shadow-none"
+            />
+            {elapsedWait >= 10 && (
+              <div className="absolute top-3 right-3 z-20 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-background/95 backdrop-blur-xs px-3 py-1.5 shadow-sm">
+                <MaterialIcon name="hourglass_top" size={14} className="text-amber-500 animate-pulse" />
+                <span className="text-[11px] font-medium text-foreground">Site is slow ({elapsedWait}s)</span>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline cursor-pointer"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : latestScreenshot ? (
           <div className="relative w-full h-full flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden group">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img

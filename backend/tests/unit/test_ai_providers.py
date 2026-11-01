@@ -56,6 +56,57 @@ async def test_failover_first_success():
 
 
 @pytest.mark.asyncio
+async def test_failover_prioritizes_last_successful_provider():
+    calls = []
+
+    class TrackingProvider(AIProvider):
+        def __init__(self, name: str, fails: bool = False):
+            self.name = name
+            self.fails = fails
+
+        @property
+        def model_name(self) -> str:
+            return f"{self.name}-model"
+
+        async def generate_structured(self, system: str, prompt: str, schema: type[DummyOutput]) -> DummyOutput:
+            calls.append(self.name)
+            if self.fails:
+                raise AIProviderError("failed", provider=self.name)
+            return schema(summary=self.name)
+
+    p1 = TrackingProvider("p1", fails=True)
+    p2 = TrackingProvider("p2", fails=False)
+    failover = FailoverAIProvider([p1, p2])
+
+    # First call: p1 fails, p2 succeeds
+    res1 = await failover.generate_structured("sys", "prompt", DummyOutput)
+    assert res1.summary == "p2"
+    assert calls == ["p1", "p2"]
+
+    # Second call: p2 was last successful, so p2 is tried first without p1 attempting
+    calls.clear()
+    res2 = await failover.generate_structured("sys", "prompt", DummyOutput)
+    assert res2.summary == "p2"
+    assert calls == ["p2"]
+
+
+def test_sanitize_payload_preserves_screenshot_data_uri():
+    from app.modules.executions.reporting import sanitize_payload
+    large_data_uri = "data:image/jpeg;base64," + "A" * 60000
+    payload = {
+        "url": "https://example.com",
+        "screenshot": large_data_uri,
+        "token": "secret_token_123",
+        "regular_text": "B" * 6000,
+    }
+    sanitized = sanitize_payload(payload)
+    assert sanitized["screenshot"] == large_data_uri
+    assert len(sanitized["screenshot"]) == len(large_data_uri)
+    assert sanitized["token"] == "[REDACTED]"
+    assert len(sanitized["regular_text"]) == 5000
+
+
+@pytest.mark.asyncio
 async def test_failover_skips_failed_and_succeeds_on_second():
     failing = MockFailingProvider(status_code=503)
     backup = MockSuccessProvider("backup-model")

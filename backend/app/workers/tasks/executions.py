@@ -21,8 +21,8 @@ import app.modules.organizations.models  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
-# Task-level timeout: hard kill after 10 minutes (safety net above runner timeout)
-TASK_HARD_TIMEOUT = 600
+# Task-level timeout: hard kill after 15 minutes (safety net above runner timeout)
+TASK_HARD_TIMEOUT = 900
 
 
 @celery_app.task(bind=True, name="run_execution", max_retries=1, time_limit=TASK_HARD_TIMEOUT)

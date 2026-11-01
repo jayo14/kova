@@ -66,8 +66,8 @@ class AISettings(BaseSettings):
 
     # 3. Groq (Descending order of quality & speed)
     GROQ_API_KEY: str = ""
-    GROQ_MODELS: str = "openai/gpt-oss-120b,qwen/qwen3.8-27b,openai/gpt-oss-20b,allam-2-7b"
-    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_MODELS: str = "qwen/qwen3.8-27b,openai/gpt-oss-120b,openai/gpt-oss-20b,allam-2-7b"
+    GROQ_MODEL: str = "qwen/qwen3.8-27b"
     GROQ_BASE_URL: str = "https://api.groq.com/openai/v1"
 
     # 4. NVIDIA NIM (Descending order of quality & speed)
