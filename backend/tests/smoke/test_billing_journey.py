@@ -7,11 +7,18 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api import get_session
+from app.config.settings import settings
 from app.main import app
 from app.modules.billing.repository import BillingRepository
 from app.modules.billing.service import BillingService
 from app.modules.organizations.repository import OrganizationRepository
 from app.modules.users.models import User
+
+
+@pytest.fixture(autouse=True)
+def enable_dev_mocks(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_ALLOW_MOCKS", True)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
 
 
 @pytest.mark.asyncio
