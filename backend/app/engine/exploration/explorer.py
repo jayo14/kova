@@ -3862,8 +3862,20 @@ class ExplorationEngine:
     ) -> DiscoveredMission:
         """Fallback: emit a single route-walk mission with honest confidence."""
         goal_words = [w.lower() for w in goal.split() if len(w) > 2]
+        # Synonym mappings for common goals
+        synonyms = {
+            "purchase": ["pricing", "buy", "subscribe", "subscription", "upgrade", "plan", "pro"],
+            "subscription": ["pricing", "purchase", "buy", "subscribe", "plan", "pro"],
+            "signup": ["register", "get started", "join", "sign up", "create account"],
+            "login": ["sign in", "signin", "authenticate"],
+        }
+        expanded_keywords = set(goal_words)
+        for gw in goal_words:
+            if gw in synonyms:
+                expanded_keywords.update(synonyms[gw])
+
         matching_el = next(
-            (el for el in elements if any(gw in el.get("name", "").lower() for gw in goal_words)),
+            (el for el in elements if any(kw in el.get("name", "").lower() for kw in expanded_keywords)),
             None
         )
         el_name = matching_el.get("name") if matching_el else goal
@@ -4875,9 +4887,9 @@ class ExplorationEngine:
                 }
             if not credential_id:
                 return {
-                    "name": "Create an account (needs credentials)",
+                    "name": f"Get Started: Create an account (needs credentials)" if "get started" in el_name.lower() else "Create an account (needs credentials)",
                     "description": (
-                        "A registration entry point was detected. Add a project "
+                        f"A registration entry point was detected at '{el_name}'. Add a project "
                         "credential so Kova can attempt account creation."
                     ),
                     "objective": "Create an account and reach the authenticated experience",
@@ -5257,17 +5269,19 @@ class ExplorationEngine:
             }
 
         target_route = (element or {}).get("href")
-        if target_route and not target_route.startswith("javascript:") and not target_route.startswith("#"):
+        el_type = (element or {}).get("type", "button")
+        if (target_route and not target_route.startswith("javascript:") and not target_route.startswith("#")) or el_type in ("a", "link"):
+            destination_desc = target_route if target_route and not target_route.startswith("#") else f"the '{el_name}' section"
             return {
                 "name": f"Navigate to {el_name}",
-                "description": f"Use '{el_name}' to navigate to {target_route}.",
+                "description": f"Use '{el_name}' to navigate to {destination_desc}.",
                 "objective": f"Verify that {persona} can navigate to {el_name}",
                 "category": "navigation",
                 "kind": "navigation_test",
                 "journey": [
                     f"Open {app_name}",
                     f"Click '{el_name}'",
-                    f"Verify navigation to {target_route}",
+                    f"Verify navigation to {destination_desc}",
                 ],
                 "steps": [
                     {"type": "navigate", "url": base_url},
@@ -5276,19 +5290,19 @@ class ExplorationEngine:
                     {"type": "wait", "value": "500"},
                 ],
                 "success_condition": {
-                    "url_matches": {"pattern": target_route.lstrip("/") or ".*"},
+                    "url_matches": {"pattern": target_route.lstrip("/") if target_route and not target_route.startswith("#") else ".*"},
                 },
                 "confidence": 0.65,
                 "estimated_time": 10,
                 "user_goal": f"Navigate to {el_name}",
-                "expected_outcome": f"Destination view for {el_name} loads matching '{target_route}'",
+                "expected_outcome": f"Destination view for {el_name} loads matching '{destination_desc}'",
                 "classification": "navigation",
                 "is_core": False,
                 "runnable": True,
                 "validation_status": "eligible",
                 "provenance": {
                     "observed_controls": [el_name, selector],
-                    "observed_routes": [base_url, target_route],
+                    "observed_routes": [base_url, target_route] if target_route else [base_url],
                     "preconditions": [],
                     "unmet_preconditions": [],
                 },
