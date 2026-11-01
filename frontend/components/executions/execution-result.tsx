@@ -30,7 +30,8 @@ const RESULT_VARIANTS: Record<string, ResultVariant> = {
     title: "Mission completed",
     titleClass: "text-emerald-700 dark:text-emerald-400",
     descriptionClass: "text-foreground/80",
-    description: "Kova accomplished the mission and verified application state.",
+    description:
+      "The server reported this mission as completed. Open the report for verification detail.",
   },
   failed: {
     containerClass: "border border-destructive/20 bg-destructive/5",

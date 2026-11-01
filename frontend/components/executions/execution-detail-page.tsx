@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo, useTransition } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type {
   ExecutionDetail as ExecutionDetailType,
@@ -8,8 +8,8 @@ import type {
 } from "@/lib/types";
 import type { Evidence } from "@/lib/api/evidence";
 import { useExecutionRealtime } from "@/hooks/use-execution-realtime";
-import { cancelExecution, createExecution, getExecutionReport, mintShareableUrl, type ExecutionReport } from "@/lib/api/executions";
-import { getApiBaseUrl } from "@/lib/api/client";
+import { useExecutionActions } from "@/hooks/use-execution-actions";
+import { cancelExecution, getExecutionReport, type ExecutionReport } from "@/lib/api/executions";
 import { getExecutionEvidence, refreshEvidenceUrl } from "@/lib/api/evidence";
 import { ExecutionHeader } from "./execution-header";
 import { ExecutionBrowser } from "./execution-browser";
@@ -48,18 +48,18 @@ interface ExecutionDetailPageProps {
   initialExecution: ExecutionDetailType;
   initialActivities?: ActivityItem[];
   initialEvents?: import("@/lib/types").ExecutionEvent[];
+  embedded?: boolean;
 }
 
 export function ExecutionDetailPage({
   initialExecution,
   initialActivities = [],
   initialEvents = [],
+  embedded = false,
 }: ExecutionDetailPageProps) {
   const router = useRouter();
   const [cancelOpen, setCancelOpen] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
-  const [isRetrying, startRetryTransition] = useTransition();
-  const [actionError, setActionError] = useState<string | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [evidenceLoaded, setEvidenceLoaded] = useState(false);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);

@@ -276,9 +276,9 @@ export function ExecutionBrowser({
                 <MaterialIcon name="check_circle" size={18} />
               </div>
               <div>
-                <p className="text-body-sm font-semibold text-foreground">Mission completed</p>
+                <p className="text-body-sm font-semibold text-foreground">Run completed</p>
                 <p className="text-caption text-muted-foreground">
-                  Kova successfully accomplished this mission and verified the outcome.
+                  The server reported this mission as completed.
                 </p>
               </div>
             </div>
@@ -312,7 +312,7 @@ export function ExecutionBrowser({
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="flex items-center gap-1.5 text-[11px] font-medium text-foreground">
               <MaterialIcon name="history" size={14} className="text-muted-foreground" />
-              <span>Verified steps {stepScreenshots.length} of {stepScreenshots.length}</span>
+              <span>Step snapshots · {stepScreenshots.length}</span>
             </div>
             {selectedShot && (
               <span className="font-mono text-[10px] text-muted-foreground">
