@@ -15,6 +15,9 @@ interface AgentShellProps {
   onProjectNameChange?: (newName: string) => void;
   onStop?: () => void;
   onBack?: () => void;
+  isStopping?: boolean;
+  stopError?: string | null;
+  onRetryStop?: () => void;
   children: ReactNode;
 }
 
@@ -35,6 +38,7 @@ const stateLabels: Partial<Record<ExploreState, string>> = {
   mission_selected: "Preparing mission",
   mission_created: "Preparing mission",
   failed: "Failed",
+  stopping: "Stopping...",
   cancelled: "Stopped",
 };
 
@@ -45,8 +49,12 @@ export function AgentShell({
   onProjectNameChange,
   onStop,
   onBack,
+  isStopping = false,
+  stopError = null,
+  onRetryStop,
   children,
 }: AgentShellProps) {
+  const isStoppingState = isStopping || state === "stopping";
   const isRunning = [
     "connecting",
     "loading",
@@ -58,7 +66,7 @@ export function AgentShell({
     "planning",
     "asking",
     "executing",
-  ].includes(state);
+  ].includes(state) || isStoppingState;
 
   const hostname = (() => {
     if (!url) return null;
@@ -165,7 +173,29 @@ export function AgentShell({
             </div>
           )}
 
-          {isRunning && onStop && (
+          {stopError && onRetryStop ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onRetryStop}
+              className="text-destructive border-destructive/60 hover:bg-destructive/10 text-caption font-medium"
+              aria-label="Retry stop"
+            >
+              <MaterialIcon name="refresh" size={14} className="mr-1" />
+              Retry Stop
+            </Button>
+          ) : isStoppingState ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled
+              className="text-muted-foreground border border-border/60 opacity-80 cursor-not-allowed text-caption font-medium"
+              aria-label="Stopping exploration"
+            >
+              <span className="h-3 w-3 animate-spin rounded-full border-2 border-primary border-t-transparent mr-1.5" />
+              Stopping...
+            </Button>
+          ) : isRunning && onStop ? (
             <Button
               variant="ghost"
               size="sm"
@@ -176,7 +206,7 @@ export function AgentShell({
               <MaterialIcon name="stop" size={14} />
               Stop
             </Button>
-          )}
+          ) : null}
         </div>
       </header>
 

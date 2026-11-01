@@ -105,6 +105,11 @@ const stateConfig: Record<ExploreState, StateConfig> = {
     label: "Application unavailable",
     description: "Target application did not become ready",
   },
+  stopping: {
+    icon: "hourglass_top",
+    label: "Stopping",
+    description: "Shutting down browser and saving partial results",
+  },
   cancelled: {
     icon: "stop",
     label: "Exploration stopped",

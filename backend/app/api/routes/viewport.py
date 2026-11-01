@@ -154,20 +154,27 @@ async def _verify_execution_access(execution_id: str, user_id: str, db: AsyncSes
         async def _check(session: AsyncSession) -> bool:
             exec_repo = ExecutionRepository(session)
             execution = await exec_repo.get_by_id(exec_uuid)
-            if not execution:
-                return False
+            if execution:
+                flow_repo = FlowRepository(session)
+                flow = await flow_repo.get_by_id(execution.flow_id)
+                if not flow:
+                    return False
 
-            flow_repo = FlowRepository(session)
-            flow = await flow_repo.get_by_id(execution.flow_id)
-            if not flow:
-                return False
+                project_repo = ProjectRepository(session)
+                project = await project_repo.get_by_id(flow.project_id)
+                if not project:
+                    return False
 
-            project_repo = ProjectRepository(session)
-            project = await project_repo.get_by_id(flow.project_id)
-            if not project:
-                return False
+                return str(project.user_id) == str(user_id)
 
-            return str(project.user_id) == str(user_id)
+            # Check if this ID belongs to an exploration session
+            from app.modules.exploration.repository import ExplorationRepository
+            exp_repo = ExplorationRepository(session)
+            exp = await exp_repo.get_by_id(exec_uuid)
+            if exp:
+                return str(exp.user_id) == str(user_id)
+
+            return False
 
         if db is not None:
             return await _check(db)

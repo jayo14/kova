@@ -175,6 +175,23 @@ class ExplorationAgent:
         termination = "frontier_empty"
 
         while steps < step_limit:
+            if (
+                getattr(self.engine, "_is_cancelled", False)
+                or (hasattr(self.engine, "_cancel_event") and self.engine._cancel_event.is_set())
+            ):
+                raise asyncio.CancelledError("Exploration cancelled during agent exploration")
+
+            from app.engine.execution.control import check_cancel_flag, is_project_deleted
+            if await check_cancel_flag(str(self.engine.exploration_id)):
+                if hasattr(self.engine, "request_cancel"):
+                    self.engine.request_cancel()
+                raise asyncio.CancelledError("Exploration cancelled via control flag")
+
+            if self.engine.project_id and await is_project_deleted(str(self.engine.project_id)):
+                if hasattr(self.engine, "request_cancel"):
+                    self.engine.request_cancel()
+                raise asyncio.CancelledError("Project was deleted")
+
             if self._budget_exhausted():
                 termination = "budget_exhausted"
                 break

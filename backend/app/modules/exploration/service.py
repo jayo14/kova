@@ -119,14 +119,21 @@ class ExplorationService:
                 if org:
                     queue = get_queue_for_plan(org.plan)
 
-        await asyncio.to_thread(
+        async_result = await asyncio.to_thread(
             run_exploration.apply_async,
             args=[str(session_id)],
             queue=queue,
             exchange=queue,
             routing_key=queue,
         )
-        logger.info("Enqueued exploration %s to Celery queue %s", session_id, queue)
+        task_id = getattr(async_result, "id", None)
+        if task_id:
+            await self.repo.update_status(session_id, celery_task_id=task_id)
+            await self.db.commit()
+        logger.info(
+            "Enqueued exploration %s to Celery queue %s (task_id=%s)",
+            session_id, queue, task_id
+        )
 
     async def create_and_start_exploration(
         self,
@@ -338,7 +345,7 @@ class ExplorationService:
 
         return updated_session or session
 
-    async def cancel_session(
+    async def stop_session(
         self,
         session_id: uuid.UUID,
         user_id: uuid.UUID,
@@ -347,16 +354,74 @@ class ExplorationService:
         if not session:
             return None
 
-        await request_cancel(str(session_id), reason="User requested cancellation")
+        # Idempotent: return immediately if already STOPPING or in terminal state
+        if session.status == ExplorationStatus.STOPPING.value:
+            return session
+        if session.status in {
+            ExplorationStatus.READY.value,
+            ExplorationStatus.COMPLETED.value,
+            ExplorationStatus.FAILED.value,
+            ExplorationStatus.CANCELLED.value,
+        }:
+            return session
 
-        await self.repo.update_status(session_id=session_id, status=ExplorationStatus.CANCELLED)
+        updated_session = await self.repo.update_status(
+            session_id=session_id,
+            status=ExplorationStatus.STOPPING,
+        )
         await self.event_repo.create(
             exploration_id=session_id,
-            event_type="exploration.cancelled",
-            payload={"message": "Exploration stopped by user"},
+            event_type="exploration.stopping",
+            payload={"message": "Exploration stop requested"},
         )
         await self.db.commit()
-        return session
+
+        # Set Redis flag explore:cancel:{id} (TTL 1h) and publish cancel command
+        await request_cancel(str(session_id), reason="User requested stop")
+
+        # Launch backstop in background
+        task_id = session.celery_task_id
+        asyncio.create_task(self._run_stop_backstop(session_id, task_id))
+
+        return updated_session or session
+
+    async def _run_stop_backstop(self, session_id: uuid.UUID, task_id: str | None) -> None:
+        """Backstop: if worker has not acknowledged in 10s, revoke Celery task and mark CANCELLED."""
+        await asyncio.sleep(10.0)
+        try:
+            from app.infrastructure.database.session import async_session_factory
+            async with async_session_factory() as backstop_db:
+                repo = ExplorationRepository(backstop_db)
+                event_repo = ExplorationEventRepository(backstop_db)
+                sess = await repo.get_by_id(session_id)
+                if sess and sess.status == ExplorationStatus.STOPPING.value:
+                    logger.warning(
+                        "Exploration %s still in STOPPING after 10s backstop. Revoking Celery task %s and forcing CANCELLED.",
+                        session_id, task_id,
+                    )
+                    if task_id:
+                        try:
+                            from app.workers.celery_app import celery_app
+                            celery_app.control.revoke(task_id, terminate=True)
+                        except Exception as rev_err:
+                            logger.warning("Failed to revoke Celery task %s: %s", task_id, rev_err)
+
+                    await repo.update_status(session_id=session_id, status=ExplorationStatus.CANCELLED)
+                    await event_repo.create(
+                        exploration_id=session_id,
+                        event_type="exploration.cancelled",
+                        payload={"message": "Exploration stopped (backstop timeout)"},
+                    )
+                    await backstop_db.commit()
+        except Exception as exc:
+            logger.exception("Error running stop backstop for session %s: %s", session_id, exc)
+
+    async def cancel_session(
+        self,
+        session_id: uuid.UUID,
+        user_id: uuid.UUID,
+    ) -> ExplorationSession | None:
+        return await self.stop_session(session_id, user_id)
 
     async def pause_session(
         self, session_id: uuid.UUID, user_id: uuid.UUID

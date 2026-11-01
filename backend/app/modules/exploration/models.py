@@ -27,6 +27,7 @@ class ExplorationStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
+    STOPPING = "STOPPING"
     CANCELLED = "CANCELLED"
 
 
@@ -135,6 +136,10 @@ VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
     ExplorationStatus.BLOCKED.value: {
         ExplorationStatus.CONNECTING.value,
     },
+    ExplorationStatus.STOPPING.value: {
+        ExplorationStatus.CANCELLED.value,
+        ExplorationStatus.FAILED.value,
+    },
     ExplorationStatus.CANCELLED.value: set(),
 }
 
@@ -143,6 +148,14 @@ def validate_exploration_transition(from_status: str, to_status: str) -> bool:
     """Validate if an exploration status transition is valid."""
     if from_status == to_status:
         return True
+    terminal_states = {
+        ExplorationStatus.COMPLETED.value,
+        ExplorationStatus.FAILED.value,
+        ExplorationStatus.CANCELLED.value,
+    }
+    # Any non-terminal state can transition to STOPPING or CANCELLED
+    if to_status in (ExplorationStatus.STOPPING.value, ExplorationStatus.CANCELLED.value):
+        return from_status not in terminal_states
     allowed = VALID_EXPLORATION_TRANSITIONS.get(from_status, set())
     return to_status in allowed
 
@@ -164,6 +177,7 @@ class ExplorationSession(Base):
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
     goal: Mapped[str | None] = mapped_column(Text, nullable=True)
+    celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default=ExplorationStatus.CREATED.value
     )

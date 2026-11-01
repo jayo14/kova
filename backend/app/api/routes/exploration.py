@@ -164,6 +164,23 @@ async def submit_exploration_answer(
     return updated
 
 
+@router.post("/{session_id}/stop", status_code=status.HTTP_202_ACCEPTED)
+async def stop_exploration(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    """Stop an active exploration session immediately."""
+    await _get_authorized_session(session_id, user.id, db)
+    service = ExplorationService(db)
+    session = await service.stop_session(uuid.UUID(session_id), user.id)
+    return {
+        "id": str(session_id),
+        "status": session.status if session else ExplorationStatus.STOPPING.value,
+        "message": "Exploration stop requested",
+    }
+
+
 @router.post("/{session_id}/cancel", response_model=ExplorationCancelResponse)
 async def cancel_exploration(
     session_id: str,
@@ -177,7 +194,7 @@ async def cancel_exploration(
     return ExplorationCancelResponse(
         id=uuid.UUID(session_id),
         status=cancelled.status if cancelled else ExplorationStatus.CANCELLED.value,
-        message="Exploration stopped",
+        message="Exploration stop requested",
     )
 
 
@@ -467,3 +484,16 @@ async def stream_exploration_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+explorations_router = APIRouter(prefix="/explorations", tags=["exploration"])
+
+
+@explorations_router.post("/{session_id}/stop", status_code=status.HTTP_202_ACCEPTED)
+async def stop_exploration_plural(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+):
+    return await stop_exploration(session_id, user, db)
+

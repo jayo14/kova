@@ -191,9 +191,68 @@ class ProjectRepository:
             project = await self.get_by_id(project_id)
         if project is None:
             return False
+
+        # 1. Set project:deleted:{id} in Redis
+        from app.engine.execution.control import set_project_deleted, request_cancel
+        try:
+            await set_project_deleted(str(project_id))
+        except Exception as e:
+            logger.warning("Failed to set project:deleted in Redis for %s: %s", project_id, e)
+
+        # 2. Find and stop all non-terminal explorations for this project
+        from app.modules.exploration.models import ExplorationSession, ExplorationStatus
+        terminal_exploration_statuses = {
+            ExplorationStatus.READY.value,
+            ExplorationStatus.COMPLETED.value,
+            ExplorationStatus.FAILED.value,
+            ExplorationStatus.CANCELLED.value,
+        }
+        try:
+            stmt_exp = select(ExplorationSession).where(
+                ExplorationSession.project_id == project_id,
+                ExplorationSession.status.notin_(terminal_exploration_statuses),
+            )
+            active_exps = (await self.db.execute(stmt_exp)).scalars().all()
+            for exp in active_exps:
+                exp.status = ExplorationStatus.STOPPING.value
+                try:
+                    await request_cancel(str(exp.id), reason="Project deleted")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("Error stopping active explorations for project %s: %s", project_id, e)
+
+        # 3. Find and stop all non-terminal executions for this project
+        from app.modules.executions.models import Execution
+        from app.modules.flows.models import Flow
+        terminal_execution_statuses = {"completed", "failed", "cancelled", "stopped"}
+        try:
+            stmt_exec = (
+                select(Execution)
+                .join(Flow, Execution.flow_id == Flow.id)
+                .where(
+                    Flow.project_id == project_id,
+                    Execution.status.notin_(terminal_execution_statuses),
+                )
+            )
+            active_execs = (await self.db.execute(stmt_exec)).scalars().all()
+            for ex in active_execs:
+                ex.status = "cancelled"
+                try:
+                    await request_cancel(str(ex.id), reason="Project deleted")
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("Error stopping active executions for project %s: %s", project_id, e)
+
+        await self.db.flush()
+
+        # Wait briefly for workers to acknowledge and begin/finish exiting
+        import asyncio
+        await asyncio.sleep(1.5)
+
         # Explicitly delete children first (FK is NOT NULL, can't rely on cascade nulling)
         from app.modules.credentials.models import Credential
-        from app.modules.flows.models import Flow
         await self.db.execute(
             delete(Credential).where(Credential.project_id == project_id)
         )

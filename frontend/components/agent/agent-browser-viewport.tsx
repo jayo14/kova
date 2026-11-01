@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import type { ExploreState, CredentialRequest } from "@/lib/types";
 import type { ScreenshotEntry } from "@/components/explore/explore-state-machine";
@@ -27,6 +27,7 @@ export interface AgentBrowserViewportProps {
   onUrlChange?: (url: string, path: string) => void;
   onThumbnailClick?: (index: number) => void;
   onResetAuthMode?: () => void;
+  onRetry?: () => void;
   className?: string;
   projectId?: string | null;
   sessionId?: string | null;
@@ -57,11 +58,24 @@ export function AgentBrowserViewport({
   credentialLoading,
   onThumbnailClick,
   onResetAuthMode,
+  onRetry,
   className,
   projectId,
   sessionId,
 }: AgentBrowserViewportProps) {
   const [isSnapshotExpanded, setIsSnapshotExpanded] = useState(false);
+  const [elapsedWait, setElapsedWait] = useState(0);
+
+  useEffect(() => {
+    if (latestScreenshot || state === "ready" || state === "failed" || state === "cancelled") {
+      setElapsedWait(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setElapsedWait((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [latestScreenshot, state]);
 
   const hostname = (() => {
     try {
@@ -148,17 +162,43 @@ export function AgentBrowserViewport({
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
-            <div className="flex flex-col items-center text-center">
-              <div className="h-12 w-12 rounded-2xl border border-primary/20 bg-primary/5 flex items-center justify-center mb-4">
-                <MaterialIcon name="sync" size={24} className={cn("text-primary", isActive && "animate-spin")} />
+            {elapsedWait >= 10 ? (
+              <div className="flex flex-col items-center text-center max-w-sm">
+                <div className="h-12 w-12 rounded-2xl border border-amber-500/30 bg-amber-500/10 flex items-center justify-center mb-3 text-amber-500">
+                  <MaterialIcon name="hourglass_top" size={24} className="animate-pulse" />
+                </div>
+                <p className="text-body font-medium text-foreground mb-1">
+                  Site is slow or unreachable
+                </p>
+                <p className="text-caption text-muted-foreground mb-3">
+                  Waiting for first paint ({elapsedWait}s elapsed). Free hosts (like Render) take up to a minute to wake up.
+                </p>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-caption font-medium text-foreground hover:bg-secondary transition-colors cursor-pointer shadow-xs"
+                  >
+                    <MaterialIcon name="refresh" size={14} />
+                    <span>Retry Now</span>
+                  </button>
+                )}
               </div>
-              <p className="text-body font-medium text-foreground mb-1">
-                {showConnectingOverlay ? `Connecting to ${hostname}` : "Waiting for browser view"}
-              </p>
-              <p className="text-caption text-muted-foreground max-w-xs">
-                Screenshots of the isolated Kova browser session will appear here as it explores.
-              </p>
-            </div>
+            ) : (
+              <div className="flex flex-col items-center text-center">
+                <div className="h-12 w-12 rounded-2xl border border-primary/20 bg-primary/5 flex items-center justify-center mb-4">
+                  <MaterialIcon name="sync" size={24} className={cn("text-primary", isActive && "animate-spin")} />
+                </div>
+                <p className="text-body font-medium text-foreground mb-1">
+                  {showConnectingOverlay ? `Connecting to ${hostname}` : "Waiting for browser view"}
+                </p>
+                <p className="text-caption text-muted-foreground max-w-xs">
+                  {elapsedWait > 2
+                    ? `Waking up host... (${elapsedWait}s elapsed)`
+                    : "Screenshots of the isolated Kova browser session will appear here as it explores."}
+                </p>
+              </div>
+            )}
           </div>
         )}
 

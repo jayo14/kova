@@ -4,6 +4,7 @@ import os
 # egress policy denies them, so the test environment opts in explicitly.
 # Must run before any app.* import instantiates Settings.
 os.environ.setdefault("ALLOW_LOCALHOST", "true")
+os.environ["REDIS_URL"] = "redis://localhost:6379/0"
 
 import pytest
 from sqlalchemy import event

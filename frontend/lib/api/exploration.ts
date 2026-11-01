@@ -95,6 +95,8 @@ export function normalizeExploreStatus(status: string): ExploreState {
       return "failed";
     case "blocked":
       return "blocked";
+    case "stopping":
+      return "stopping";
     case "cancelled":
       return "cancelled";
     default:
@@ -194,15 +196,22 @@ export async function submitExplorationAnswer(
   );
 }
 
-export async function cancelExplorationSession(
+export async function stopExplorationSession(
   sessionId: string,
   token?: string
 ): Promise<void> {
   await api.post(
-    `/api/v1/exploration/${encodeURIComponent(sessionId)}/cancel`,
+    `/api/v1/exploration/${encodeURIComponent(sessionId)}/stop`,
     undefined,
     token
   );
+}
+
+export async function cancelExplorationSession(
+  sessionId: string,
+  token?: string
+): Promise<void> {
+  await stopExplorationSession(sessionId, token);
 }
 
 /**
@@ -301,6 +310,10 @@ export async function streamExplorationEvents(
     });
 
     if (!response.ok || !response.body) {
+      if (response.status === 404) {
+        // Session or project deleted — do not reconnect or fallback to sync
+        return;
+      }
       // Fall back to polling session state if SSE unavailable
       await syncSessionState(sessionId, onEvent, token);
       return;

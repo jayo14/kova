@@ -138,6 +138,7 @@ FAIL_ON_HEALED_KEY_PREFIX = f"{CONTROL_PREFIX}:fail_on_healed"
 _memory_records: dict[str, ControlRecord] = {}
 _memory_inputs: dict[str, list[dict[str, Any]]] = {}
 _memory_cancelled: set[str] = set()
+_memory_project_deleted: set[str] = set()
 _memory_fail_on_healed: set[str] = set()
 _memory_command_subscribers: dict[str, set[asyncio.Queue]] = {}
 _control_locks: dict[str, asyncio.Lock] = {}
@@ -747,16 +748,64 @@ async def resolve_human_checkpoint(execution_id: str) -> ControlRecord:
 # ── Cancellation & Stop ────────────────────────────────────────────────
 
 
+async def set_cancel_flag(session_id: str, ttl: int = 3600) -> None:
+    """Set Redis flag explore:cancel:{id} with TTL 1h (and in-memory fallback)."""
+    _memory_cancelled.add(session_id)
+    r = await _get_redis()
+    if r is not None:
+        try:
+            await r.set(f"explore:cancel:{session_id}", "1", ex=ttl)
+            await r.set(_cancelled_key(session_id), "1", ex=ttl)
+        except Exception as e:
+            logger.debug("Redis set_cancel_flag failed: %s", e)
+
+
+async def check_cancel_flag(session_id: str) -> bool:
+    """Check whether cancellation has been requested via explore:cancel:{id} or control flag."""
+    if session_id in _memory_cancelled:
+        return True
+    r = await _get_redis()
+    if r is not None:
+        try:
+            val = await r.get(f"explore:cancel:{session_id}")
+            if val:
+                return True
+            return bool(await r.get(_cancelled_key(session_id)))
+        except Exception:
+            pass
+    return False
+
+
+async def set_project_deleted(project_id: str, ttl: int = 3600) -> None:
+    """Set Redis flag project:deleted:{id} with TTL 1h."""
+    _memory_project_deleted.add(project_id)
+    r = await _get_redis()
+    if r is not None:
+        try:
+            await r.set(f"project:deleted:{project_id}", "1", ex=ttl)
+        except Exception as e:
+            logger.debug("Redis set_project_deleted failed: %s", e)
+
+
+async def is_project_deleted(project_id: str | None) -> bool:
+    """Check whether a project has been marked deleted in Redis or memory."""
+    if not project_id:
+        return False
+    if project_id in _memory_project_deleted:
+        return True
+    r = await _get_redis()
+    if r is not None:
+        try:
+            return bool(await r.get(f"project:deleted:{project_id}"))
+        except Exception:
+            pass
+    return False
+
+
 async def request_cancel(execution_id: str, reason: str = "") -> None:
     """Request cancellation of a running execution. Stop has top priority over pause/resume."""
     async with _get_control_lock(execution_id):
-        _memory_cancelled.add(execution_id)
-        r = await _get_redis()
-        if r is not None:
-            try:
-                await r.set(_cancelled_key(execution_id), "1", ex=1800)
-            except Exception as e:
-                logger.debug("Redis request_cancel failed: %s", e)
+        await set_cancel_flag(execution_id, ttl=3600)
 
         record = await get_control_record(execution_id)
         record.state = ControlState.CANCELLED
@@ -770,15 +819,7 @@ async def request_cancel(execution_id: str, reason: str = "") -> None:
 
 async def is_cancel_requested(execution_id: str) -> bool:
     """Check whether cancellation has been requested for this execution."""
-    if execution_id in _memory_cancelled:
-        return True
-    r = await _get_redis()
-    if r is not None:
-        try:
-            return bool(await r.get(_cancelled_key(execution_id)))
-        except Exception:
-            pass
-    return False
+    return await check_cancel_flag(execution_id)
 
 
 # Backwards compatibility / convenience aliases

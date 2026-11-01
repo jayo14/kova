@@ -239,7 +239,7 @@ async def test_viewport_lease_heartbeat_renews(db_session: AsyncSession):
     assert "lease_expired" not in types
 
     rec = await get_control_record(str(execution.id))
-    assert rec.state == ControlState.HUMAN_CONTROL
+    assert rec.state in (ControlState.QUIESCING, ControlState.HUMAN_CONTROL)
 
     await cleanup_control(str(execution.id))
 

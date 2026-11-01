@@ -17,6 +17,10 @@ def bind_worker_to_test_database(db_session, monkeypatch):
     monkeypatch.setattr(
         "app.infrastructure.database.session.async_session_factory", factory
     )
+    monkeypatch.setattr(
+        "app.infrastructure.database.session.create_worker_session_factory",
+        lambda _engine=None: factory,
+    )
     from app.engine.execution import control
 
     async def no_redis():

@@ -24,6 +24,7 @@ import {
   getCurrentProjectId,
   answerQuestion,
   cancelExploration,
+  stopExplorationSession,
   createAccount,
   syncSessionState,
   streamExplorationEvents,
@@ -78,6 +79,15 @@ export function ExplorePage() {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
   const [showMissionsDialog, setShowMissionsDialog] = useState(true);
+  const [isStopping, setIsStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (state.state === "cancelled" || state.state === "failed") {
+      setIsStopping(false);
+      setStopError(null);
+    }
+  }, [state.state]);
 
   useEffect(() => {
     if (state.state === "ready" && state.missions.length > 0) {
@@ -436,16 +446,33 @@ export function ExplorePage() {
     );
   };
 
-  const handleStop = () => {
-    abortRef.current?.abort();
-    cancel();
+  const handleStop = async () => {
+    if (isStopping) return;
+    setIsStopping(true);
+    setStopError(null);
+    transition("stopping");
+
     const effectiveSessionId =
       activeSessionIdRef.current ||
       getCurrentSessionId() ||
       startedSessionIdRef.current ||
       initialSessionId ||
       undefined;
-    cancelExploration(handleEvent, undefined, effectiveSessionId);
+
+    if (!effectiveSessionId) {
+      abortRef.current?.abort();
+      setIsStopping(false);
+      transition("cancelled");
+      return;
+    }
+
+    try {
+      await stopExplorationSession(effectiveSessionId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to stop exploration";
+      setStopError(msg);
+      setIsStopping(false);
+    }
   };
 
   const handleUrlChange = useCallback((url: string, path: string) => {
@@ -634,6 +661,9 @@ export function ExplorePage() {
       onProjectNameChange={handleProjectNameChange}
       onStop={handleStop}
       onBack={handleBack}
+      isStopping={isStopping}
+      stopError={stopError}
+      onRetryStop={handleStop}
     >
       {/* ── STATE: IDLE ────────────────────────────────────────────── */}
       {state.state === "idle" && (
@@ -787,6 +817,7 @@ export function ExplorePage() {
               credentialLoading={credentialLoading}
               onUrlChange={handleUrlChange}
               onThumbnailClick={handleThumbnailClick}
+              onRetry={() => handleSubmit({ rawInput: state.url || initialUrl || "", url: state.url || initialUrl, goal: null })}
               projectId={resolvedProjectId || getCurrentProjectId()}
               sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
               className="h-full"

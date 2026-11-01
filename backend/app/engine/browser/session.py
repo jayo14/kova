@@ -149,6 +149,7 @@ class BrowserSession:
         self.trace_path: str | None = None
         self._step_network_logs: list[dict[str, Any]] = []
         self._capturing_step_network: bool = False
+        self._cdp_session: Any | None = None
 
     async def start(self):
         """Launch browser and create isolated context + page.
@@ -347,6 +348,13 @@ class BrowserSession:
                 if req.resource_type in ("font", "media"):
                     await route.abort("blockedbyclient")
                     return
+                req_url_lower = req.url.lower()
+                if any(ext in req_url_lower for ext in (".woff", ".woff2", ".ttf", ".otf", ".eot")):
+                    await route.abort("blockedbyclient")
+                    return
+                if any(ext in req_url_lower for ext in (".mp4", ".webm", ".ogg", ".mp3", ".wav")):
+                    await route.abort("blockedbyclient")
+                    return
                 req_host = (urlparse(req.url).hostname or "").lower()
                 if any(req_host == bh or req_host.endswith("." + bh) for bh in self.BLOCKED_ANALYTICS_HOSTS):
                     await route.abort("blockedbyclient")
@@ -512,6 +520,43 @@ class BrowserSession:
 
         logger.info("Browser context ready (job=%s)", self.job_id)
 
+    async def start_screencast(self, on_frame: Callable[[bytes], Any] | None = None) -> None:
+        """Start CDP Page.startScreencast immediately to stream frames from first paint."""
+        if not self._page or not self._context or self._cdp_session:
+            return
+        try:
+            self._cdp_session = await self._context.new_cdp_session(self._page)
+            import base64
+
+            async def _on_screencast_frame(params: dict[str, Any]):
+                session_id = params.get("sessionId")
+                try:
+                    if self._cdp_session:
+                        await self._cdp_session.send("Page.screencastFrameAck", {"sessionId": session_id})
+                except Exception:
+                    pass
+                data_b64 = params.get("data")
+                if data_b64 and on_frame:
+                    try:
+                        frame_bytes = base64.b64decode(data_b64)
+                        res = on_frame(frame_bytes)
+                        if asyncio.iscoroutine(res):
+                            await res
+                    except Exception as frame_err:
+                        logger.debug("Screencast frame callback error: %s", frame_err)
+
+            self._cdp_session.on("Page.screencastFrame", _on_screencast_frame)
+            await self._cdp_session.send("Page.startScreencast", {
+                "format": "jpeg",
+                "quality": 75,
+                "maxWidth": 1280,
+                "maxHeight": 720,
+                "everyNthFrame": 1,
+            })
+            logger.info("CDP screencast started for browser session")
+        except Exception as cdp_err:
+            logger.debug("Could not start CDP screencast (falling back to standard capture): %s", cdp_err)
+
     async def close(self):
         """Clean up all resources in reverse order.
 
@@ -519,6 +564,14 @@ class BrowserSession:
         """
         import os
         import uuid
+
+        if self._cdp_session:
+            try:
+                await self._cdp_session.send("Page.stopScreencast")
+                await self._cdp_session.detach()
+            except Exception:
+                pass
+            self._cdp_session = None
 
         if self._page and hasattr(self._page, "video") and self._page.video:
             try:
@@ -535,6 +588,14 @@ class BrowserSession:
                 self.trace_path = trace_file
             except Exception as e:
                 logger.debug("Failed to stop tracing: %s", e)
+
+        if self._page:
+            try:
+                if not self._page.is_closed():
+                    await self._page.close()
+            except Exception as e:
+                logger.debug("Failed to close page: %s", e)
+            self._page = None
 
         try:
             if self._context:
