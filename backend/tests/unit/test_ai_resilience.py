@@ -1,5 +1,6 @@
 """New tests for AI provider resilience, circuit breaker, task routing, and timeouts."""
 import asyncio
+import httpx
 import pytest
 from pydantic import BaseModel
 from unittest.mock import patch
@@ -267,3 +268,192 @@ def test_parse_structured_valid_json():
     """Valid JSON parses correctly."""
     result = _parse_structured('{"summary": "valid"}', DummyOutput)
     assert result.summary == "valid"
+
+
+# ---------------------------------------------------------------------------
+# End-to-end mocked HTTP tests for acceptance requirements
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mocked_reasoning_style_output_extracted(monkeypatch):
+    """Reasoning-style output with <think> blocks and leading prose is parsed successfully."""
+    provider = OpenAICompatibleProvider(model="mock-reasoning-model", api_key="mock-key")
+
+    mock_resp = httpx.Response(
+        status_code=200,
+        json={
+            "id": "gen-123",
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            "<think>\nLet me analyze the request thoroughly.\n"
+                            "The user needs a DummyOutput object with summary field.\n"
+                            "</think>\n"
+                            "Sure! Here is the JSON you requested:\n\n"
+                            "```json\n"
+                            "{\n  \"summary\": \"extracted reasoned result\"\n}\n"
+                            "```\n"
+                            "Let me know if you need anything else!"
+                        )
+                    }
+                }
+            ],
+            "usage": {"total_tokens": 150},
+        },
+        request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+    )
+
+    async def mock_post(*args, **kwargs):
+        return mock_resp
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    result = await provider.generate_structured("sys", "prompt", DummyOutput)
+    assert result.summary == "extracted reasoned result"
+
+
+@pytest.mark.asyncio
+async def test_mocked_404_slug_permanent_circuit_breaker(monkeypatch):
+    """404 marks model permanently unavailable and fails over; next call trips circuit immediately."""
+    model_404 = "mock-404-slug"
+    model_healthy = "mock-healthy-slug"
+    provider = OpenAICompatibleProvider(models=[model_404, model_healthy], api_key="mock-key")
+
+    call_count = {"404": 0, "healthy": 0}
+
+    async def mock_post(client, url, *args, **kwargs):
+        json_body = kwargs.get("json", {})
+        m = json_body.get("model")
+        if m == model_404:
+            call_count["404"] += 1
+            return httpx.Response(
+                status_code=404,
+                text='{"error": "Model not found: mock-404-slug"}',
+                request=httpx.Request("POST", url),
+            )
+        call_count["healthy"] += 1
+        return httpx.Response(
+            status_code=200,
+            json={
+                "choices": [{"message": {"content": '{"summary": "healthy fallback"}'}}],
+                "usage": {"total_tokens": 42},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    # First call: 404 fails over to healthy model
+    result = await provider.generate_structured("sys", "prompt", DummyOutput)
+    assert result.summary == "healthy fallback"
+    assert call_count["404"] == 1
+    assert call_count["healthy"] == 1
+
+    # Verify circuit breaker is now permanently open for model_404
+    is_avail = await _model_circuit_breaker.is_available(model_404)
+    assert is_avail is False
+
+    # Second call with provider having only model_404: should fail immediately with AI_PROVIDER_UNAVAILABLE
+    provider_404_only = OpenAICompatibleProvider(model=model_404, api_key="mock-key")
+    with pytest.raises(AIProviderError) as exc_info:
+        await provider_404_only.generate_structured("sys", "prompt", DummyOutput)
+    assert "AI_PROVIDER_UNAVAILABLE" in str(exc_info.value)
+    assert "circuit breaker open" in str(exc_info.value)
+    # No new network request made to 404 model
+    assert call_count["404"] == 1
+
+
+@pytest.mark.asyncio
+async def test_mocked_late_response_within_total_deadline(monkeypatch):
+    """First attempt times out, second attempt succeeds before total deadline."""
+    model_slow = "mock-slow-model"
+    model_fast = "mock-fast-model"
+    provider = OpenAICompatibleProvider(
+        models=[model_slow, model_fast],
+        api_key="mock-key",
+        per_attempt_timeout=0.1,
+        total_budget_seconds=1.0,
+    )
+
+    async def mock_post(client, url, *args, **kwargs):
+        json_body = kwargs.get("json", {})
+        m = json_body.get("model")
+        if m == model_slow:
+            # Simulate a slow attempt that exceeds per-attempt timeout
+            await asyncio.sleep(0.2)
+            return httpx.Response(status_code=200, json={}, request=httpx.Request("POST", url))
+        # Fast model responds quickly before total deadline
+        return httpx.Response(
+            status_code=200,
+            json={
+                "choices": [{"message": {"content": '{"summary": "late attempt accepted"}'}}],
+                "usage": {"total_tokens": 30},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    result = await provider.generate_structured("sys", "prompt", DummyOutput)
+    assert result.summary == "late attempt accepted"
+
+
+@pytest.mark.asyncio
+async def test_mocked_repair_retry_succeeds(monkeypatch):
+    """Invalid JSON triggers one repair retry which succeeds and returns valid JSON."""
+    provider = OpenAICompatibleProvider(model="mock-repair-model", api_key="mock-key")
+
+    call_index = 0
+
+    async def mock_post(client, url, *args, **kwargs):
+        nonlocal call_index
+        call_index += 1
+        if call_index == 1:
+            # First attempt: invalid JSON
+            return httpx.Response(
+                status_code=200,
+                json={"choices": [{"message": {"content": "This is completely invalid and not JSON"}}]},
+                request=httpx.Request("POST", url),
+            )
+        # Second attempt (repair retry): valid JSON matching schema
+        return httpx.Response(
+            status_code=200,
+            json={
+                "choices": [{"message": {"content": '{"summary": "repaired successfully"}'}}],
+                "usage": {"total_tokens": 55},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    result = await provider.generate_structured("sys", "prompt", DummyOutput)
+    assert result.summary == "repaired successfully"
+    assert call_index == 2
+
+
+@pytest.mark.asyncio
+async def test_all_models_fail_raises_ai_provider_unavailable_never_heuristics(monkeypatch):
+    """When all models fail, raise AIProviderError with AI_PROVIDER_UNAVAILABLE — never silent fallback."""
+    provider = OpenAICompatibleProvider(
+        models=["model-fail-1", "model-fail-2"],
+        api_key="mock-key",
+    )
+
+    async def mock_post(client, url, *args, **kwargs):
+        return httpx.Response(
+            status_code=500,
+            text='{"error": "Internal Server Error"}',
+            request=httpx.Request("POST", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+
+    with pytest.raises(AIProviderError) as exc_info:
+        await provider.generate_structured("sys", "prompt", DummyOutput)
+
+    err = str(exc_info.value)
+    assert "AI_PROVIDER_UNAVAILABLE" in err
+    assert "model-fail-1" in err
+    assert "model-fail-2" in err
