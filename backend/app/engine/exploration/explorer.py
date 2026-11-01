@@ -2695,23 +2695,9 @@ class ExplorationEngine:
             is_button = link.get("is_button", False)
 
             if is_button:
-                if not text:
-                    continue
-                clean_slug = re.sub(r'[^a-zA-Z0-9]+', '-', text.lower()).strip('-')
-                path = f"#action/{clean_slug}"
-                if path in seen:
-                    continue
-                seen.add(path)
-                tag_name = link.get("tagName", "button")
-                safe_text = text.replace('"', '\\"').replace("'", "\\'")
-                selector = f"{tag_name}:has-text('{safe_text}')"
-                links.append({
-                    "path": path,
-                    "url": f"{base_parsed.scheme}://{base_parsed.netloc}{path}",
-                    "text": text,
-                    "is_button": True,
-                    "selector": selector,
-                })
+                # Controls are not pages: do not add buttons as fake #action/ URLs
+                # to the site map. They are already captured as interactive elements
+                # on the page node and handled as controls, not navigable routes.
                 continue
 
             href = link.get("href") or ""

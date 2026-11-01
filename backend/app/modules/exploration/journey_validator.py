@@ -480,6 +480,224 @@ def repair_journey(
     return mission
 
 
+# ---------------------------------------------------------------------------
+# Deterministic capability templates (used when AI is unavailable or fails)
+# Built exclusively from observed controls — no product keywords.
+# ---------------------------------------------------------------------------
+
+_CONTROL_KIND_PASSWORD_INPUT = "password_input"
+_CONTROL_KIND_LOGIN_FORM = "login_form"
+_CONTROL_KIND_SIGNUP_FORM = "signup_form"
+_CONTROL_KIND_FORGOT_PASSWORD = "forgot_password"
+_CONTROL_KIND_OAUTH_BUTTON = "oauth_button"
+
+
+def _detect_control_kind(el_name: str, element: dict | None = None) -> str | None:
+    name = (el_name or "").lower()
+    blob = name
+    if element:
+        blob += " " + str(element.get("type", "")) + " " + str(element.get("role", "")) + " " + str(element.get("aria-label", ""))
+    if any(k in blob for k in ("show password", "hide password", "toggle password", "password visibility", "reveal password", "type=password", "input[type='password'", "input[name*='password'", "input[id*='password'")):
+        return _CONTROL_KIND_PASSWORD_INPUT
+    if any(k in blob for k in ("oauth", "google", "apple", "github", "microsoft", "sign in with", "continue with")):
+        return _CONTROL_KIND_OAUTH_BUTTON
+    if any(k in blob for k in ("forgot password", "reset password", "can't sign in", "trouble signing", "recover account")):
+        return _CONTROL_KIND_FORGOT_PASSWORD
+    if any(k in blob for k in ("sign in", "log in", "login", "signin")) and ("password" in blob or "submit" in blob):
+        return _CONTROL_KIND_LOGIN_FORM
+    if any(k in blob for k in ("sign up", "signup", "create account", "register", "registration")) and ("password" in blob or "submit" in blob):
+        return _CONTROL_KIND_SIGNUP_FORM
+    return None
+
+
+def _build_password_toggle_template(
+    control_name: str,
+    page_url: str,
+    page_title: str,
+    element: dict | None = None,
+) -> DiscoveredMission:
+    pw_input_sel = "input[type='password'], input[name*='password' i], input[id*='password' i]"
+    toggle_sel = element.get("selector") if element else None
+    if not toggle_sel:
+        toggle_sel = f"button:has-text('{control_name}'), [role='button']:has-text('{control_name}')"
+    return DiscoveredMission(
+        id=f"mission-{uuid.uuid4().hex[:8]}",
+        name=f"Toggle password visibility: {control_name}",
+        title=f"Toggle password visibility: {control_name}",
+        description="Enter test text into the password field, toggle visibility to reveal cleartext, then toggle again to restore masking.",
+        objective="Verify that the password visibility toggle reveals masked text and returns to masked state.",
+        persona="Visitor",
+        category="control_exploration",
+        journey=[
+            f"Open {page_title or 'the application'}",
+            "Enter test text into password input",
+            f"Click '{control_name}' to reveal password",
+            "Verify password input type changes to text",
+            f"Click '{control_name}' again to mask password",
+            "Verify password input type returns to password",
+        ],
+        steps=[
+            {"type": "navigate", "url": page_url},
+            {"type": "wait", "value": "500"},
+            {"type": "type", "target": pw_input_sel, "value": "SecretPassword123!"},
+            {"type": "wait", "value": "200"},
+            {"type": "click", "target": toggle_sel},
+            {"type": "wait", "value": "200"},
+            {"type": "click", "target": toggle_sel},
+            {"type": "wait", "value": "200"},
+        ],
+        successCondition={
+            "element_attribute": {
+                "target": pw_input_sel,
+                "attribute": "type",
+                "value": "password",
+            }
+        },
+        confidence=0.85,
+        estimated_time_seconds=10,
+        user_goal="Toggle password visibility to verify cleartext reveal and masking",
+        expected_outcome="Password field toggles between masked and visible states and returns to masked password type",
+        classification="functional",
+        kind="control_exploration",
+        runnable=True,
+        validation_status="eligible",
+        control_hints=[control_name, toggle_sel, pw_input_sel],
+        provenance={
+            "observed_controls": [control_name, toggle_sel, pw_input_sel],
+            "observed_routes": [page_url],
+            "preconditions": [],
+            "unmet_preconditions": [],
+            "template": "password_toggle",
+        },
+    )
+
+
+def _build_login_form_template(
+    control_name: str,
+    page_url: str,
+    page_title: str,
+    element: dict | None = None,
+) -> DiscoveredMission:
+    return DiscoveredMission(
+        id=f"mission-{uuid.uuid4().hex[:8]}",
+        name=f"Sign in with empty credentials: {control_name}",
+        title=f"Sign in with empty credentials: {control_name}",
+        description="Submit the login form without entering credentials and verify a validation error appears; then submit wrong credentials and verify the session remains logged out.",
+        objective="Verify login form validation rejects empty and invalid credentials without authenticating.",
+        persona="Visitor",
+        category="auth",
+        journey=[
+            f"Open {page_title or 'the application'}",
+            "Click submit with empty credentials",
+            "Verify validation error appears for missing credentials",
+            "Enter wrong credentials",
+            "Click submit",
+            "Verify error message appears and session remains logged out",
+        ],
+        steps=[
+            {"type": "navigate", "url": page_url},
+            {"type": "wait", "value": "500"},
+            {"type": "click", "target": f"button:has-text('{control_name}'), [role='button']:has-text('{control_name}')"},
+            {"type": "wait", "value": "500"},
+            {"type": "assert_visible", "target": "[role='alert'], .error, [aria-invalid='true'], .invalid-feedback"},
+            {"type": "type", "target": "input[name*='email' i], input[name*='username' i], input[type='email']", "value": "wrong@example.com"},
+            {"type": "type", "target": "input[type='password'], input[name*='password' i]", "value": "WrongPassword123!"},
+            {"type": "click", "target": f"button:has-text('{control_name}'), [role='button']:has-text('{control_name}')"},
+            {"type": "wait", "value": "500"},
+            {"type": "assert_visible", "target": "[role='alert'], .error, .invalid-feedback"},
+        ],
+        successCondition={
+            "validation_error": {
+                "appears_on_empty_submit": True,
+                "appears_on_wrong_credentials": True,
+                "session_remains_logged_out": True,
+            }
+        },
+        confidence=0.8,
+        estimated_time_seconds=15,
+        user_goal="Verify login form rejects invalid credentials and keeps session logged out",
+        expected_outcome="Empty submit shows validation error; wrong credentials show error and session stays logged out",
+        classification="functional",
+        kind="feature_test",
+        runnable=False,
+        validation_status="blocked_by_prerequisites",
+        control_hints=[control_name],
+        rejection_reasons=[
+            "Journey requires test credentials or authenticated session that is not currently available"
+        ],
+        provenance={
+            "observed_controls": [control_name],
+            "observed_routes": [page_url],
+            "preconditions": ["valid_login_credentials"],
+            "unmet_preconditions": ["valid_login_credentials"],
+            "template": "login_form",
+            "blocked_reason": "BLOCKED_NEEDS_CREDENTIALS: Login journey requires credentials to proceed beyond validation checks",
+        },
+    )
+
+
+def _build_signup_form_template(
+    control_name: str,
+    page_url: str,
+    page_title: str,
+    element: dict | None = None,
+) -> DiscoveredMission:
+    return DiscoveredMission(
+        id=f"mission-{uuid.uuid4().hex[:8]}",
+        name=f"Create account with invalid data: {control_name}",
+        title=f"Create account with invalid data: {control_name}",
+        description="Submit the signup form with an invalid email and mismatched passwords and verify validation errors appear for both fields.",
+        objective="Verify signup form validation rejects invalid email and mismatched passwords.",
+        persona="Visitor",
+        category="auth",
+        journey=[
+            f"Open {page_title or 'the application'}",
+            "Enter invalid email address",
+            "Enter mismatched passwords",
+            "Click submit",
+            "Verify validation error for invalid email",
+            "Verify validation error for password mismatch",
+        ],
+        steps=[
+            {"type": "navigate", "url": page_url},
+            {"type": "wait", "value": "500"},
+            {"type": "type", "target": "input[name*='email' i], input[type='email']", "value": "not-an-email"},
+            {"type": "type", "target": "input[type='password'], input[name*='password' i]", "value": "Password123!"},
+            {"type": "type", "target": "input[name*='confirm' i], input[name*='password_confirmation' i]", "value": "DifferentPassword123!"},
+            {"type": "click", "target": f"button:has-text('{control_name}'), [role='button']:has-text('{control_name}')"},
+            {"type": "wait", "value": "500"},
+            {"type": "assert_visible", "target": "[role='alert'], .error, [aria-invalid='true'], .invalid-feedback"},
+        ],
+        successCondition={
+            "validation_error": {
+                "invalid_email_rejected": True,
+                "password_mismatch_rejected": True,
+                "account_not_created": True,
+            }
+        },
+        confidence=0.8,
+        estimated_time_seconds=15,
+        user_goal="Verify signup form validates email format and password matching",
+        expected_outcome="Invalid email and mismatched passwords produce validation errors; no account is created",
+        classification="functional",
+        kind="feature_test",
+        runnable=False,
+        validation_status="blocked_by_prerequisites",
+        control_hints=[control_name],
+        rejection_reasons=[
+            "Journey requires test credentials or authenticated session that is not currently available"
+        ],
+        provenance={
+            "observed_controls": [control_name],
+            "observed_routes": [page_url],
+            "preconditions": ["valid_signup_credentials"],
+            "unmet_preconditions": ["valid_signup_credentials"],
+            "template": "signup_form",
+            "blocked_reason": "BLOCKED_NEEDS_CREDENTIALS: Signup journey requires credentials to proceed beyond validation checks",
+        },
+    )
+
+
 def score_journey(
     mission: DiscoveredMission,
     capabilities: list[DiscoveredCapability] | None = None,
