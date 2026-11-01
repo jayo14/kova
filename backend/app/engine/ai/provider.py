@@ -362,7 +362,19 @@ async def _repair_retry(
         )
         if resp.status_code < 400:
             body = resp.json()
-            content = body["choices"][0].get("message", {}).get("content") or ""
+            choice = body["choices"][0]
+            message = choice.get("message", {})
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls") or []
+            if not content.strip() and tool_calls:
+                for tc in tool_calls:
+                    func = tc.get("function") or {}
+                    args = func.get("arguments")
+                    if args and args.strip():
+                        content = args
+                        break
+            if not content.strip():
+                content = message.get("reasoning") or message.get("thought") or ""
             return _parse_structured(content, schema)
     except Exception:
         pass
@@ -670,6 +682,14 @@ class OpenAICompatibleProvider(AIProvider):
                     choice = body["choices"][0]
                     message = choice.get("message", {})
                     content = message.get("content") or ""
+                    tool_calls = message.get("tool_calls") or []
+                    if not content.strip() and tool_calls:
+                        for tc in tool_calls:
+                            func = tc.get("function") or {}
+                            args = func.get("arguments")
+                            if args and args.strip():
+                                content = args
+                                break
                     # Some reasoning models put content in reasoning or thoughts if content is null/empty
                     if not content.strip():
                         content = message.get("reasoning") or message.get("thought") or ""
