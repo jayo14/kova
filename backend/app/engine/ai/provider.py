@@ -429,6 +429,11 @@ async def discover_models_from_endpoint(
             # Filter out :free auto-router entries — use explicit model IDs only
             if ":free" in mid or "/free" in mid:
                 continue
+            # Check capabilities if provider returns supported_parameters (e.g. OpenRouter)
+            supported = m.get("supported_parameters")
+            if supported and isinstance(supported, list):
+                if not any(p in supported for p in ("response_format", "tools", "tool_choice", "json")):
+                    continue
             ids.append(mid)
         return ids
     except Exception:
@@ -662,7 +667,15 @@ class OpenAICompatibleProvider(AIProvider):
 
                 if resp.status_code >= 400:
                     resp_text = resp.text[:250] if resp.text else ""
-                    is_permanent = resp.status_code == 404 or "unavailable" in resp_text.lower()
+                    is_permanent = (
+                        resp.status_code == 404
+                        or "unavailable" in resp_text.lower()
+                        or "not found" in resp_text.lower()
+                        or "does not exist" in resp_text.lower()
+                        or "no such model" in resp_text.lower()
+                        or "deprecated" in resp_text.lower()
+                        or "decommissioned" in resp_text.lower()
+                    )
                     await _model_circuit_breaker.record_failure(
                         model, status_code=resp.status_code, is_permanent=is_permanent,
                     )
