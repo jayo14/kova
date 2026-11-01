@@ -42,7 +42,10 @@ async def _run_exploration_async(
     task,
     session_id: str,
 ):
-    from app.infrastructure.database.session import async_session_factory
+    from app.infrastructure.database.session import (
+        create_worker_engine,
+        create_worker_session_factory,
+    )
     from app.modules.exploration.models import ExplorationStatus
     from app.modules.exploration.repository import (
         ExplorationEventRepository,
@@ -54,11 +57,15 @@ async def _run_exploration_async(
         is_cancel_requested,
         get_pending_input,
         subscribe_commands,
+        close_control_redis,
     )
 
     settings = get_settings()
+    worker_engine = create_worker_engine()
+    worker_session_factory = create_worker_session_factory(worker_engine)
 
-    async with async_session_factory() as db:
+    try:
+        async with worker_session_factory() as db:
         repo = ExplorationRepository(db)
         event_repo = ExplorationEventRepository(db)
 
@@ -119,10 +126,9 @@ async def _run_exploration_async(
             transaction so concurrent progress callbacks cannot cause
             "Session is already flushing" errors on a shared session.
             """
-            from app.infrastructure.database.session import async_session_factory
             from app.modules.executions.reporting import sanitize_payload
 
-            async with async_session_factory() as write_db:
+            async with worker_session_factory() as write_db:
                 write_repo = ExplorationRepository(write_db)
                 write_event_repo = ExplorationEventRepository(write_db)
                 try:
@@ -262,7 +268,7 @@ async def _run_exploration_async(
             # races worker subscription or Redis reconnects mid-session.
             while True:
                 await asyncio.sleep(1)
-                async with async_session_factory() as control_db:
+                async with worker_session_factory() as control_db:
                     current = await ExplorationRepository(control_db).get_by_id(
                         session_uuid
                     )
@@ -404,7 +410,7 @@ async def _run_exploration_async(
             except Exception:
                 pass
             try:
-                async with async_session_factory() as fail_db:
+                async with worker_session_factory() as fail_db:
                     fail_repo = ExplorationRepository(fail_db)
                     fail_event_repo = ExplorationEventRepository(fail_db)
                     current = await fail_repo.get_by_id(session_uuid)
@@ -456,7 +462,7 @@ async def _run_exploration_async(
             except Exception:
                 pass
             try:
-                async with async_session_factory() as fail_db:
+                async with worker_session_factory() as fail_db:
                     fail_repo = ExplorationRepository(fail_db)
                     fail_event_repo = ExplorationEventRepository(fail_db)
                     await fail_event_repo.create(
@@ -492,3 +498,12 @@ async def _run_exploration_async(
                     await engine._browser.close()
             except Exception:
                 pass
+    finally:
+        try:
+            await close_control_redis()
+        except Exception:
+            pass
+        try:
+            await worker_engine.dispose()
+        except Exception:
+            pass

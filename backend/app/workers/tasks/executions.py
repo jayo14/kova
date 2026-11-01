@@ -42,7 +42,11 @@ def run_execution(self, execution_id: str):
 
 async def _run_execution_async(task, execution_id: str):
     """Async implementation of the execution task."""
-    from app.infrastructure.database.session import async_session_factory
+    from app.infrastructure.database.session import (
+        create_worker_engine,
+        create_worker_session_factory,
+    )
+    from app.engine.execution.control import close_control_redis
     from app.modules.executions.models import ExecutionStatus
     from app.modules.executions.repository import ExecutionEventRepository, ExecutionRepository
     from app.modules.executions.event_service import EventService
@@ -52,7 +56,11 @@ async def _run_execution_async(task, execution_id: str):
     from app.modules.flows.repository import FlowRepository
     from app.engine.execution.runner import FlowRunner
 
-    async with async_session_factory() as db:
+    worker_engine = create_worker_engine()
+    worker_session_factory = create_worker_session_factory(worker_engine)
+
+    try:
+        async with worker_session_factory() as db:
         exec_repo = ExecutionRepository(db)
         event_repo = ExecutionEventRepository(db)
         event_svc = EventService(db)
@@ -205,8 +213,7 @@ async def _run_execution_async(task, execution_id: str):
         async def event_recorder(target_exec_id: uuid.UUID, event_type: str, payload: dict):
             async with emit_lock:
                 try:
-                    from app.infrastructure.database.session import async_session_factory
-                    async with async_session_factory() as event_db:
+                    async with worker_session_factory() as event_db:
                         rec_event_repo = ExecutionEventRepository(event_db)
                         rec_exec_repo = ExecutionRepository(event_db)
                         await rec_event_repo.create(
@@ -374,8 +381,7 @@ async def _run_execution_async(task, execution_id: str):
 
             # Persist unexpected worker failures distinctly from application assertions using a clean session.
             try:
-                from app.infrastructure.database.session import async_session_factory
-                async with async_session_factory() as fail_db:
+                async with worker_session_factory() as fail_db:
                     fail_exec_repo = ExecutionRepository(fail_db)
                     fail_event_svc = EventService(fail_db)
                     current_rec = await fail_exec_repo.get_by_id(exec_uuid)
@@ -404,3 +410,12 @@ async def _run_execution_async(task, execution_id: str):
                     await org_service.release_execution_slot(org_id)
                 except Exception as rel_err:
                     logger.warning("Failed to release execution slot for org %s: %s", org_id, rel_err)
+    finally:
+        try:
+            await close_control_redis()
+        except Exception:
+            pass
+        try:
+            await worker_engine.dispose()
+        except Exception:
+            pass

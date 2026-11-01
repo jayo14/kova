@@ -142,6 +142,13 @@ export function ExplorePage() {
         case "missions":
           setMissions(event.missions, event.recommendation);
           break;
+        case "ai_synthesis_failed":
+          addActivity({
+            id: `ai-fail-${Date.now()}`,
+            status: "failed",
+            message: `AI Journey Synthesis Warning: ${event.error || "Model error"}. Falling back to grounded heuristic journeys.`,
+          });
+          break;
         case "error":
           setCredentialLoading(false);
           // Auth errors stay in auth_required state with error message

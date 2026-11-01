@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import logging
 import re
+import traceback
 import uuid
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -34,6 +35,7 @@ from app.modules.exploration.journey_validator import (
 )
 from app.engine.ai.provider import get_ai_provider
 from app.engine.ai.reasoner import AgentReasoner
+from app.engine.ai.settings import ai_settings
 from app.config.settings import get_settings
 from app.engine.execution import control as exec_control
 from app.engine.browser.readiness import (
@@ -3063,8 +3065,8 @@ class ExplorationEngine:
         for r in accessible_routes[:4]:
             discovered_areas.append(
                 DiscoveryItem(
-                    label=r["text"] or r["path"],
-                    description=f"[{r['category'].upper()}] {r['path']} — {r['elements_count']} elements",
+                    label=r.get("text") or r.get("title") or r.get("path", ""),
+                    description=f"[{r.get('category', 'feature').upper()}] {r.get('path', '')} — {r.get('elements_count', 0)} elements",
                 )
             )
 
@@ -3222,11 +3224,27 @@ class ExplorationEngine:
                         target = first_core_feature or next((m for m in missions if m.category != "auth"), missions[0])
                         target.recommended = True
                     mission_count = len(missions)
+                else:
+                    err_msg = "Model returned 0 journeys"
+                    logger.warning("AI journey synthesis returned empty result, falling back to heuristics: %s", err_msg)
+                    await self._emit("ai_synthesis_failed", {
+                        "error": err_msg,
+                        "traceback": "",
+                    })
             except asyncio.TimeoutError:
-                logger.warning("AI journey synthesis timed out within budget (%.1fs), falling back to heuristics", ai_settings.AI_TOTAL_BUDGET_SECONDS)
+                err_msg = f"Timed out within budget ({getattr(ai_settings, 'AI_TOTAL_BUDGET_SECONDS', 25.0):.1f}s)"
+                logger.exception("AI journey synthesis timed out within budget: %s", err_msg)
+                await self._emit("ai_synthesis_failed", {
+                    "error": err_msg,
+                    "traceback": traceback.format_exc(),
+                })
             except Exception as e:
                 err_msg = str(e) or type(e).__name__
-                logger.warning("AI journey synthesis failed, falling back to heuristics: %s", err_msg)
+                logger.exception("AI journey synthesis failed, falling back to heuristics: %s", err_msg)
+                await self._emit("ai_synthesis_failed", {
+                    "error": err_msg,
+                    "traceback": traceback.format_exc(),
+                })
 
         # Step 3c: Heuristic route-based journeys (if AI did not produce missions)
         if len(missions) <= (1 if self.goal else 0):
@@ -4345,7 +4363,7 @@ class ExplorationEngine:
             if not cap:
                 return None
         path = route["path"]
-        feature_name = route["text"] or path.split("/")[-1].replace("-", " ").title()
+        feature_name = route.get("text") or route.get("title") or path.split("/")[-1].replace("-", " ").title()
         is_settings_like = any(sk in path.lower() for sk in ["settings", "profile", "account", "preference"])
         if is_settings_like:
             recommended = False
@@ -4408,8 +4426,9 @@ class ExplorationEngine:
                 },
             }
         else:
+            route_url = route.get("url") or f"{base_url.rstrip('/')}{path}"
             steps = [
-                {"type": "navigate", "url": route["url"]},
+                {"type": "navigate", "url": route_url},
                 {"type": "wait", "value": "500"},
             ]
             journey_desc = [

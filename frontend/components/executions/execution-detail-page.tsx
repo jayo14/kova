@@ -141,6 +141,17 @@ export function ExecutionDetailPage({
     (activities.length > 0 ? activities[activities.length - 1] : null);
   const currentAction = activeActivity?.label || null;
 
+  const {
+    actionError,
+    setActionError,
+    isRetrying,
+    shareLoading,
+    shareSuccess,
+    handleRetry,
+    handleShare,
+    handleExportPdf,
+  } = useExecutionActions({ execution, report });
+
   // Cancel / Stop execution
   const handleCancel = useCallback(async () => {
     setIsCancelling(true);
@@ -158,66 +169,7 @@ export function ExecutionDetailPage({
     } finally {
       setIsCancelling(false);
     }
-  }, [execution.id, updateExecutionLocally, refresh, router]);
-
-  // Run again / Retry -> creates a NEW immutable execution
-  const handleRetry = useCallback(() => {
-    setActionError(null);
-    startRetryTransition(async () => {
-      try {
-        const newExecution = await createExecution(execution.missionId);
-        if (newExecution) {
-          router.push(`/executions/${newExecution.id}`);
-        } else {
-          setActionError("Failed to start new execution.");
-        }
-      } catch {
-        setActionError("Failed to start new execution.");
-      }
-    });
-  }, [execution.missionId, router]);
-
-  const [shareLoading, setShareLoading] = useState(false);
-  const [shareSuccess, setShareSuccess] = useState<string | null>(null);
-
-  const handleShare = useCallback(async () => {
-    setShareLoading(true);
-    setShareSuccess(null);
-    try {
-      const res = await mintShareableUrl(execution.id);
-      if (res?.url) {
-        if (typeof navigator !== "undefined" && navigator.clipboard) {
-          await navigator.clipboard.writeText(res.url);
-        }
-        setShareSuccess("Link copied to clipboard!");
-        setTimeout(() => setShareSuccess(null), 3500);
-      } else {
-        setActionError("Could not generate shareable link.");
-      }
-    } catch {
-      setActionError("Failed to generate shareable link.");
-    } finally {
-      setShareLoading(false);
-    }
-  }, [execution.id]);
-
-  const handleExportPdf = useCallback(async () => {
-    setActionError(null);
-    const base = getApiBaseUrl();
-    const reportPath = `${base}/api/v1/executions/${encodeURIComponent(execution.id)}/report`;
-    const signature = report?.signature ?? (await getExecutionReport(execution.id))?.signature;
-
-    if (!signature) {
-      setActionError("Report is not ready yet. Reload the page and try again.");
-      return;
-    }
-
-    window.open(
-      `${reportPath}?signature=${encodeURIComponent(signature)}&format=html`,
-      "_blank",
-      "noopener,noreferrer"
-    );
-  }, [execution.id, report?.signature]);
+  }, [execution.id, updateExecutionLocally, refresh, router, setActionError]);
 
   const displayError = actionError || streamError;
   const reportLoading = terminalStatuses.includes(execution.status) && !reportLoaded;

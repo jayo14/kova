@@ -116,6 +116,8 @@ class ModelCircuitBreaker:
             h.failure_count = 0
             h.circuit_open_until = 0.0
 
+    LONG_LIVED_STATUS_CODES = {401, 403, 404}
+
     async def record_failure(
         self,
         slug: str,
@@ -127,22 +129,23 @@ class ModelCircuitBreaker:
             h.failure_count += 1
             h.last_failure_time = time.time()
 
-            if is_permanent or status_code == 404:
+            # Only 401/403/404 (invalid key or model) or explicit is_permanent are long-lived
+            if is_permanent or (status_code in self.LONG_LIVED_STATUS_CODES):
                 h.status = "permanently_unavailable"
                 h.permanent_unavailable_until = time.time() + self.PERMANENT_TTL_SECONDS
                 logger.warning(
-                    "Model '%s' marked permanently unavailable (status=%s, circuit for %dh)",
+                    "Model '%s' marked long-lived unavailable (status=%s, circuit for %dh)",
                     slug, status_code, self.PERMANENT_TTL_SECONDS // 3600,
                 )
                 return
 
-            # Temporary failure — exponential backoff
+            # Temporary failure — 503/overloaded/429/timeouts/5xx (backoff 5 to 30s)
             if status_code == 429:
-                backoff = min(60.0, 5.0 * (2 ** min(h.failure_count, 5)))
-            elif status_code and 500 <= status_code < 600:
-                backoff = min(30.0, 3.0 * (2 ** min(h.failure_count, 4)))
+                backoff = min(30.0, max(5.0, 5.0 * (2 ** min(h.failure_count - 1, 3))))
+            elif status_code == 503 or (status_code and 500 <= status_code < 600):
+                backoff = min(30.0, max(5.0, 5.0 * (2 ** min(h.failure_count - 1, 3))))
             else:
-                backoff = min(15.0, 2.0 * (2 ** min(h.failure_count, 3)))
+                backoff = min(30.0, max(5.0, 5.0 * (2 ** min(h.failure_count - 1, 3))))
 
             h.circuit_open_until = time.time() + backoff
             h.status = "temporarily_unavailable"
@@ -457,6 +460,12 @@ class AIProvider(ABC):
     total_completion_tokens: int = 0
     model_calls: int = 0
     last_usage: dict[str, Any] = {}
+    _last_success_time: float = 0.0
+    _last_failure_time: float = 0.0
+    _failure_count: int = 0
+
+    async def is_available(self) -> bool:
+        return True
 
     def get_usage(self) -> dict[str, Any]:
         return {

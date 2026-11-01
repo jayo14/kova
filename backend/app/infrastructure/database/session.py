@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.config.settings import settings
 
@@ -103,6 +104,42 @@ async_session_factory = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+
+def create_worker_engine(url: str | None = None) -> AsyncEngine:
+    """Create a task-scoped async engine using NullPool.
+
+    Worker processes running several asyncio.run() calls must not retain
+    connections in an asyncpg connection pool across separate event loops.
+    With NullPool, connections are opened and terminated cleanly within the
+    active loop, and await engine.dispose() releases the engine.
+    """
+    target_url = url or settings.DATABASE_URL
+    connect_args: dict = {
+        "server_settings": {
+            "tcp_keepalives_idle": "60",
+            "tcp_keepalives_interval": "10",
+            "tcp_keepalives_count": "5",
+        },
+        "command_timeout": 60,
+    }
+    cleaned_url, ssl_kwargs = _strip_sslmode(target_url)
+    connect_args.update(ssl_kwargs)
+    return create_async_engine(
+        cleaned_url,
+        echo=False,
+        poolclass=NullPool,
+        connect_args=connect_args,
+    )
+
+
+def create_worker_session_factory(worker_engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    """Create an async sessionmaker bound to a worker engine."""
+    return async_sessionmaker(
+        worker_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
 
 
 from fastapi import Depends

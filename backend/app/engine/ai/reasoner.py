@@ -393,8 +393,8 @@ class AgentReasoner:
                 task_type=TaskType.JOURNEY_SYNTHESIS,
             )
         except AIProviderError as e:
-            logger.warning("AI journey synthesis failed: %s", e)
-            return None
+            logger.exception("AI journey synthesis failed: %s", e)
+            raise
 
     # ── Semantic Form Field Identification Fallback ─────────────────
 

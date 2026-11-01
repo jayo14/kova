@@ -148,6 +148,7 @@ export type ExplorationEvent =
   | { type: "discovery"; discoveries: DiscoveryItem[] }
   | { type: "missions"; missions: SuggestedMission[]; recommendation?: string }
   | { type: "completed"; projectName: string }
+  | { type: "ai_synthesis_failed"; error: string; traceback?: string }
   | { type: "error"; message: string };
 
 // ── Project ───────────────────────────────────────────────

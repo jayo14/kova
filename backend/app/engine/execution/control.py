@@ -248,6 +248,32 @@ async def _get_pubsub_redis() -> aioredis.Redis | None:
         return None
 
 
+async def close_control_redis() -> None:
+    """Explicitly close control and pubsub Redis clients within the active event loop.
+
+    Must be called in worker tasks (e.g. Celery tasks) before the asyncio event
+    loop is torn down, preventing cross-loop aclose() calls and 'Event loop is closed'
+    errors on subsequent task runs.
+    """
+    global _redis, _redis_loop, _redis_checked, _redis_available, _pubsub_redis, _pubsub_redis_loop
+    if _redis is not None:
+        try:
+            await _redis.aclose()
+        except Exception:
+            pass
+        _redis = None
+        _redis_loop = None
+        _redis_checked = False
+        _redis_available = False
+    if _pubsub_redis is not None:
+        try:
+            await _pubsub_redis.aclose()
+        except Exception:
+            pass
+        _pubsub_redis = None
+        _pubsub_redis_loop = None
+
+
 def _state_key(execution_id: str) -> str:
     return f"{STATE_KEY_PREFIX}:{execution_id}"
 
