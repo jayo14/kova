@@ -443,6 +443,9 @@ class BrowserSession:
 
         async def _on_request_failed(request):
             try:
+                failure_str = str(request.failure or "")
+                if "blockedbyclient" in failure_str.lower() and self.block_heavy_resources:
+                    return
                 page_url = self._page.url if self._page else ""
                 page_parsed = urlparse(page_url)
                 req_parsed = urlparse(request.url)
