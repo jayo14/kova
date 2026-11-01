@@ -759,13 +759,36 @@ class BrowserSession:
 
     # --- Observation ---
 
-    async def observe(self) -> dict[str, Any]:
-        """Observe the current page state using PageObserver.
+    async def observe(self, force_refresh: bool = False) -> dict[str, Any]:
+        """Observe the current page state using PageObserver with caching for unchanged DOM.
 
         Returns structured data with url, title, elements, forms, and text.
         """
+        if not self._page:
+            raise RuntimeError("Browser session not started or already closed")
+
+        if not force_refresh and hasattr(self, "_cached_observation") and self._cached_observation:
+            try:
+                # Fast check if url and DOM length have changed
+                state_signature = await self._page.evaluate(
+                    "() => `${window.location.href}:::${document.title}:::${document.body ? document.body.innerHTML.length : 0}`"
+                )
+                if state_signature == getattr(self, "_cached_state_signature", None):
+                    return self._cached_observation
+            except Exception:
+                pass
+
         observer = PageObserver(self.page)
-        return await observer.observe()
+        observation = await observer.observe()
+        try:
+            state_signature = await self._page.evaluate(
+                "() => `${window.location.href}:::${document.title}:::${document.body ? document.body.innerHTML.length : 0}`"
+            )
+            self._cached_state_signature = state_signature
+            self._cached_observation = observation
+        except Exception:
+            pass
+        return observation
 
     # --- Structured action execution ---
 
