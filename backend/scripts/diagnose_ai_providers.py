@@ -40,18 +40,17 @@ class ProbeResponse(BaseModel):
     message: str
 
 
-async def probe_model(
-    name: str,
+async def probe_single_model(
+    provider_name: str,
+    model: str,
     api_key: str,
     base_url: str,
-    models: list[str],
     headers_extra: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Run one tiny JSON task against a single model. Returns pass/fail result."""
     result: dict[str, Any] = {
-        "name": name,
-        "models": models,
-        "primary_model": models[0] if models else "",
+        "provider": provider_name,
+        "model": model,
         "status": "NOT CONFIGURED",
         "latency_ms": 0.0,
         "error": None,
@@ -62,53 +61,49 @@ async def probe_model(
         result["status"] = "KEY MISSING"
         return result
 
+    if not await _model_circuit_breaker.is_available(model):
+        result["status"] = "CIRCUIT OPEN"
+        result["error"] = "circuit breaker open"
+        return result
+
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if headers_extra:
         headers.update(headers_extra)
 
-    # Try each model in the fallback list
-    for model in models:
-        if not await _model_circuit_breaker.is_available(model):
-            result["error"] = f"{model}: circuit breaker open"
-            continue
-
-        provider = OpenAICompatibleProvider(
-            model=model,
-            api_key=api_key,
-            base_url=base_url,
-            name=name,
-            per_attempt_timeout=8.0,
-            total_budget_seconds=20.0,
+    provider = OpenAICompatibleProvider(
+        model=model,
+        api_key=api_key,
+        base_url=base_url,
+        name=provider_name,
+        per_attempt_timeout=8.0,
+        total_budget_seconds=15.0,
+    )
+    t0 = time.perf_counter()
+    try:
+        probe_out: ProbeResponse = await provider.generate_structured(
+            system="You are a health-check probe. Reply with valid JSON strictly conforming to the schema.",
+            prompt=f"Confirm that {provider_name} model {model} is operational.",
+            schema=ProbeResponse,
+            task_type=TaskType.GENERAL,
         )
-        t0 = time.perf_counter()
-        try:
-            probe_out: ProbeResponse = await provider.generate_structured(
-                system="You are a health-check probe. Reply with JSON only.",
-                prompt=f"Confirm that {name} model {model} is operational.",
-                schema=ProbeResponse,
-                task_type=TaskType.GENERAL,
-            )
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            result["latency_ms"] = round(elapsed_ms, 1)
-            result["status"] = "PASS"
-            result["passed"] = True
-            result["probe_message"] = probe_out.message
-            result["working_model"] = model
-            return result
-        except AIProviderError as e:
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            result["latency_ms"] = round(elapsed_ms, 1)
-            result["error"] = str(e)
-            result["status"] = "FAIL"
-            continue
-        except Exception as e:
-            elapsed_ms = (time.perf_counter() - t0) * 1000
-            result["latency_ms"] = round(elapsed_ms, 1)
-            result["error"] = str(e)
-            result["status"] = "FAIL"
-            continue
-
-    return result
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        result["latency_ms"] = round(elapsed_ms, 1)
+        result["status"] = "PASS"
+        result["passed"] = True
+        result["probe_message"] = probe_out.message
+        return result
+    except AIProviderError as e:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        result["latency_ms"] = round(elapsed_ms, 1)
+        result["error"] = str(e)
+        result["status"] = "FAIL"
+        return result
+    except Exception as e:
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+        result["latency_ms"] = round(elapsed_ms, 1)
+        result["error"] = str(e)
+        result["status"] = "FAIL"
+        return result
 
 
 async def main() -> int:
@@ -122,60 +117,65 @@ async def main() -> int:
     print()
 
     if not ai_settings.ai_enabled:
-        print("SKIP: No AI provider configured. Deterministic-only mode.")
+        print("FAIL: No AI provider configured or enabled. Failing loudly instead of silently using heuristics.")
+        print("Set valid credentials for at least one provider (OPENROUTER_API_KEY, GEMINI_API_KEY, etc.)")
         print("=" * 80)
-        return 0
+        return 1
 
-    # Get configured providers
-    providers_to_test = []
+    # Collect all (provider, model, key, url) to test
+    items_to_test = []
     if ai_settings.AI_PROVIDER == "failover":
         for prov_name in ai_settings.failover_providers:
             creds = ai_settings.get_provider_credentials(prov_name)
             if creds and creds["api_key"] and creds["models"]:
-                providers_to_test.append({
-                    "name": creds["name"],
-                    "api_key": creds["api_key"],
-                    "base_url": creds["base_url"],
-                    "models": creds["models"],
-                })
+                for m in creds["models"]:
+                    items_to_test.append({
+                        "provider": creds["name"],
+                        "model": m,
+                        "api_key": creds["api_key"],
+                        "base_url": creds["base_url"],
+                    })
     else:
         creds = ai_settings.get_provider_credentials(ai_settings.AI_PROVIDER)
         if creds and creds["api_key"] and creds["models"]:
-            providers_to_test.append({
-                "name": creds["name"],
-                "api_key": creds["api_key"],
-                "base_url": creds["base_url"],
-                "models": creds["models"],
-            })
+            for m in creds["models"]:
+                items_to_test.append({
+                    "provider": creds["name"],
+                    "model": m,
+                    "api_key": creds["api_key"],
+                    "base_url": creds["base_url"],
+                })
 
-    if not providers_to_test:
+    if not items_to_test:
         print("FAIL: No providers with API keys and models configured.")
         print("Set at least one of: OPENROUTER_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, NVIDIA_NIM_API_KEY")
         print("=" * 80)
         return 1
 
-    # Run probes concurrently
+    # Run probes concurrently for each model
     tasks = [
-        probe_model(
-            p["name"], p["api_key"], p["base_url"], p["models"],
+        probe_single_model(
+            provider_name=item["provider"],
+            model=item["model"],
+            api_key=item["api_key"],
+            base_url=item["base_url"],
             headers_extra={"HTTP-Referer": "https://kova.dev", "X-Title": "Kova Agent"}
-            if "openrouter" in p["base_url"] else None,
+            if "openrouter" in item["base_url"] else None,
         )
-        for p in providers_to_test
+        for item in items_to_test
     ]
     results = await asyncio.gather(*tasks)
 
     # Print results table
-    print(f"{'Provider':<18} | {'Model':<45} | {'Status':<8} | {'Latency':<9} | {'Result'}")
+    print(f"{'Provider':<16} | {'Model':<45} | {'Status':<12} | {'Latency':<9} | {'Result'}")
     print("-" * 95)
     any_passed = False
     for r in results:
         lat = f"{r['latency_ms']}ms" if r['latency_ms'] > 0 else "-"
-        model = r.get("working_model", r["primary_model"])
         status_icon = "✅" if r["passed"] else "❌"
-        print(f"{r['name']:<18} | {model:<45} | {r['status']:<8} | {lat:<9} | {status_icon}")
+        print(f"{r['provider']:<16} | {r['model']:<45} | {r['status']:<12} | {lat:<9} | {status_icon}")
         if r["error"]:
-            print(f"{'':<18} |  └─ Error: {r['error'][:100]}")
+            print(f"{'':<16} |  └─ Error: {r['error'][:100]}")
         if r["passed"]:
             any_passed = True
 
@@ -186,12 +186,12 @@ async def main() -> int:
         print("RESULT: NO AI MODEL PASSED SELF-TEST. ❌")
         print("AI will be unavailable. Deployment should not proceed without at least one working model.")
 
-    # Also test failover composite
+    # Also test failover composite initialization
     print()
-    print("FAILOVER COMPOSITE TEST:")
+    print("FAILOVER COMPOSITE STATUS:")
     active = get_ai_provider()
     if active is None:
-        print("  AI provider is inactive (no valid keys).")
+        print("  AI provider composite is inactive.")
     else:
         print(f"  Initialized: {active.name} (model: {active.model_name})")
 
