@@ -924,20 +924,20 @@ class ReadinessWaiter:
             try:
                 await page.evaluate(
                     """([quietMs, maxWaitMs]) => new Promise((resolve) => {
-                        let timer = null;
+                        let timer = setTimeout(resolve, quietMs);
                         const observer = new MutationObserver(() => {
                             if (timer) clearTimeout(timer);
                             timer = setTimeout(resolve, quietMs);
                         });
-                        observer.observe(document.body, {
+                        observer.observe(document.body || document.documentElement, {
                             childList: true, subtree: true, attributes: true
                         });
                         const hardStop = setTimeout(() => {
                             observer.disconnect();
+                            if (timer) clearTimeout(timer);
                             resolve();
                         }, maxWaitMs);
-                        // Resolve early if the observer stops mutating within budget.
-                    }""",
+                    })""",
                     [int(quiet_ms), int(min(remaining, max_wait_s) * 1000)],
                     timeout=int(min(remaining, max_wait_s) * 1000) + 1000,
                 )
