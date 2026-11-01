@@ -21,7 +21,7 @@ from pydantic import ValidationError
 
 from app.config.settings import get_settings
 from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
-from app.engine.ai.provider import get_ai_provider
+from app.engine.ai.provider import get_ai_provider, TaskType
 from app.engine.exploration.agent.policy import is_dangerous_control, is_safe_to_click
 from app.engine.exploration.agent.schemas import (
     CLICK_ACTIONS,
@@ -290,7 +290,9 @@ class ExplorationAgent:
             + build_system_prompt_clause()
         )
         try:
-            return await provider.generate_structured(_SYSTEM_PROMPT, prompt, AgentActionProposal)
+            return await provider.generate_structured(
+                _SYSTEM_PROMPT, prompt, AgentActionProposal, task_type=TaskType.NEXT_ACTION
+            )
         except (ValidationError, Exception) as exc:  # noqa: BLE001 - provider failures are fallback signals
             logger.debug("AI exploration proposal failed: %s", exc)
             return None

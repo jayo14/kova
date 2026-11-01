@@ -107,7 +107,9 @@ class AgentReasoner:
                 "data_entry|navigation|unknown. risk_level ∈ low|medium|high."
             )
             try:
-                return await self.provider.generate_structured(system, prompt, GoalInterpretation)
+                return await self.provider.generate_structured(
+                    system, prompt, GoalInterpretation, task_type=TaskType.NEXT_ACTION
+                )
             except AIProviderError as e:
                 logger.warning("Goal interpretation via AI failed, using heuristics: %s", e)
         return self._heuristic_goal(objective)
@@ -211,7 +213,9 @@ class AgentReasoner:
                 "confidence, risk_level, evidence_requirements[], reasoning}."
             )
             try:
-                return await self.provider.generate_structured(system, prompt, JourneyPlan)
+                return await self.provider.generate_structured(
+                    system, prompt, JourneyPlan, task_type=TaskType.JOURNEY_SYNTHESIS
+                )
             except AIProviderError as e:
                 logger.warning("Journey planning via AI failed, using template: %s", e)
         return self._heuristic_plan(memory, interpretation, semantic_view, has_email_provider)
@@ -426,7 +430,7 @@ class AgentReasoner:
 
         try:
             return await self.provider.generate_structured(
-                system, user_prompt, AuthFormSemanticResult
+                system, user_prompt, AuthFormSemanticResult, task_type=TaskType.NEXT_ACTION
             )
         except AIProviderError as e:
             logger.warning("AI provider failed to semantically identify auth inputs: %s", e)
@@ -460,7 +464,7 @@ class AgentReasoner:
 
         try:
             return await self.provider.generate_structured(
-                system, user_prompt, AuthEntranceSemanticResult
+                system, user_prompt, AuthEntranceSemanticResult, task_type=TaskType.NEXT_ACTION
             )
         except AIProviderError as e:
             logger.warning("AI provider failed to semantically identify auth entrance: %s", e)
@@ -505,7 +509,9 @@ class AgentReasoner:
             last_error: AIProviderError | None = None
             for attempt in range(2):
                 try:
-                    return await self.provider.generate_structured(system, prompt, ActionProposal)
+                    return await self.provider.generate_structured(
+                        system, prompt, ActionProposal, task_type=TaskType.NEXT_ACTION
+                    )
                 except AIProviderError as e:
                     last_error = e
                     logger.warning("AI action proposal failed (attempt %d/2): %s", attempt + 1, e)
@@ -587,7 +593,9 @@ class AgentReasoner:
                 "Return JSON: {strategy, alternative_target, reason, action?}."
             )
             try:
-                return await self.provider.generate_structured(system, prompt, RecoveryProposal)
+                return await self.provider.generate_structured(
+                    system, prompt, RecoveryProposal, task_type=TaskType.NEXT_ACTION
+                )
             except AIProviderError as e:
                 logger.warning("Recovery via AI failed, using fallback: %s", e)
         return self._heuristic_recovery(failure_code, failure)
@@ -645,7 +653,9 @@ class AgentReasoner:
                 "suggested_condition}."
             )
             try:
-                return await self.provider.generate_structured(system, prompt, VerificationProposal)
+                return await self.provider.generate_structured(
+                    system, prompt, VerificationProposal, task_type=TaskType.VERIFICATION
+                )
             except AIProviderError as e:
                 logger.warning("Verification via AI failed, using deterministic: %s", e)
         # Deterministic fallback: satisfied only when every requirement has a
@@ -686,6 +696,7 @@ class AgentReasoner:
                 system=system_prompt,
                 prompt=user_prompt,
                 schema=AuthPageClassification,
+                task_type=TaskType.OBSERVATION_SUMMARY,
             )
             if isinstance(res, AuthPageClassification):
                 return res
@@ -714,6 +725,7 @@ class AgentReasoner:
                 system=system_prompt,
                 prompt=user_prompt,
                 schema=SubmitButtonProposal,
+                task_type=TaskType.NEXT_ACTION,
             )
             if res and res.selector:
                 return res.selector
@@ -750,6 +762,7 @@ class AgentReasoner:
                     system=system_prompt,
                     prompt=user_prompt,
                     schema=ProposedFlowList,
+                    task_type=TaskType.JOURNEY_SYNTHESIS,
                 )
                 if res and res.flows:
                     flow_dicts: list[dict[str, Any]] = []
@@ -831,6 +844,7 @@ class AgentReasoner:
                 system=system_prompt,
                 prompt=user_prompt,
                 schema=FailureHypothesis,
+                task_type=TaskType.VERIFICATION,
             )
             # Anti-hallucination guard: filter cited evidence IDs to known valid IDs if known IDs exist
             if valid_evidence_ids:
@@ -902,6 +916,7 @@ class AgentReasoner:
                 system=system_prompt,
                 prompt=user_prompt,
                 schema=ReportSummary,
+                task_type=TaskType.OBSERVATION_SUMMARY,
             )
             return res
         except (AIProviderError, Exception) as e:
@@ -982,6 +997,7 @@ class AgentReasoner:
                 system=system_prompt,
                 prompt=user_prompt,
                 schema=ScenarioValidityAssessment,
+                task_type=TaskType.VERIFICATION,
             )
             if not res.flow_id:
                 res.flow_id = str(flow.get("id", ""))

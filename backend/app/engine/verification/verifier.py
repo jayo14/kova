@@ -305,6 +305,7 @@ async def compile_expectation(
     condition: dict = {}
     if provider is not None:
         import json
+        from app.engine.ai.provider import TaskType
         from app.engine.ai.schemas import CompiledExpectation
         system = (
             "You compile software-testing objectives and expected outcomes into "
@@ -339,7 +340,12 @@ async def compile_expectation(
             "Compile into a deterministic verification condition grounded in observed realities."
         )
         try:
-            compiled = await provider.generate_structured(system, prompt, CompiledExpectation)
+            try:
+                compiled = await provider.generate_structured(
+                    system, prompt, CompiledExpectation, task_type=TaskType.VERIFICATION
+                )
+            except TypeError:
+                compiled = await provider.generate_structured(system, prompt, CompiledExpectation)
             condition = (
                 compiled.condition
                 if isinstance(compiled, CompiledExpectation)

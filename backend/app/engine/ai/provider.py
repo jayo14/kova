@@ -573,6 +573,31 @@ class OpenAICompatibleProvider(AIProvider):
     def _parse_structured(content: str, schema: type[T]) -> T:
         return _parse_structured(content, schema)
 
+    def get_models_for_task(self, task_type: TaskType | str) -> list[str]:
+        """Order candidate models based on task type.
+
+        Uses cheap fast models for observation summaries, and stronger models
+        for journey synthesis, next-action decisions, and verification.
+        Explicit task overrides in config take precedence.
+        """
+        task_name = task_type.value if isinstance(task_type, TaskType) else str(task_type)
+        override = ai_settings.get_task_model(ai_settings.AI_TIER, task_name)
+        if override:
+            if override in self._models:
+                return [override] + [m for m in self._models if m != override]
+            return [override] + list(self._models)
+
+        if task_name == TaskType.OBSERVATION_SUMMARY.value:
+            fast_keywords = ("lightning", "mini", "nano", "flash", "small", "lite", "7b", "8b")
+            fast_models = [m for m in self._models if any(k in m.lower() for k in fast_keywords)]
+            other_models = [m for m in self._models if m not in fast_models]
+            if fast_models:
+                return fast_models + other_models
+            elif len(self._models) > 1:
+                return [self._models[-1]] + self._models[:-1]
+
+        return list(self._models)
+
     async def generate_structured(
         self,
         system: str,
@@ -587,6 +612,7 @@ class OpenAICompatibleProvider(AIProvider):
         total budget. On invalid JSON, one repair retry is attempted.
         """
         task_type = task_type or self._task_type
+        models_to_try = self.get_models_for_task(task_type)
         schema_json = json.dumps(schema.model_json_schema())
         augmented_system = (
             f"{system}\n\n"
@@ -605,7 +631,7 @@ class OpenAICompatibleProvider(AIProvider):
         start_time = time.time()
 
         async with httpx.AsyncClient() as client:
-            for idx, model in enumerate(self._models):
+            for idx, model in enumerate(models_to_try):
                 # Check circuit breaker before attempting
                 if not await _model_circuit_breaker.is_available(model):
                     errors.append(f"{model}: circuit breaker open")
@@ -946,10 +972,16 @@ def get_ai_provider_for_task(task_type: TaskType) -> AIProvider | None:
     provider = get_ai_provider()
     if provider is None:
         return None
-    # If the provider supports task_type override, wrap it
-    if hasattr(provider, "_task_type"):
-        # Already configured — return as-is (task_type is per-call param)
-        return provider
+    if isinstance(provider, OpenAICompatibleProvider):
+        return OpenAICompatibleProvider(
+            models=provider.models,
+            api_key=provider._api_key,
+            base_url=provider.base_url,
+            name=provider.name,
+            task_type=task_type,
+            per_attempt_timeout=provider._per_attempt_timeout,
+            total_budget_seconds=provider._total_budget,
+        )
     return provider
 
 
