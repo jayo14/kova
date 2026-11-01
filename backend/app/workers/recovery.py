@@ -420,6 +420,8 @@ async def reconcile_explorations() -> dict[str, int]:
                     run_exploration.apply_async,
                     args=[str(session_id)],
                     queue=queue,
+                    exchange=queue,
+                    routing_key=queue,
                 )
             )
             _dispatch_tasks.add(task)

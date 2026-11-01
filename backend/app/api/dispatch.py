@@ -95,7 +95,13 @@ async def dispatch_execution(execution_id: str, *, context: str = "execution") -
 
         active_workers = await _celery_active_workers()
         if active_workers:
-            await asyncio.to_thread(run_execution.delay, execution_id, queue=queue)
+            await asyncio.to_thread(
+                run_execution.apply_async,
+                args=[execution_id],
+                queue=queue,
+                exchange=queue,
+                routing_key=queue,
+            )
             logger.info(
                 "Dispatched execution %s to Celery queue %s: %s",
                 execution_id,
@@ -168,7 +174,13 @@ async def dispatch_batch(
 
         active_workers = await _celery_active_workers()
         if active_workers:
-            task = await asyncio.to_thread(run_multiple_executions.delay, execution_ids, parallel, queue=queue)
+            task = await asyncio.to_thread(
+                run_multiple_executions.apply_async,
+                args=[execution_ids, parallel],
+                queue=queue,
+                exchange=queue,
+                routing_key=queue,
+            )
             task_id = celery_task_id or getattr(task, "id", None) or str(uuid.uuid4())
             logger.info(
                 "Dispatched batch executions %s to Celery worker: %s",

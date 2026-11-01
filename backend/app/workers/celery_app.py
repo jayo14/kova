@@ -10,7 +10,7 @@ celery_app = Celery(
     backend=settings.CELERY_RESULT_BACKEND,
 )
 
-from kombu import Queue
+from kombu import Exchange, Queue
 
 celery_app.conf.update(
     task_serializer="json",
@@ -26,10 +26,12 @@ celery_app.conf.update(
     # abandoned at 660s. The hard kill is raised per-task to 3660s.
     soft_time_limit=630,
     task_default_queue="kova-free",
+    task_default_exchange="kova-free",
+    task_default_routing_key="kova-free",
     task_queues=[
-        Queue("kova-free", routing_key="kova-free"),
-        Queue("kova-pro", routing_key="kova-pro"),
-        Queue("kova-enterprise", routing_key="kova-enterprise"),
+        Queue("kova-free", Exchange("kova-free", type="direct"), routing_key="kova-free"),
+        Queue("kova-pro", Exchange("kova-pro", type="direct"), routing_key="kova-pro"),
+        Queue("kova-enterprise", Exchange("kova-enterprise", type="direct"), routing_key="kova-enterprise"),
     ],
     broker_use_ssl={"ssl_cert_reqs": "none"} if "rediss://" in str(settings.CELERY_BROKER_URL) else None,
     redis_backend_use_ssl={"ssl_cert_reqs": "none"} if "rediss://" in str(settings.CELERY_RESULT_BACKEND) else None,

@@ -123,6 +123,8 @@ class ExplorationService:
             run_exploration.apply_async,
             args=[str(session_id)],
             queue=queue,
+            exchange=queue,
+            routing_key=queue,
         )
         logger.info("Enqueued exploration %s to Celery queue %s", session_id, queue)
 
