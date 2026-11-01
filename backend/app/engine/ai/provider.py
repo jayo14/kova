@@ -209,12 +209,16 @@ def _strip_reasoning_blocks(text: str) -> str:
     """Strip reasoning blocks (<think>, <reasoning>, etc.) from model output."""
     text = re.sub(r"<think[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"<reasoning[\s\S]*?</reasoning>", "", text, flags=re.IGNORECASE)
+    # Also strip unclosed blocks if the model was cut off mid-thought
+    text = re.sub(r"^<think[\s\S]*?(?:$|(?=\{))", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^<reasoning[\s\S]*?(?:$|(?=\{))", "", text, flags=re.IGNORECASE)
     return text.strip()
 
 
-def _find_first_balanced_json(text: str) -> str | None:
-    """Find the first balanced JSON object or array in text."""
-    # Try JSON object via brace scanning
+def _iter_balanced_json(text: str) -> list[str]:
+    """Find all balanced JSON objects and arrays in text."""
+    candidates: list[str] = []
+    # Try JSON objects via brace scanning
     for start in range(len(text)):
         if text[start] != "{":
             continue
@@ -239,14 +243,15 @@ def _find_first_balanced_json(text: str) -> str | None:
             elif ch == "}":
                 depth -= 1
                 if depth == 0:
-                    candidate = text[start : i + 1]
+                    cand = text[start : i + 1]
                     try:
-                        json.loads(candidate)
-                        return candidate
+                        json.loads(cand)
+                        candidates.append(cand)
                     except json.JSONDecodeError:
-                        break  # try next start position
+                        pass
+                    break
 
-    # Try JSON array
+    # Try JSON arrays
     for start in range(len(text)):
         if text[start] != "[":
             continue
@@ -271,14 +276,21 @@ def _find_first_balanced_json(text: str) -> str | None:
             elif ch == "]":
                 depth -= 1
                 if depth == 0:
-                    candidate = text[start : i + 1]
+                    cand = text[start : i + 1]
                     try:
-                        json.loads(candidate)
-                        return candidate
+                        json.loads(cand)
+                        candidates.append(cand)
                     except json.JSONDecodeError:
-                        break
+                        pass
+                    break
 
-    return None
+    return candidates
+
+
+def _find_first_balanced_json(text: str) -> str | None:
+    """Find the first balanced JSON object or array in text."""
+    candidates = _iter_balanced_json(text)
+    return candidates[0] if candidates else None
 
 
 def _parse_structured(content: str, schema: type[T]) -> T:
@@ -291,9 +303,9 @@ def _parse_structured(content: str, schema: type[T]) -> T:
     text = _strip_reasoning_blocks(text)
 
     # 2. Try markdown code fences
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if fence_match:
-        cand = fence_match.group(1).strip()
+    fence_matches = re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    for fm in fence_matches:
+        cand = fm.group(1).strip()
         try:
             data = json.loads(cand)
             return schema.model_validate(data)
@@ -307,9 +319,8 @@ def _parse_structured(content: str, schema: type[T]) -> T:
     except Exception:
         pass
 
-    # 4. Try first balanced JSON object/array
-    balanced = _find_first_balanced_json(text)
-    if balanced:
+    # 4. Try balanced JSON object/array candidates
+    for balanced in _iter_balanced_json(text):
         try:
             data = json.loads(balanced)
             return schema.model_validate(data)
@@ -341,9 +352,8 @@ async def _repair_retry(
     schema_json = json.dumps(schema.model_json_schema())
     repair_system = (
         f"{system}\n\n"
-        f"Your previous response was not valid JSON. Return ONLY a single valid JSON object "
-        f"strictly conforming to this JSON Schema, with no markdown fences, no reasoning blocks, "
-        f"and no prose:\n{schema_json}"
+        f"Your previous response was invalid. Please return only valid JSON matching this schema, "
+        f"with no reasoning blocks (<think>), no markdown fences, and no surrounding commentary:\n{schema_json}"
     )
     payload = {
         "model": model,
