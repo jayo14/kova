@@ -147,12 +147,13 @@ export function AgentBrowserViewport({
               executionId={sessionId}
               fallbackScreenshot={latestScreenshot}
               hideHeader={true}
+              onRetry={onRetry}
               className="w-full h-full border-0 rounded-none shadow-none"
             />
-            {elapsedWait >= 10 && (
+            {elapsedWait >= 8 && (
               <div className="absolute top-3 right-3 z-20 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-background/95 backdrop-blur-xs px-3 py-1.5 shadow-sm">
                 <MaterialIcon name="hourglass_top" size={14} className="text-amber-500 animate-pulse" />
-                <span className="text-[11px] font-medium text-foreground">Site is slow ({elapsedWait}s)</span>
+                <span className="text-[11px] font-medium text-foreground">Site is slow or unreachable ({elapsedWait}s)</span>
                 {onRetry && (
                   <button
                     type="button"

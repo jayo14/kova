@@ -237,3 +237,98 @@ async def test_viewport_stream_exploration_channel():
     assert delivered_jpeg == test_jpeg
     assert state == "observing"
     assert masking == "masked"
+
+
+@pytest.mark.asyncio
+async def test_preflight_45s_delay_acceptance():
+    """Acceptance test: against a fixture that delays its first response, the UI shows
+    the wake-up message and elapsed time within 2s, and no more than 2s ever passes without an event.
+    """
+    import time
+    emitted_events = []
+    timestamps = []
+
+    async def mock_emitter(event_type: str, payload: dict):
+        emitted_events.append((event_type, payload))
+        timestamps.append(time.time())
+
+    engine = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://slow-render-app.onrender.com",
+        event_emitter=mock_emitter,
+    )
+
+    async def mock_get(url, **kwargs):
+        # Simulate delay with ticking
+        await asyncio.sleep(4.5)
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = "<html><body>Awake!</body></html>"
+        return resp
+
+    with patch("httpx.AsyncClient.get", side_effect=mock_get):
+        result = await engine._warmup_preflight("https://slow-render-app.onrender.com")
+
+    assert result["success"] is True
+
+    # 1. Wake-up message emitted within 2.2s
+    warmup_events = [
+        p for ev, p in emitted_events
+        if ev == "progress" and p.get("id") == "exp-warmup"
+    ]
+    assert len(warmup_events) >= 2
+    assert "Waking up the site... hosts like this can take up to a minute" in warmup_events[0]["message"]
+    assert warmup_events[0]["elapsed_seconds"] == 2
+
+    # 2. No more than 2.2s ever passes without an event
+    for i in range(1, len(timestamps)):
+        gap = timestamps[i] - timestamps[i - 1]
+        assert gap <= 2.2, f"Event gap was {gap}s (> 2.0s without an event)"
+
+    # 3. Final completion message
+    assert warmup_events[-1]["status"] == "completed"
+    assert "Site is awake" in warmup_events[-1]["message"]
+
+
+@pytest.mark.asyncio
+async def test_fake_worker_live_view_websocket_roundtrip():
+    """Verify that a fake worker publishing frames and events to an exploration session
+    delivers them cleanly to the subscriber channels used by the live-view WebSocket.
+    """
+    from app.engine.execution.stream import subscribe_frames, subscribe_states, publish_state
+
+    session_id = str(uuid.uuid4())
+    worker_frame = b"\xff\xd8fakeworkerframe\xff\xd9"
+    received_frames = []
+    received_states = []
+
+    async def fake_worker():
+        # Allow subscribers to attach first
+        await asyncio.sleep(0.15)
+        await publish_state(session_id, "navigating", url="https://example.com", title="Test App")
+        await publish_frame(session_id, worker_frame, state="observing", masking="masked")
+
+    async def frame_subscriber():
+        async for frame, state, masking in subscribe_frames(session_id):
+            received_frames.append((frame, state, masking))
+            break
+
+    async def state_subscriber():
+        async for state_msg in subscribe_states(session_id):
+            received_states.append(state_msg)
+            break
+
+    worker_task = asyncio.create_task(fake_worker())
+    frame_task = asyncio.create_task(frame_subscriber())
+    state_task = asyncio.create_task(state_subscriber())
+
+    await asyncio.wait_for(asyncio.gather(worker_task, frame_task, state_task), timeout=5.0)
+
+    assert len(received_frames) == 1
+    assert received_frames[0][0] == worker_frame
+    assert received_frames[0][1] == "observing"
+    assert received_frames[0][2] == "masked"
+
+    assert len(received_states) == 1
+    assert received_states[0]["state"] == "navigating"
+    assert received_states[0]["url"] == "https://example.com"

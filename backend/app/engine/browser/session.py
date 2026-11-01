@@ -121,6 +121,15 @@ class BrowserSession:
         "vercel-insights.com",
         "speed-insights.vercel.app",
         "vitals.vercel-insights.com",
+        "logrocket.io",
+        "logrocket.com",
+        "posthog.com",
+        "fullstory.com",
+        "connect.facebook.net",
+        "analytics.tiktok.com",
+        "heapanalytics.com",
+        "mouseflow.com",
+        "crazyegg.com",
     )
 
     def __init__(

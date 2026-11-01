@@ -285,8 +285,12 @@ class AgentExecutor:
                     facts=self._fact_list(memory),
                 )
 
+            t_turn_start = time.perf_counter()
+
             # Observe (always fresh — the loop never trusts stale state)
+            t_obs_start = time.perf_counter()
             observation = await browser.observe()
+            t_obs = time.perf_counter() - t_obs_start
             memory.current_url = browser.page.url
             await self._emit(EventTypes.OBSERVATION_CREATED, {
                 "turn": turn,
@@ -320,10 +324,12 @@ class AgentExecutor:
                 )
 
             # Propose next action (loop surfaces the last failure for recovery context)
+            t_ai_start = time.perf_counter()
             proposal = await self.reasoner.propose_next_action(
                 memory, interpretation, observation,
                 recent_failure=self.recent_failure_detail or None,
             )
+            t_ai = time.perf_counter() - t_ai_start
 
             # ── Cost controls: count this model call and enforce per-run caps ──
             if self.reasoner.provider is not None:
@@ -469,7 +475,14 @@ class AgentExecutor:
                     )
 
             # Execute the validated proposal
+            t_act_start = time.perf_counter()
             outcome = await self._execute_proposal(browser, memory, proposal, turn)
+            t_act = time.perf_counter() - t_act_start
+            t_turn_total = time.perf_counter() - t_turn_start
+            logger.info(
+                "Execution turn %d timing breakdown: total=%.2fs [observe=%.2fs, ai=%.2fs, action=%.2fs]",
+                turn, t_turn_total, t_obs, t_ai, t_act,
+            )
             if outcome is not None:
                 return outcome  # terminal (human/blocked/failed/email exhausted)
 

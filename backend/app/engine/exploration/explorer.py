@@ -590,10 +590,41 @@ class ExplorationEngine:
         """Warm up sleeping hosts (Render, Fly.io, Heroku free tier, etc.) with patient HTTP GET.
 
         Free tier hosts sleep on idle and take 45-60+ seconds to spin up.
-        Emits progress notifications with elapsed time so the UI is never silent.
+        Emits progress notifications with elapsed time every 2s so the UI is never silent.
         """
         t0 = time.time()
         emitted_warmup = False
+        ticker_stop = asyncio.Event()
+
+        async def _ticker():
+            nonlocal emitted_warmup
+            while not ticker_stop.is_set():
+                try:
+                    await asyncio.wait_for(ticker_stop.wait(), timeout=2.0)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                if ticker_stop.is_set():
+                    break
+                elapsed = int(time.time() - t0)
+                if not emitted_warmup:
+                    emitted_warmup = True
+                    await self._emit("state_change", {"status": "CONNECTING"})
+                    await self._emit("progress", {
+                        "id": "exp-warmup",
+                        "message": "Waking up the site... hosts like this can take up to a minute",
+                        "status": "active",
+                        "elapsed_seconds": elapsed,
+                    })
+                else:
+                    await self._emit("progress", {
+                        "id": "exp-warmup",
+                        "message": f"Waking up the site... ({elapsed}s elapsed)",
+                        "status": "active",
+                        "elapsed_seconds": elapsed,
+                    })
+
+        ticker_task = asyncio.create_task(_ticker())
 
         headers = {
             "User-Agent": (
@@ -608,113 +639,105 @@ class ExplorationEngine:
         last_error = None
         last_error_code = "TIMEOUT"
 
-        async with httpx.AsyncClient(
-            verify=False,
-            follow_redirects=True,
-            timeout=httpx.Timeout(connect=15.0, read=30.0, write=10.0, pool=10.0),
-        ) as client:
-            while time.time() < deadline:
-                elapsed = int(time.time() - t0)
-                if elapsed >= 2 and not emitted_warmup:
-                    emitted_warmup = True
-                    await self._emit("state_change", {"status": "CONNECTING"})
-                    await self._emit("progress", {
-                        "id": "exp-warmup",
-                        "message": "Waking up the site... hosts like this can take up to a minute",
-                        "status": "active",
-                        "elapsed_seconds": elapsed,
-                    })
-                elif elapsed >= 2 and elapsed % 2 == 0:
-                    await self._emit("progress", {
-                        "id": "exp-warmup",
-                        "message": f"Waking up the site... ({elapsed}s elapsed)",
-                        "status": "active",
-                        "elapsed_seconds": elapsed,
-                    })
+        try:
+            async with httpx.AsyncClient(
+                verify=False,
+                follow_redirects=True,
+                timeout=httpx.Timeout(connect=20.0, read=45.0, write=10.0, pool=10.0),
+            ) as client:
+                while time.time() < deadline:
+                    try:
+                        resp = await client.get(target_url, headers=headers)
+                        text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
+                        if resp.status_code in (401, 403) and (
+                            "cloudflare" in text
+                            or "just a moment" in text
+                            or "turnstile" in text
+                            or "ddos-guard" in text
+                            or "captcha" in text
+                            or "attention required" in text
+                        ):
+                            return {
+                                "success": False,
+                                "error_code": "BOT_BLOCKED",
+                                "status_code": resp.status_code,
+                                "error": "Bot verification challenge detected (Cloudflare/CAPTCHA)",
+                                "elapsed": int(time.time() - t0),
+                            }
 
-                try:
-                    resp = await client.get(target_url, headers=headers)
-                    text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
-                    if resp.status_code == 403 and (
-                        "cloudflare" in text
-                        or "just a moment" in text
-                        or "turnstile" in text
-                        or "ddos-guard" in text
-                        or "captcha" in text
-                    ):
+                        # If server returns 502/503/504, the container might still be booting up
+                        if resp.status_code in (502, 503, 504) and time.time() + 3.0 < deadline:
+                            last_error = f"Server returned HTTP {resp.status_code}"
+                            last_error_code = "SITE_UNREACHABLE"
+                            await asyncio.sleep(2.0)
+                            continue
+
+                        elapsed_total = int(time.time() - t0)
+                        if emitted_warmup:
+                            await self._emit("progress", {
+                                "id": "exp-warmup",
+                                "message": f"Site is awake (took {elapsed_total}s)",
+                                "status": "completed",
+                                "elapsed_seconds": elapsed_total,
+                            })
                         return {
-                            "success": False,
-                            "error_code": "BOT_BLOCKED",
+                            "success": True,
                             "status_code": resp.status_code,
-                            "error": "Bot verification challenge detected (Cloudflare/CAPTCHA)",
-                            "elapsed": int(time.time() - t0),
+                            "elapsed": elapsed_total,
                         }
 
-                    # If server returns 502/503/504, the container might still be booting up
-                    if resp.status_code in (502, 503, 504) and time.time() + 3.0 < deadline:
-                        last_error = f"Server returned HTTP {resp.status_code}"
+                    except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as exc:
+                        last_error = str(exc)
+                        last_error_code = "TIMEOUT"
+                        if time.time() + 2.0 < deadline:
+                            await asyncio.sleep(1.0)
+                            continue
+                        break
+
+                    except (httpx.ConnectError, httpx.NetworkError) as exc:
+                        err_str = str(exc).lower()
+                        if "ssl" in err_str or "cert" in err_str:
+                            return {
+                                "success": False,
+                                "error_code": "TLS_ERROR",
+                                "error": str(exc),
+                                "elapsed": int(time.time() - t0),
+                            }
+                        last_error = str(exc)
                         last_error_code = "SITE_UNREACHABLE"
-                        await asyncio.sleep(2.0)
-                        continue
+                        if time.time() + 2.0 < deadline:
+                            await asyncio.sleep(1.5)
+                            continue
+                        break
 
-                    elapsed_total = int(time.time() - t0)
-                    if emitted_warmup:
-                        await self._emit("progress", {
-                            "id": "exp-warmup",
-                            "message": f"Site is awake (took {elapsed_total}s)",
-                            "status": "completed",
-                            "elapsed_seconds": elapsed_total,
-                        })
-                    return {
-                        "success": True,
-                        "status_code": resp.status_code,
-                        "elapsed": elapsed_total,
-                    }
-
-                except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as exc:
-                    last_error = str(exc)
-                    last_error_code = "TIMEOUT"
-                    if time.time() + 2.0 < deadline:
-                        await asyncio.sleep(1.0)
-                        continue
-                    break
-
-                except (httpx.ConnectError, httpx.NetworkError) as exc:
-                    err_str = str(exc).lower()
-                    if "ssl" in err_str or "cert" in err_str:
+                    except Exception as exc:
+                        err_str = str(exc).lower()
+                        if "ssl" in err_str or "cert" in err_str:
+                            code = "TLS_ERROR"
+                        elif "time" in err_str:
+                            code = "TIMEOUT"
+                        else:
+                            code = "SITE_UNREACHABLE"
                         return {
                             "success": False,
-                            "error_code": "TLS_ERROR",
+                            "error_code": code,
                             "error": str(exc),
                             "elapsed": int(time.time() - t0),
                         }
-                    last_error = str(exc)
-                    last_error_code = "SITE_UNREACHABLE"
-                    if time.time() + 2.0 < deadline:
-                        await asyncio.sleep(1.5)
-                        continue
-                    break
 
-                except Exception as exc:
-                    err_str = str(exc).lower()
-                    if "ssl" in err_str or "cert" in err_str:
-                        code = "TLS_ERROR"
-                    else:
-                        code = "SITE_UNREACHABLE"
-                    return {
-                        "success": False,
-                        "error_code": code,
-                        "error": str(exc),
-                        "elapsed": int(time.time() - t0),
-                    }
-
-            elapsed_final = int(time.time() - t0)
-            return {
-                "success": False,
-                "error_code": last_error_code,
-                "error": last_error or f"Warmup timed out after {elapsed_final}s",
-                "elapsed": elapsed_final,
-            }
+                elapsed_final = int(time.time() - t0)
+                return {
+                    "success": False,
+                    "error_code": last_error_code,
+                    "error": last_error or f"Warmup timed out after {elapsed_final}s",
+                    "elapsed": elapsed_final,
+                }
+        finally:
+            ticker_stop.set()
+            try:
+                await ticker_task
+            except Exception:
+                pass
 
     async def _capture_and_emit_screenshot(self, page, full_page: bool = False) -> dict | None:
         """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
@@ -1012,14 +1035,37 @@ class ExplorationEngine:
         FIRST_NAVIGATION_TIMEOUT_MS = 75000
         should_close_browser = True
         try:
+            page = self._browser.page if (self._browser and self._browser.is_started) else None
+            is_resuming = (credential is not None or selected_role is not None) and bool(
+                page and page.url and page.url != "about:blank"
+            )
+
+            if not is_resuming:
+                # 0. Warm-up preflight: wake up sleeping hosts before browser flow
+                t_preflight = time.perf_counter()
+                preflight = await self.interruptible(self._warmup_preflight(self.url))
+                logger.info("Exploration step timing [warmup_preflight]: %.2fs (success=%s)", time.perf_counter() - t_preflight, preflight.get("success"))
+                if not preflight.get("success"):
+                    err_code = preflight.get("error_code", "SITE_UNREACHABLE")
+                    err_msg = preflight.get("error", "Site unreachable")
+                    await self._emit("state_change", {"status": "FAILED", "error_code": err_code})
+                    await self._emit("exploration.failed", {"error": err_msg, "error_code": err_code})
+                    return {
+                        "status": ExplorationStatus.FAILED,
+                        "error_code": err_code,
+                        "error_message": f"Preflight failed: {err_code} - {err_msg}",
+                        "discoveries": [],
+                        "candidate_missions": [],
+                    }
+
             if not self._browser:
                 self._browser = BrowserSession(block_heavy_resources=True)
             if not self._browser.is_started:
                 await self._emit("state_change", {"status": "CONNECTING"})
                 await self._emit("exploration.started", {"url": self.url})
                 await self._emit("progress", {
-                    "id": "exp-connecting",
-                    "message": f"Connecting to {urlparse(self.url).hostname or self.url}",
+                    "id": "exp-browser",
+                    "message": "Starting browser",
                     "status": "active",
                 })
                 t_launch = time.perf_counter()
@@ -1040,8 +1086,8 @@ class ExplorationEngine:
                     logger.debug("Screencast start notice: %s", sc_err)
 
                 await self._emit("progress", {
-                    "id": "exp-1",
-                    "message": f"Connected to {urlparse(self.url).hostname or self.url}",
+                    "id": "exp-browser",
+                    "message": f"Browser connected to {urlparse(self.url).hostname or self.url}",
                     "status": "completed",
                 })
             else:
@@ -1049,33 +1095,17 @@ class ExplorationEngine:
                 page.set_default_navigation_timeout(FIRST_NAVIGATION_TIMEOUT_MS)
                 page.set_default_timeout(ACTION_TIMEOUT_MS)
 
-            is_resuming = (credential is not None or selected_role is not None) and bool(
-                page.url and page.url != "about:blank"
-            )
-
             if not is_resuming:
-                # 0. Warm-up preflight: wake up sleeping hosts (e.g. Render free tier) before navigation
-                t_preflight = time.perf_counter()
-                preflight = await self.interruptible(self._warmup_preflight(self.url))
-                logger.info("Exploration step timing [warmup_preflight]: %.2fs (success=%s)", time.perf_counter() - t_preflight, preflight.get("success"))
-                if not preflight.get("success"):
-                    err_code = preflight.get("error_code", "SITE_UNREACHABLE")
-                    err_msg = preflight.get("error", "Site unreachable")
-                    await self._emit("state_change", {"status": "FAILED", "error_code": err_code})
-                    await self._emit("exploration.failed", {"error": err_msg, "error_code": err_code})
-                    return {
-                        "status": ExplorationStatus.FAILED,
-                        "error_code": err_code,
-                        "error_message": f"Preflight failed: {err_code} - {err_msg}",
-                        "discoveries": [],
-                        "candidate_missions": [],
-                    }
-
                 # 1. Navigate to target URL with retry
                 await self._emit("state_change", {"status": "LOADING"})
+                await self._emit("progress", {
+                    "id": "exp-loading",
+                    "message": "Loading site",
+                    "status": "active",
+                })
                 navigation_error = None
                 response = None
-                max_retries = min(2, self._get_budget_limits()["max_pages"] - 1)
+                max_retries = 2
                 t_nav = time.perf_counter()
                 for attempt in range(max_retries + 1):
                     if self._is_cancelled or self._cancel_event.is_set():
@@ -1126,13 +1156,19 @@ class ExplorationEngine:
                             "url": page.url,
                             "path": urlparse(page.url).path,
                         })
+                        await self._emit("progress", {
+                            "id": "exp-loading",
+                            "message": "Site loaded",
+                            "status": "completed",
+                        })
                         navigation_error = None
                         break
                     except Exception as e:
                         navigation_error = e
                         if attempt < max_retries:
-                            logger.warning("Navigation attempt %d failed, retrying: %s", attempt + 1, e)
-                            await asyncio.sleep(2)
+                            backoff = 2 ** attempt
+                            logger.warning("Navigation attempt %d failed, retrying in %ds: %s", attempt + 1, backoff, e)
+                            await asyncio.sleep(backoff)
                             continue
 
                 # Handle navigation failure after all retries exhausted

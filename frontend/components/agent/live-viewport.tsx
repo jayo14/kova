@@ -61,6 +61,7 @@ interface LiveViewportProps {
   fallbackScreenshot?: string | null;
   onTakeover?: () => void;
   onRelease?: () => void;
+  onRetry?: () => void;
   hideHeader?: boolean;
 }
 
@@ -108,6 +109,7 @@ export function LiveViewport({
   fallbackScreenshot,
   onTakeover,
   onRelease,
+  onRetry,
   hideHeader = false,
 }: LiveViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -118,6 +120,18 @@ export function LiveViewport({
   const leaseIdRef = useRef<string | null>(null);
   const generationRef = useRef<number>(1);
   const [hasReceivedFrame, setHasReceivedFrame] = useState(false);
+  const [noPaintElapsed, setNoPaintElapsed] = useState(0);
+
+  useEffect(() => {
+    if (hasReceivedFrame || fallbackScreenshot) {
+      setNoPaintElapsed(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setNoPaintElapsed((prev) => prev + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [hasReceivedFrame, fallbackScreenshot]);
   const [state, setState] = useState<ViewportState>("connecting");
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -578,16 +592,40 @@ export function LiveViewport({
       <div className="relative aspect-video bg-neutral-950 flex items-center justify-center overflow-hidden">
         {!hasReceivedFrame && !fallbackScreenshot && (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-0 bg-neutral-950">
-            <div className="relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 shadow-lg">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl bg-primary opacity-20" />
-              <MaterialIcon name="smart_toy" size={28} className="text-primary animate-pulse" />
-            </div>
-            <p className="text-body-sm font-medium text-neutral-200">
-              Initializing Kova Playwright browser...
-            </p>
-            <p className="text-caption text-neutral-400 mt-0.5 max-w-xs">
-              Live viewport frames and interactions will stream here in real time.
-            </p>
+            {noPaintElapsed >= 8 ? (
+              <div className="flex flex-col items-center max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 backdrop-blur-xs">
+                <MaterialIcon name="warning" size={32} className="text-amber-400 mb-2 animate-bounce" />
+                <p className="text-body-sm font-semibold text-neutral-100">
+                  Site is slow or unreachable ({noPaintElapsed}s)
+                </p>
+                <p className="text-caption text-neutral-300 mt-1 mb-4">
+                  Still waiting for first paint. Free-tier servers take around a minute to wake.
+                </p>
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+                  >
+                    <MaterialIcon name="refresh" size={14} />
+                    Retry
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <div className="relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 shadow-lg">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl bg-primary opacity-20" />
+                  <MaterialIcon name="smart_toy" size={28} className="text-primary animate-pulse" />
+                </div>
+                <p className="text-body-sm font-medium text-neutral-200">
+                  Initializing Kova Playwright browser...
+                </p>
+                <p className="text-caption text-neutral-400 mt-0.5 max-w-xs">
+                  Live viewport frames and interactions will stream here in real time.
+                </p>
+              </>
+            )}
           </div>
         )}
         {fallbackScreenshot && !hasReceivedFrame && (

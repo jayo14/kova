@@ -325,7 +325,7 @@ async def _run_exploration_async(
             # Emit t=0 progress event immediately
             await event_emitter("progress", {
                 "id": "exp-queued",
-                "message": "Worker claimed session",
+                "message": "Queued",
                 "status": "completed",
                 "elapsed_seconds": 0,
             })

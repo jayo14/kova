@@ -196,8 +196,12 @@ class ExplorationAgent:
                 termination = "budget_exhausted"
                 break
             steps += 1
+            t_step_start = time.perf_counter()
 
+            t_obs_start = time.perf_counter()
             observation = await self.observe_current()
+            t_obs = time.perf_counter() - t_obs_start
+
             node = self.sitemap.get_or_create_node(observation["url"], observation)
             await self._emit(
                 "exploration.agent.observe",
@@ -206,7 +210,9 @@ class ExplorationAgent:
             self._record_capabilities(observation, node)
             self._record_dangerous(observation, node)
 
+            t_ai_start = time.perf_counter()
             proposal = await self._propose(observation, node)
+            t_ai = time.perf_counter() - t_ai_start
             if proposal is None:
                 termination = "frontier_empty"
                 break
@@ -229,7 +235,14 @@ class ExplorationAgent:
                 continue
 
             before = {n.node_id for n in self.sitemap.nodes.values()}
+            t_act_start = time.perf_counter()
             success = await self._execute(proposal)
+            t_act = time.perf_counter() - t_act_start
+            t_step_total = time.perf_counter() - t_step_start
+            logger.info(
+                "Exploration step %d timing breakdown: total=%.2fs [observe=%.2fs, ai=%.2fs, action=%.2fs]",
+                steps, t_step_total, t_obs, t_ai, t_act,
+            )
             self._actions_taken += 1
             try:
                 await asyncio.sleep(0.05)
