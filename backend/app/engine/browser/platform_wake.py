@@ -5,21 +5,172 @@ Vercel, etc.) is serving a wake-up, cold-start, or platform-level error
 interstitial rather than the user's actual application.
 
 Principles:
-1. Platform headers (via: 1.1 vegur, x-render-origin-server, server, etc.)
-   only IDENTIFY the platform. They never match on headers alone.
-2. A "host is waking up" message requires a platform match AND a wake state
-   (interstitial title/body, or a platform error status such as 502/503/504
-   with a known wake body).
-3. Every production platform signature is marked "unverified" until backed by
+1. Platform headers (via: 1.1 vegur, x-render-origin-server, server, etc.) and
+   hostnames (*.onrender.com) only IDENTIFY the platform. They never indicate waking.
+2. Render cold instances do not serve wake interstitials; they exhibit a "slow first byte"
+   holding the connection (40s-75s) until the application answers.
+3. Every production platform interstitial signature is marked "unverified" until backed by
    real captures supplied by the user. Unverified signatures never emit wake messages.
 4. Synthetic signatures are labeled synthetic and used only for testing polling logic.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
+from urllib.parse import urlparse
+
+# Platforms known to sleep/spin down free instances after inactivity
+SLEEPING_FREE_INSTANCE_PLATFORMS: frozenset[str] = frozenset(
+    {"Render", "Heroku", "Railway", "Fly.io"}
+)
+
+
+def identify_platform(
+    url: str = "",
+    headers: Mapping[str, str] | None = None,
+) -> str | None:
+    """Identify the hosting platform from hostname or response headers.
+
+    Platform headers and hostnames ONLY identify the platform; they never
+    indicate whether an instance is waking up.
+    """
+    normalized_headers = {k.lower(): v.lower() for k, v in (headers or {}).items()}
+    url_lower = (url or "").lower()
+
+    # 1. Post-response headers check
+    if (
+        "rndr-id" in normalized_headers
+        or "x-render-origin-server" in normalized_headers
+        or normalized_headers.get("server") == "render"
+    ):
+        return "Render"
+    if "x-heroku-queue-wait-time" in normalized_headers or "vegur" in normalized_headers.get("via", ""):
+        return "Heroku"
+    if "x-railway-request-id" in normalized_headers or normalized_headers.get("server") == "railway":
+        return "Railway"
+    if "fly-request-id" in normalized_headers or normalized_headers.get("server") == "fly":
+        return "Fly.io"
+    if (
+        "x-vercel-id" in normalized_headers
+        or "x-vercel-error" in normalized_headers
+        or normalized_headers.get("server") == "vercel"
+    ):
+        return "Vercel"
+    if "x-nf-request-id" in normalized_headers or normalized_headers.get("server") == "netlify":
+        return "Netlify"
+
+    # 2. Pre-response hostname check
+    if ".onrender.com" in url_lower:
+        return "Render"
+    if ".herokuapp.com" in url_lower:
+        return "Heroku"
+    if ".railway.app" in url_lower:
+        return "Railway"
+    if ".fly.dev" in url_lower:
+        return "Fly.io"
+    if ".vercel.app" in url_lower:
+        return "Vercel"
+    if ".netlify.app" in url_lower:
+        return "Netlify"
+
+    return None
+
+
+def is_sleeping_free_instance_platform(platform: str | None) -> bool:
+    """Return True if the platform is known to sleep free instances after inactivity."""
+    return bool(platform and platform in SLEEPING_FREE_INSTANCE_PLATFORMS)
+
+
+def format_slow_first_byte_message(
+    elapsed_s: float,
+    platform: str | None,
+    threshold_s: float = 20.0,
+) -> str:
+    """Format status message after response headers arrive.
+
+    - "Waiting for the server to respond (Ns)": request sent, no response headers yet.
+    - After headers arrive late (> 20s): "The server took Ns to respond."
+      If on a platform known to sleep free instances, adds labeled inference:
+      "Typical of a sleeping instance waking up." (phrased as likely, never fact).
+    """
+    sec = int(round(elapsed_s))
+    if elapsed_s >= threshold_s:
+        base = f"The server took {sec}s to respond."
+        if is_sleeping_free_instance_platform(platform):
+            return f"{base} (Typical of a sleeping instance waking up.)"
+        return base
+    return f"The server responded in {sec}s."
+
+
+def classify_target_document(
+    status_code: int | None,
+    headers: Mapping[str, str],
+    body_text: str,
+    title: str = "",
+) -> tuple[bool, str]:
+    """Classify whether the root document is an error/debug/API backend rather than a web application.
+
+    If the first document returns 404/403/5xx, or looks like an API/debug/error page
+    (Django debug 404 template, JSON body, bare gunicorn/nginx error), returns (True, error_message).
+    """
+    normalized_headers = {k.lower(): v.lower() for k, v in headers.items()}
+    text_lower = (body_text or "").lower()
+    title_lower = (title or "").lower()
+    content_type = normalized_headers.get("content-type", "")
+
+    status = status_code or 200
+
+    # 1. Status code check: 404/403/5xx at root is a non-application target
+    if status in (404, 403, 500, 502, 503, 504):
+        msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+        return True, msg
+
+    # 2. Django debug template check (can happen at 404 or 500 or misconfigured debug route)
+    django_debug_markers = (
+        "using the urlconf defined in",
+        "django tried these url patterns",
+        "you're seeing this error because you have debug = true",
+        "the empty path didn't match any of these",
+        "didn't match any of these",
+        "django version:",
+    )
+    if any(marker in text_lower for marker in django_debug_markers):
+        msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+        return True, msg
+
+    # 3. JSON body at root check (API backend rather than frontend web application)
+    if "application/json" in content_type:
+        msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+        return True, msg
+
+    trimmed = body_text.strip()
+    if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
+        try:
+            parsed = json.loads(trimmed)
+            if isinstance(parsed, (dict, list)):
+                msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+                return True, msg
+        except Exception:
+            pass
+
+    # 4. Bare server error pages (gunicorn, nginx, werkzeug, express)
+    bare_server_markers = (
+        "cannot get /",
+        "502 bad gateway",
+        "504 gateway time-out",
+        "internal server error",
+        "404 not found",
+    )
+    if any(m in text_lower for m in bare_server_markers):
+        if any(h in normalized_headers.get("server", "") for h in ("nginx", "gunicorn", "caddy", "apache")) or "x-render-origin-server" in normalized_headers:
+            msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+            return True, msg
+
+    return False, ""
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,25 +321,8 @@ PLATFORM_SIGNATURES: tuple[PlatformSignature, ...] = (
     # Synthetic test fixture (strictly labeled for testing polling logic)
     SYNTHETIC_RENDER_WAKE_SIGNATURE,
 
-    # Real platform signatures marked unverified until backed by real user captures
-    PlatformSignature(
-        platform="Render",
-        is_waking=True,
-        verified=False,
-        is_synthetic=False,
-        status_codes=frozenset({200, 502, 503, 504}),
-        header_patterns=(
-            ("server", r"render"),
-            ("x-render-origin-server", r".+"),
-        ),
-        title_tokens=("service waking up", "render", "free instance"),
-        body_tokens=(
-            "free instance has spun down",
-            "your free instance is waking up",
-            "spin down due to inactivity",
-            "starting the container",
-        ),
-    ),
+    # Production platform interstitial signatures (unverified until backed by real user captures)
+    # Note: Render uses the slow first-byte model (no wake interstitial exists; see render_cold_first_byte.txt)
     PlatformSignature(
         platform="Heroku",
         is_waking=False,
