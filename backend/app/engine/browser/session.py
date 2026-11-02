@@ -746,8 +746,10 @@ class BrowserSession:
         response = None
         try:
             response = await self.page.goto(url, wait_until="commit", timeout=timeout_ms)
+            self._last_response = response
             status = response.status if response else None
-            await _emit_phase("commit", status=status, url=self.page.url)
+            resp_headers = dict(response.headers) if response and hasattr(response, "headers") else {}
+            await _emit_phase("commit", status=status, headers=resp_headers, url=self.page.url)
         except Exception as e:
             logger.debug("Commit wait finished: %s", e)
 
