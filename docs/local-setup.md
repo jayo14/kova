@@ -145,7 +145,8 @@ In a separate terminal with the `.venv` activated:
 ```bash
 cd backend
 source .venv/bin/activate  # Or Windows equivalent
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+# Default to concurrency=1 for local development to prevent Chromium process contention
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
 ```
 
 ### D. Frontend Setup

@@ -108,8 +108,8 @@ pip install -e . && playwright install chromium
 alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 
-# Worker (separate terminal)
-celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+# Worker (separate terminal - default to concurrency=1 on local dev to prevent CPU/memory contention from multiple Chromium instances)
+celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
 
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev

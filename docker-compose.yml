@@ -53,8 +53,9 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   # Celery worker: owns Chromium. Each exploration = one isolated browser context.
-  # concurrency=2 → at most 2 concurrent Chromium instances (~1-1.5GB RAM each).
-  # Scale by raising --concurrency, not by removing the limit.
+  # Default local development to concurrency=1 to prevent CPU and memory contention
+  # from multiple concurrent headless Chromium instances on developer laptops.
+  # Scale by raising --concurrency in production environments with dedicated multi-core compute.
   kova-worker:
     build:
       context: .
@@ -88,7 +89,7 @@ services:
       start_period: 60s
     # Chromium shutdown plus in-flight task cleanup needs more than the 10s default.
     stop_grace_period: 90s
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=1
 
   # Next.js frontend
   kova-frontend:
