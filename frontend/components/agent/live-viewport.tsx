@@ -32,6 +32,12 @@ type ViewportState =
   | "failed"
   | "disconnected";
 
+export type ConnectionHop =
+  | "worker_started"
+  | "browser_launched"
+  | "stream_connected"
+  | "first_frame_delivered";
+
 interface ViewportMessage extends ServerMessage {
   type:
     | "frame"
@@ -47,12 +53,23 @@ interface ViewportMessage extends ServerMessage {
     | "pause_requested"
     | "resume_requested"
     | "lease_expired"
+    | "connection_hop"
+    | "load_phase"
+    | "pending_request"
+    | "platform_wake"
+    | "progress"
     | "pong";
   url?: string;
   title?: string;
   cursor?: { x: number; y: number };
   loading?: boolean;
   checkpoint?: { type: string; description: string; details?: unknown };
+  hop?: ConnectionHop;
+  phase?: string;
+  host?: string;
+  age_s?: number;
+  message?: string;
+  id?: string;
 }
 
 interface LiveViewportProps {
@@ -63,6 +80,10 @@ interface LiveViewportProps {
   onRelease?: () => void;
   onRetry?: () => void;
   hideHeader?: boolean;
+  connectionHop?: ConnectionHop | null;
+  loadPhase?: string | null;
+  pendingMessage?: string | null;
+  platformWakeMessage?: string | null;
 }
 
 const stateConfig: Record<ViewportState, { label: string; color: string; icon: string }> = {
@@ -111,6 +132,10 @@ export function LiveViewport({
   onRelease,
   onRetry,
   hideHeader = false,
+  connectionHop: propConnectionHop = null,
+  loadPhase: propLoadPhase = null,
+  pendingMessage: propPendingMessage = null,
+  platformWakeMessage: propPlatformWakeMessage = null,
 }: LiveViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -120,18 +145,16 @@ export function LiveViewport({
   const leaseIdRef = useRef<string | null>(null);
   const generationRef = useRef<number>(1);
   const [hasReceivedFrame, setHasReceivedFrame] = useState(false);
-  const [noPaintElapsed, setNoPaintElapsed] = useState(0);
+  const [serverConnectionHop, setServerConnectionHop] = useState<ConnectionHop | null>(null);
+  const [serverLoadPhase, setServerLoadPhase] = useState<string | null>(null);
+  const [serverPendingMessage, setServerPendingMessage] = useState<string | null>(null);
+  const [serverPlatformWakeMessage, setServerPlatformWakeMessage] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (hasReceivedFrame || fallbackScreenshot) {
-      setNoPaintElapsed(0);
-      return;
-    }
-    const timer = setInterval(() => {
-      setNoPaintElapsed((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [hasReceivedFrame, fallbackScreenshot]);
+  const activeHop = propConnectionHop ?? serverConnectionHop;
+  const activeLoadPhase = propLoadPhase ?? serverLoadPhase;
+  const activePendingMessage = propPendingMessage ?? serverPendingMessage;
+  const activePlatformWakeMessage = propPlatformWakeMessage ?? serverPlatformWakeMessage;
+
   const [state, setState] = useState<ViewportState>("connecting");
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -226,6 +249,7 @@ export function LiveViewport({
       setTruth((t) => resetViewportTruth(t));
       pendingFrameSeqRef.current = null;
       setHasReceivedFrame(false);
+      setServerConnectionHop((current) => (current === "first_frame_delivered" ? current : "stream_connected"));
       setState((s) => (s === "disconnected" ? "disconnected" : "observing"));
     };
 
@@ -248,6 +272,7 @@ export function LiveViewport({
             if (ctx) {
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
               setHasReceivedFrame(true);
+              setServerConnectionHop("first_frame_delivered");
             }
           }
           URL.revokeObjectURL(objectUrl);
@@ -335,6 +360,34 @@ export function LiveViewport({
           if (msg.type === "takeover_request") {
             setShowTakeoverDialog(true);
             return;
+          }
+
+          if (msg.type === "connection_hop" && msg.hop) {
+            setServerConnectionHop(msg.hop);
+            return;
+          }
+
+          if (msg.type === "load_phase" && msg.phase) {
+            setServerLoadPhase(msg.phase);
+            return;
+          }
+
+          if (msg.type === "pending_request") {
+            setServerPendingMessage(msg.message || (msg.host ? `Page loaded; waiting on ${msg.host} (pending ${msg.age_s ?? 0}s)` : null));
+            return;
+          }
+
+          if (msg.type === "platform_wake") {
+            setServerPlatformWakeMessage(msg.message || null);
+            return;
+          }
+
+          if (msg.type === "progress") {
+            if (msg.id === "exp-warmup" && msg.message) {
+              setServerPlatformWakeMessage(msg.message);
+            } else if (msg.id === "exp-pending-wait" && msg.message) {
+              setServerPendingMessage(msg.message);
+            }
           }
 
           // masking_status, connection_quality, control_error,
@@ -592,38 +645,88 @@ export function LiveViewport({
       <div className="relative aspect-video bg-neutral-950 flex items-center justify-center overflow-hidden">
         {!hasReceivedFrame && !fallbackScreenshot && (
           <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-0 bg-neutral-950">
-            {noPaintElapsed >= 8 ? (
-              <div className="flex flex-col items-center max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 backdrop-blur-xs">
-                <MaterialIcon name="warning" size={32} className="text-amber-400 mb-2 animate-bounce" />
+            {activePlatformWakeMessage ? (
+              <div className="flex flex-col items-center max-w-sm rounded-xl border border-amber-500/40 bg-amber-500/10 p-5 backdrop-blur-xs text-amber-200">
+                <MaterialIcon name="bolt" size={32} className="text-amber-400 mb-2 animate-pulse" />
                 <p className="text-body-sm font-semibold text-neutral-100">
-                  Site is slow or unreachable ({noPaintElapsed}s)
+                  {activePlatformWakeMessage}
                 </p>
-                <p className="text-caption text-neutral-300 mt-1 mb-4">
-                  Still waiting for first paint. Free-tier servers take around a minute to wake.
+                <p className="text-caption text-neutral-300 mt-1 mb-2">
+                  Waiting for backend container to finish booting. Exploration will continue automatically.
                 </p>
+                {activePendingMessage && (
+                  <p className="text-caption text-amber-300/80 font-mono mt-1">
+                    {activePendingMessage}
+                  </p>
+                )}
                 {onRetry && (
                   <button
                     type="button"
                     onClick={onRetry}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors cursor-pointer"
+                    className="mt-3 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-xs font-medium border border-amber-500/40 transition-colors cursor-pointer"
                   >
-                    <MaterialIcon name="refresh" size={14} />
+                    <MaterialIcon name="refresh" size={13} />
                     Retry
                   </button>
                 )}
+              </div>
+            ) : activePendingMessage ? (
+              <div className="flex flex-col items-center max-w-sm rounded-xl border border-blue-500/40 bg-blue-500/10 p-5 backdrop-blur-xs text-blue-200">
+                <MaterialIcon name="hourglass_top" size={32} className="text-blue-400 mb-2 animate-spin" />
+                <p className="text-body-sm font-semibold text-neutral-100">
+                  {activePendingMessage}
+                </p>
+                <p className="text-caption text-neutral-300 mt-1">
+                  Document received; waiting for pending backend requests to resolve.
+                </p>
               </div>
             ) : (
               <>
                 <div className="relative mb-3 flex h-14 w-14 items-center justify-center rounded-2xl border border-primary/30 bg-primary/10 shadow-lg">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl bg-primary opacity-20" />
-                  <MaterialIcon name="smart_toy" size={28} className="text-primary animate-pulse" />
+                  <MaterialIcon
+                    name={
+                      activeHop === "worker_started"
+                        ? "memory"
+                        : activeHop === "browser_launched"
+                        ? "language"
+                        : activeHop === "stream_connected"
+                        ? "sensors"
+                        : "smart_toy"
+                    }
+                    size={28}
+                    className="text-primary animate-pulse"
+                  />
                 </div>
                 <p className="text-body-sm font-medium text-neutral-200">
-                  Initializing Kova Playwright browser...
+                  {activeHop === "worker_started"
+                    ? "Worker started · Launching browser..."
+                    : activeHop === "browser_launched"
+                    ? "Browser launched · Connecting stream..."
+                    : activeHop === "stream_connected"
+                    ? "Stream connected · Waiting for first frame..."
+                    : "Connecting · Starting worker..."}
                 </p>
-                <p className="text-caption text-neutral-400 mt-0.5 max-w-xs">
-                  Live viewport frames and interactions will stream here in real time.
-                </p>
+                {activeLoadPhase ? (
+                  <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-primary/30 bg-primary/5 text-caption font-mono text-primary">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                    <span>
+                      {activeLoadPhase === "navigation_committed"
+                        ? "Navigation committed"
+                        : activeLoadPhase === "domcontentloaded"
+                        ? "DOMContentLoaded"
+                        : activeLoadPhase === "first_contentful_paint"
+                        ? "First Contentful Paint"
+                        : activeLoadPhase === "dom_settled"
+                        ? "DOM settled"
+                        : activeLoadPhase}
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-caption text-neutral-400 mt-0.5 max-w-xs">
+                    Live viewport frames and interactions will stream here in real time.
+                  </p>
+                )}
               </>
             )}
           </div>
@@ -670,6 +773,20 @@ export function LiveViewport({
           <div className={cn("h-1.5 w-1.5 rounded-full", config.color, "animate-pulse")} />
           <span className="text-caption font-medium">{config.label}</span>
         </div>
+
+        {/* Measured pending requests or platform wake overlay */}
+        {hasReceivedFrame && activePendingMessage && (
+          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded bg-background/90 backdrop-blur-sm border border-blue-500/40 text-blue-300 text-caption font-mono shadow-sm">
+            <MaterialIcon name="hourglass_top" size={12} className="text-blue-400 animate-spin" />
+            <span>{activePendingMessage}</span>
+          </div>
+        )}
+        {hasReceivedFrame && activePlatformWakeMessage && !activePendingMessage && (
+          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded bg-background/90 backdrop-blur-sm border border-amber-500/40 text-amber-300 text-caption shadow-sm">
+            <MaterialIcon name="bolt" size={12} className="text-amber-400 animate-pulse" />
+            <span>{activePlatformWakeMessage}</span>
+          </div>
+        )}
 
         {/* Agent control glow */}
         {(state === "executing" || state === "navigating") && !isHumanControlled && (

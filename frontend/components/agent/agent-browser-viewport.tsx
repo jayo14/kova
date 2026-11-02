@@ -32,6 +32,10 @@ export interface AgentBrowserViewportProps {
   className?: string;
   projectId?: string | null;
   sessionId?: string | null;
+  connectionHop?: "worker_started" | "browser_launched" | "stream_connected" | "first_frame_delivered" | null;
+  loadPhase?: string | null;
+  pendingMessage?: string | null;
+  platformWakeMessage?: string | null;
 }
 
 /**
@@ -63,20 +67,12 @@ export function AgentBrowserViewport({
   className,
   projectId,
   sessionId,
+  connectionHop = null,
+  loadPhase = null,
+  pendingMessage = null,
+  platformWakeMessage = null,
 }: AgentBrowserViewportProps) {
   const [isSnapshotExpanded, setIsSnapshotExpanded] = useState(false);
-  const [elapsedWait, setElapsedWait] = useState(0);
-
-  useEffect(() => {
-    if (latestScreenshot || state === "ready" || state === "failed" || state === "cancelled") {
-      setElapsedWait(0);
-      return;
-    }
-    const timer = setInterval(() => {
-      setElapsedWait((prev) => prev + 1);
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [latestScreenshot, state]);
 
   const hostname = (() => {
     try {
@@ -148,23 +144,12 @@ export function AgentBrowserViewport({
               fallbackScreenshot={latestScreenshot}
               hideHeader={true}
               onRetry={onRetry}
+              connectionHop={connectionHop}
+              loadPhase={loadPhase}
+              pendingMessage={pendingMessage}
+              platformWakeMessage={platformWakeMessage}
               className="w-full h-full border-0 rounded-none shadow-none"
             />
-            {elapsedWait >= 8 && (
-              <div className="absolute top-3 right-3 z-20 flex items-center gap-2 rounded-lg border border-amber-500/40 bg-background/95 backdrop-blur-xs px-3 py-1.5 shadow-sm">
-                <MaterialIcon name="hourglass_top" size={14} className="text-amber-500 animate-pulse" />
-                <span className="text-[11px] font-medium text-foreground">Site is slow or unreachable ({elapsedWait}s)</span>
-                {onRetry && (
-                  <button
-                    type="button"
-                    onClick={onRetry}
-                    className="ml-1 inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline cursor-pointer"
-                  >
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
           </div>
         ) : latestScreenshot ? (
           <div className="relative w-full h-full flex items-center justify-center bg-black/5 dark:bg-black/30 overflow-hidden group">
@@ -188,16 +173,14 @@ export function AgentBrowserViewport({
           </div>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
-            {elapsedWait >= 10 ? (
-              <div className="flex flex-col items-center text-center max-w-sm">
-                <div className="h-12 w-12 rounded-2xl border border-amber-500/30 bg-amber-500/10 flex items-center justify-center mb-3 text-amber-500">
-                  <MaterialIcon name="hourglass_top" size={24} className="animate-pulse" />
-                </div>
+            {platformWakeMessage ? (
+              <div className="flex flex-col items-center text-center max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 backdrop-blur-xs text-amber-200">
+                <MaterialIcon name="bolt" size={32} className="text-amber-400 mb-2 animate-pulse" />
                 <p className="text-body font-medium text-foreground mb-1">
-                  Site is slow or unreachable
+                  {platformWakeMessage}
                 </p>
                 <p className="text-caption text-muted-foreground mb-3">
-                  Waiting for first paint ({elapsedWait}s elapsed). Free hosts (like Render) take up to a minute to wake up.
+                  Waiting for backend container to wake up. Exploration proceeds automatically.
                 </p>
                 {onRetry && (
                   <button
@@ -210,6 +193,16 @@ export function AgentBrowserViewport({
                   </button>
                 )}
               </div>
+            ) : pendingMessage ? (
+              <div className="flex flex-col items-center text-center max-w-sm rounded-xl border border-blue-500/30 bg-blue-500/10 p-5 backdrop-blur-xs text-blue-200">
+                <MaterialIcon name="hourglass_top" size={32} className="text-blue-400 mb-2 animate-spin" />
+                <p className="text-body font-medium text-foreground mb-1">
+                  {pendingMessage}
+                </p>
+                <p className="text-caption text-muted-foreground">
+                  Document received; waiting on pending backend requests.
+                </p>
+              </div>
             ) : (
               <div className="flex flex-col items-center text-center">
                 <div className="h-12 w-12 rounded-2xl border border-primary/20 bg-primary/5 flex items-center justify-center mb-4">
@@ -219,8 +212,12 @@ export function AgentBrowserViewport({
                   {showConnectingOverlay ? `Connecting to ${hostname}` : "Waiting for browser view"}
                 </p>
                 <p className="text-caption text-muted-foreground max-w-xs">
-                  {elapsedWait > 2
-                    ? `Waking up host... (${elapsedWait}s elapsed)`
+                  {connectionHop === "worker_started"
+                    ? "Worker started · Launching Playwright browser..."
+                    : connectionHop === "browser_launched"
+                    ? "Browser launched · Connecting live stream..."
+                    : connectionHop === "stream_connected"
+                    ? "Stream connected · Waiting for first frame..."
                     : "Screenshots of the isolated Kova browser session will appear here as it explores."}
                 </p>
               </div>
