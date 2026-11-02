@@ -116,6 +116,9 @@ class AgentExecutor:
         self.safety_guard = DestructiveActionGuard(safety_restrictions)
         self.mailbox: Any | None = None
         self.app_host: str | None = None
+        self.step_timings: list[dict[str, Any]] = []
+        self._last_settle_time: float = 0.0
+        self._last_screenshot_time: float = 0.0
         if vlm_client is not None:
             self.vlm_client = vlm_client
         else:
@@ -479,17 +482,30 @@ class AgentExecutor:
             outcome = await self._execute_proposal(browser, memory, proposal, turn)
             t_act = time.perf_counter() - t_act_start
             t_turn_total = time.perf_counter() - t_turn_start
+            step_record = {
+                "turn": turn,
+                "action": proposal.action,
+                "total": round(t_turn_total, 3),
+                "observe": round(t_obs, 3),
+                "model": round(t_ai, 3),
+                "action_time": round(t_act, 3),
+                "settle": round(self._last_settle_time, 3),
+                "screenshot": round(self._last_screenshot_time, 3),
+            }
+            self.step_timings.append(step_record)
             logger.info(
-                "Execution turn %d timing breakdown: total=%.2fs [observe=%.2fs, ai=%.2fs, action=%.2fs]",
-                turn, t_turn_total, t_obs, t_ai, t_act,
+                "Step %d timing breakdown: total=%.2fs [observe=%.2fs, model=%.2fs, action=%.2fs, settle=%.2fs, screenshot=%.2fs]",
+                turn, t_turn_total, t_obs, t_ai, t_act, self._last_settle_time, self._last_screenshot_time,
             )
             if outcome is not None:
+                self._report_slowest_step()
                 return outcome  # terminal (human/blocked/failed/email exhausted)
 
             # Budget recoveries: a failed action consumed one unit of budget
             if self.recent_failure_detail:
                 recovery_used += 1
                 if recovery_used > MAX_RECOVERIES:
+                    self._report_slowest_step()
                     return AgentOutcome(
                         "FAILED",
                         f"Recovery budget exhausted after: {self.recent_failure_detail}",
@@ -497,6 +513,7 @@ class AgentExecutor:
                     )
                 self.recent_failure_detail = ""  # consumed; next turn decides fresh
 
+        self._report_slowest_step()
         facts = self._fact_list(memory) + [
             f"cost: model_calls={self._model_calls}, tokens={self._tokens}",
         ]
@@ -504,6 +521,18 @@ class AgentExecutor:
             "UNVERIFIED",
             f"Agent reached turn budget ({self.max_turns}) without completing the objective",
             facts=facts,
+        )
+
+    def _report_slowest_step(self) -> None:
+        """Log summary of the slowest turn in the execution run."""
+        if not self.step_timings:
+            return
+        slowest = max(self.step_timings, key=lambda s: s["total"])
+        logger.info(
+            "Slowest step in run: turn %d took %.2fs (action=%s, observe=%.2fs, model=%.2fs, action_time=%.2fs, settle=%.2fs, screenshot=%.2fs)",
+            slowest["turn"], slowest["total"], slowest["action"],
+            slowest["observe"], slowest["model"], slowest["action_time"],
+            slowest["settle"], slowest["screenshot"],
         )
 
     # ── Proposal execution ──────────────────────────────────────────
@@ -594,6 +623,29 @@ class AgentExecutor:
 
         # Action-outcome state transitions are observed from the real page outcome
         # on the subsequent turn in _update_auth_state (never prematurely here).
+
+        # Settle wait after action
+        t_settle_start = time.perf_counter()
+        try:
+            await browser.page.evaluate("""([quietMs, maxWaitMs]) => new Promise((resolve) => {
+                let timer = setTimeout(resolve, quietMs);
+                const observer = new MutationObserver(() => {
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(resolve, quietMs);
+                });
+                observer.observe(document.body || document.documentElement, {
+                    childList: true, subtree: true, attributes: true
+                });
+                setTimeout(() => {
+                    observer.disconnect();
+                    if (timer) clearTimeout(timer);
+                    resolve();
+                }, maxWaitMs);
+            })""", [200, 1500])
+        except Exception:
+            pass
+        self._last_settle_time = time.perf_counter() - t_settle_start
+        self._last_screenshot_time = 0.0
 
         # Post-action milestone screenshot for meaningful state changes
         await self._milestone_screenshot(browser, memory, proposal)
@@ -829,8 +881,11 @@ class AgentExecutor:
         if proposal is not None and not any(kw in text for kw in milestone_reasons):
             if proposal.action not in ("read_email", "create_email"):
                 return
+        t_start = time.perf_counter()
         try:
-            ss = await browser.page.screenshot(type="jpeg", quality=70)
+            ss = await browser.page.screenshot(type="jpeg", quality=70, animations="disabled")
+            self._last_screenshot_time = time.perf_counter() - t_start
+            logger.info("Milestone screenshot completed in %.3fs", self._last_screenshot_time)
             if ss:
                 meta = await asyncio.to_thread(
                     screenshot_storage.save,
@@ -845,6 +900,7 @@ class AgentExecutor:
                     "milestone": (label or text)[:60],
                 })
         except Exception as e:
+            self._last_screenshot_time = time.perf_counter() - t_start
             logger.debug("Milestone screenshot failed: %s", e)
 
     def _update_auth_state(self, memory: AgentMemory, observation: dict) -> None:
