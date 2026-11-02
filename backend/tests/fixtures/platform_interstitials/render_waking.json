@@ -1,0 +1,11 @@
+{
+  "platform": "render",
+  "status_code": 200,
+  "headers": {
+    "server": "Render",
+    "x-render-origin-server": "render-gateway",
+    "content-type": "text/html; charset=utf-8"
+  },
+  "title": "Service Waking Up | Render",
+  "body": "<html><head><title>Service Waking Up | Render</title></head><body><div class=\"render-waking\"><span class=\"icon\"></span><h1>Your free instance is waking up</h1><p>Free instances spin down after 15 minutes of inactivity. This may take up to a minute.</p><a href=\"https://dashboard.render.com\" class=\"btn\">Render Dashboard</a></div></body></html>"
+}

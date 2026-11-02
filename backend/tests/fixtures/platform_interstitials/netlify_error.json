@@ -1,0 +1,11 @@
+{
+  "platform": "netlify",
+  "status_code": 502,
+  "headers": {
+    "server": "Netlify",
+    "x-nf-request-id": "01JBMXAA890123",
+    "content-type": "text/html; charset=utf-8"
+  },
+  "title": "Netlify - Bad Gateway",
+  "body": "<html><body><h1>Bad Gateway</h1><p>Netlify Function execution timed out or failed to boot.</p></body></html>"
+}

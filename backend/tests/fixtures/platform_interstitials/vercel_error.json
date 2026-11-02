@@ -1,0 +1,12 @@
+{
+  "platform": "vercel",
+  "status_code": 504,
+  "headers": {
+    "server": "Vercel",
+    "x-vercel-id": "fra1::abc12-1730000000-xyz",
+    "x-vercel-error": "FUNCTION_INVOCATION_TIMEOUT",
+    "content-type": "text/html; charset=utf-8"
+  },
+  "title": "504: GATEWAY_TIMEOUT",
+  "body": "<html><body><h2>504: GATEWAY_TIMEOUT</h2><p>This Serverless Function has timed out.</p></body></html>"
+}
