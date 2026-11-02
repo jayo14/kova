@@ -1034,9 +1034,14 @@ class ReadinessWaiter:
                 pass
 
         if pending_checker:
-            pending_res = pending_checker()
-            if pending_res:
-                settle_info["pending_host"] = pending_res[0]
-                settle_info["pending_age_s"] = pending_res[1]
+            try:
+                pending_res = pending_checker()
+                if asyncio.iscoroutine(pending_res) or hasattr(pending_res, "__await__"):
+                    pending_res = await pending_res
+                if isinstance(pending_res, (list, tuple)) and len(pending_res) >= 2:
+                    settle_info["pending_host"] = pending_res[0]
+                    settle_info["pending_age_s"] = pending_res[1]
+            except Exception:
+                pass
 
         return settle_info

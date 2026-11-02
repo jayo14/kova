@@ -1170,6 +1170,10 @@ class ExplorationEngine:
                             self.url,
                             timeout_ms=FIRST_NAVIGATION_TIMEOUT_MS,
                         ))
+                        if asyncio.iscoroutine(nav_phases) or hasattr(nav_phases, "__await__"):
+                            nav_phases = await nav_phases
+                        if not isinstance(nav_phases, dict):
+                            nav_phases = {}
                         timing_breakdown["navigation_commit"] = nav_phases.get("commit", {}).get("elapsed_s", 0)
                         timing_breakdown["domcontentloaded"] = nav_phases.get("domcontentloaded", {}).get("elapsed_s", 0)
                         timing_breakdown["fcp"] = nav_phases.get("first_contentful_paint", {}).get("fcp_s", 0) or 0
