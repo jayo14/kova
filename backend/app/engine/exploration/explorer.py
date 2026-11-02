@@ -49,7 +49,13 @@ from app.engine.browser.readiness import (
     classify_page,
     is_infrastructure_control,
 )
-from app.engine.browser.platform_wake import detect_platform_wake
+from app.engine.browser.platform_wake import (
+    classify_target_document,
+    detect_platform_wake,
+    format_slow_first_byte_message,
+    identify_platform,
+    is_sleeping_free_instance_platform,
+)
 from app.engine.execution.stream import publish_state
 
 logger = logging.getLogger(__name__)
@@ -435,6 +441,23 @@ class ExplorationEngine:
         lower_title = (title or "").lower()
         lower_text = (visible_text or "").lower()
 
+        # Target classification: 404/403/5xx, Django debug, JSON body, bare server error
+        status_code = getattr(self, "_last_nav_status", None)
+        headers = getattr(self, "_last_nav_headers", {}) or {}
+
+        is_backend, backend_msg = classify_target_document(
+            status_code,
+            headers,
+            visible_text,
+            title,
+        )
+        if is_backend:
+            raise PageValidationError(
+                backend_msg,
+                status_code=status_code or 404,
+                final_url=final_url,
+            )
+
         # Check for Vercel/hosting NOT_FOUND pages
         if "404" in lower_title and "not found" in lower_title:
             raise PageValidationError(
@@ -591,10 +614,16 @@ class ExplorationEngine:
     async def _warmup_preflight(self, target_url: str) -> dict[str, Any]:
         """Warm up sleeping hosts with patient HTTP GET and measure first-byte latency.
 
-        Never emits timer-based guess messages. Emits measured fact:
-        'Waiting for the server to respond (Ns)' while headers are in-flight,
-        with a 2s heartbeat so the UI is never silent.
-        Caps wake polling at 3 minutes and reports the exact last observed status on timeout.
+        States:
+        - "Waiting for the server to respond (Ns)": request sent, no response headers yet.
+        - After headers arrive late (> 20s): "The server took Ns to respond."
+          If the host is on a platform known to sleep free instances, adds labeled inference:
+          "Typical of a sleeping instance waking up." Phrase it as likely, never as fact.
+        - Default timeout: 120s with 2s heartbeat.
+        - Fail only on real connection errors (DNS, refused, TLS) or on reaching the cap,
+          reporting the last observed phase.
+        - Target classification: if 404/403/5xx, Django debug, JSON body, or bare server error,
+          halts with clear message.
         """
         t0 = time.time()
         t_perf_0 = time.perf_counter()
@@ -603,6 +632,9 @@ class ExplorationEngine:
         active_wake_platform = None
         last_status_code = None
         last_ttfb = None
+        last_phase = "request_sent"
+
+        detected_platform = identify_platform(url=target_url)
 
         headers = {
             "User-Agent": (
@@ -612,8 +644,8 @@ class ExplorationEngine:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        # Cap wake polling: default 3 minutes (180s)
-        max_preflight_seconds = 180.0
+        # First-navigation timeout default is 120s
+        max_preflight_seconds = 120.0
         deadline = t0 + max_preflight_seconds
         last_error = None
         last_error_code = "TIMEOUT"
@@ -655,15 +687,31 @@ class ExplorationEngine:
             async with httpx.AsyncClient(
                 verify=False,
                 follow_redirects=True,
-                timeout=httpx.Timeout(connect=20.0, read=45.0, write=10.0, pool=10.0),
+                timeout=httpx.Timeout(connect=30.0, read=120.0, write=10.0, pool=10.0),
             ) as client:
                 while time.time() < deadline:
+                    last_phase = f"waiting_for_headers ({int(time.time() - t0)}s)"
                     try:
                         resp = await client.get(target_url, headers=headers)
                         received_headers = True
                         last_status_code = resp.status_code
                         ttfb_seconds = round(time.perf_counter() - t_perf_0, 3)
                         last_ttfb = ttfb_seconds
+                        last_phase = f"headers_received (HTTP {resp.status_code})"
+
+                        # Platform identification post-headers
+                        detected_platform = identify_platform(url=target_url, headers=resp.headers) or detected_platform
+
+                        # Measured status & labeled inference
+                        first_byte_msg = format_slow_first_byte_message(ttfb_seconds, detected_platform)
+                        if ttfb_seconds >= 20.0:
+                            await self._emit("progress", {
+                                "id": "exp-warmup",
+                                "message": first_byte_msg,
+                                "status": "active",
+                                "elapsed_seconds": int(ttfb_seconds),
+                            })
+
                         text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
 
                         # Check bot challenges
@@ -682,6 +730,25 @@ class ExplorationEngine:
                                 "error": "Bot verification challenge detected (Cloudflare/CAPTCHA)",
                                 "elapsed": int(time.time() - t0),
                                 "ttfb_seconds": ttfb_seconds,
+                                "last_phase": last_phase,
+                            }
+
+                        # Target classification: 404/403/5xx, Django debug, JSON body, bare server error
+                        is_backend, backend_msg = classify_target_document(
+                            resp.status_code,
+                            dict(resp.headers),
+                            resp.text if hasattr(resp, "text") and resp.text else "",
+                            "",
+                        )
+                        if is_backend:
+                            return {
+                                "success": False,
+                                "error_code": "INVALID_TARGET",
+                                "status_code": resp.status_code,
+                                "error": backend_msg,
+                                "elapsed": int(time.time() - t0),
+                                "ttfb_seconds": ttfb_seconds,
+                                "last_phase": last_phase,
                             }
 
                         # Check for verified/synthetic hosting wake signature
@@ -726,6 +793,8 @@ class ExplorationEngine:
                             "status_code": resp.status_code,
                             "elapsed": elapsed_total,
                             "ttfb_seconds": ttfb_seconds,
+                            "platform": detected_platform,
+                            "first_byte_message": first_byte_msg,
                         }
 
                     except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as exc:
@@ -745,6 +814,25 @@ class ExplorationEngine:
                                 "error": str(exc),
                                 "elapsed": int(time.time() - t0),
                                 "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
+                                "last_phase": last_phase,
+                            }
+                        if any(dns_marker in err_str for dns_marker in ("name or service not known", "nodename nor servname", "getaddrinfo failed")):
+                            return {
+                                "success": False,
+                                "error_code": "SITE_UNREACHABLE",
+                                "error": f"DNS resolution failed: {exc}",
+                                "elapsed": int(time.time() - t0),
+                                "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
+                                "last_phase": last_phase,
+                            }
+                        if "connection refused" in err_str:
+                            return {
+                                "success": False,
+                                "error_code": "SITE_UNREACHABLE",
+                                "error": f"Connection refused: {exc}",
+                                "elapsed": int(time.time() - t0),
+                                "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
+                                "last_phase": last_phase,
                             }
                         last_error = str(exc)
                         last_error_code = "SITE_UNREACHABLE"
@@ -767,11 +855,12 @@ class ExplorationEngine:
                             "error": str(exc),
                             "elapsed": int(time.time() - t0),
                             "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
+                            "last_phase": last_phase,
                         }
 
                 elapsed_final = int(time.time() - t0)
                 status_text = f"HTTP {last_status_code}" if last_status_code else "no response headers received"
-                err_msg = f"Wake polling timed out after {elapsed_final}s. Last observed status: {status_text}" + (f" ({last_error})" if last_error else "")
+                err_msg = f"Navigation timed out after {elapsed_final}s. Last observed phase: {last_phase}" + (f" ({last_error})" if last_error else "")
                 return {
                     "success": False,
                     "error_code": last_error_code,
@@ -779,6 +868,7 @@ class ExplorationEngine:
                     "error": err_msg,
                     "elapsed": elapsed_final,
                     "ttfb_seconds": last_ttfb or round(time.perf_counter() - t_perf_0, 3),
+                    "last_phase": last_phase,
                 }
         finally:
             ticker_stop.set()
@@ -1110,15 +1200,15 @@ class ExplorationEngine:
                         "candidate_missions": [],
                     }
 
-                # Latency-aware timeouts: scale timeouts from measured TTFB
-                ttfb_s = float(preflight.get("ttfb_seconds") or 5.0)
-                nav_timeout_s = min(max(ttfb_s * 3.0, 15.0), 90.0)
-                FIRST_NAVIGATION_TIMEOUT_MS = int(nav_timeout_s * 1000)
-                readiness_timeout_s = min(max(ttfb_s * 3.0, 15.0), 60.0)
-                settle_timeout_s = min(max(ttfb_s * 1.5, 5.0), 15.0)
+                # First-navigation timeout default is 120s
+                FIRST_NAVIGATION_TIMEOUT_MS = 120_000
+                # After a slow first response, treat the host as warm and use normal timeouts for the rest of the run
+                readiness_timeout_s = 20.0
+                settle_timeout_s = 10.0
                 logger.info(
-                    "Latency-aware timeouts (ttfb=%.2fs): nav=%.1fs, readiness=%.1fs, settle=%.1fs",
-                    ttfb_s, nav_timeout_s, readiness_timeout_s, settle_timeout_s,
+                    "First navigation timeout: 120s (warm timeouts for rest of run: readiness=%.1fs, settle=%.1fs)",
+                    readiness_timeout_s,
+                    settle_timeout_s,
                 )
             else:
                 readiness_timeout_s = 20.0
@@ -1225,6 +1315,8 @@ class ExplorationEngine:
                             nav_phases = await nav_phases
                         if not isinstance(nav_phases, dict):
                             nav_phases = {}
+                        self._last_nav_status = nav_phases.get("commit", {}).get("status")
+                        self._last_nav_headers = nav_phases.get("commit", {}).get("headers", {})
                         timing_breakdown["navigation_commit"] = nav_phases.get("commit", {}).get("elapsed_s", 0)
                         timing_breakdown["domcontentloaded"] = nav_phases.get("domcontentloaded", {}).get("elapsed_s", 0)
                         timing_breakdown["fcp"] = nav_phases.get("first_contentful_paint", {}).get("fcp_s", 0) or 0
@@ -1327,12 +1419,11 @@ class ExplorationEngine:
                     await self._validate_page(page, navigation_error)
                 except PageValidationError as e:
                     error_msg = str(e)
-                    if hasattr(response, 'status') and response:
-                        error_msg = f"HTTP {response.status}: {error_msg}"
-                    await self._emit("state_change", {"status": "FAILED"})
-                    await self._emit("exploration.failed", {"error": error_msg})
+                    await self._emit("state_change", {"status": "FAILED", "error_code": "INVALID_TARGET"})
+                    await self._emit("exploration.failed", {"error": error_msg, "error_code": "INVALID_TARGET"})
                     return {
                         "status": ExplorationStatus.FAILED,
+                        "error_code": "INVALID_TARGET",
                         "error_message": error_msg,
                         "discoveries": [],
                         "candidate_missions": [],
