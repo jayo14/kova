@@ -49,6 +49,8 @@ from app.engine.browser.readiness import (
     classify_page,
     is_infrastructure_control,
 )
+from app.engine.browser.platform_wake import detect_platform_wake
+from app.engine.execution.stream import publish_state
 
 logger = logging.getLogger(__name__)
 
@@ -587,44 +589,14 @@ class ExplorationEngine:
             logger.debug("Live frame publish notice: %s", e)
 
     async def _warmup_preflight(self, target_url: str) -> dict[str, Any]:
-        """Warm up sleeping hosts (Render, Fly.io, Heroku free tier, etc.) with patient HTTP GET.
+        """Warm up sleeping hosts with patient HTTP GET and measure first-byte latency.
 
-        Free tier hosts sleep on idle and take 45-60+ seconds to spin up.
-        Emits progress notifications with elapsed time every 2s so the UI is never silent.
+        Never emits timer-based guess messages. Status messages are emitted only
+        when a platform wake or error signature is positively matched.
         """
         t0 = time.time()
-        emitted_warmup = False
-        ticker_stop = asyncio.Event()
-
-        async def _ticker():
-            nonlocal emitted_warmup
-            while not ticker_stop.is_set():
-                try:
-                    await asyncio.wait_for(ticker_stop.wait(), timeout=2.0)
-                    break
-                except asyncio.TimeoutError:
-                    pass
-                if ticker_stop.is_set():
-                    break
-                elapsed = int(time.time() - t0)
-                if not emitted_warmup:
-                    emitted_warmup = True
-                    await self._emit("state_change", {"status": "CONNECTING"})
-                    await self._emit("progress", {
-                        "id": "exp-warmup",
-                        "message": "Waking up the site... hosts like this can take up to a minute",
-                        "status": "active",
-                        "elapsed_seconds": elapsed,
-                    })
-                else:
-                    await self._emit("progress", {
-                        "id": "exp-warmup",
-                        "message": f"Waking up the site... ({elapsed}s elapsed)",
-                        "status": "active",
-                        "elapsed_seconds": elapsed,
-                    })
-
-        ticker_task = asyncio.create_task(_ticker())
+        t_perf_0 = time.perf_counter()
+        emitted_wake_sig = False
 
         headers = {
             "User-Agent": (
@@ -648,7 +620,10 @@ class ExplorationEngine:
                 while time.time() < deadline:
                     try:
                         resp = await client.get(target_url, headers=headers)
+                        ttfb_seconds = round(time.perf_counter() - t_perf_0, 3)
                         text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
+
+                        # Check bot challenges
                         if resp.status_code in (401, 403) and (
                             "cloudflare" in text
                             or "just a moment" in text
@@ -663,9 +638,31 @@ class ExplorationEngine:
                                 "status_code": resp.status_code,
                                 "error": "Bot verification challenge detected (Cloudflare/CAPTCHA)",
                                 "elapsed": int(time.time() - t0),
+                                "ttfb_seconds": ttfb_seconds,
                             }
 
-                        # If server returns 502/503/504, the container might still be booting up
+                        # Check for verified hosting wake signature
+                        wake_sig = detect_platform_wake(
+                            dict(resp.headers),
+                            resp.status_code,
+                            "",
+                            text[:4000],
+                            target_url,
+                        )
+                        if wake_sig.matched and wake_sig.is_waking:
+                            if not emitted_wake_sig:
+                                emitted_wake_sig = True
+                                await self._emit("state_change", {"status": "CONNECTING"})
+                                await self._emit("progress", {
+                                    "id": "exp-warmup",
+                                    "message": wake_sig.message or f"The hosting service ({wake_sig.platform}) is waking up",
+                                    "status": "active",
+                                })
+                            if time.time() + 3.0 < deadline:
+                                await asyncio.sleep(2.0)
+                                continue
+
+                        # Server 502/503/504 container bootup
                         if resp.status_code in (502, 503, 504) and time.time() + 3.0 < deadline:
                             last_error = f"Server returned HTTP {resp.status_code}"
                             last_error_code = "SITE_UNREACHABLE"
@@ -673,10 +670,10 @@ class ExplorationEngine:
                             continue
 
                         elapsed_total = int(time.time() - t0)
-                        if emitted_warmup:
+                        if emitted_wake_sig:
                             await self._emit("progress", {
                                 "id": "exp-warmup",
-                                "message": f"Site is awake (took {elapsed_total}s)",
+                                "message": "Host is awake",
                                 "status": "completed",
                                 "elapsed_seconds": elapsed_total,
                             })
@@ -684,6 +681,7 @@ class ExplorationEngine:
                             "success": True,
                             "status_code": resp.status_code,
                             "elapsed": elapsed_total,
+                            "ttfb_seconds": ttfb_seconds,
                         }
 
                     except (httpx.ConnectTimeout, httpx.ReadTimeout, httpx.TimeoutException) as exc:
@@ -702,6 +700,7 @@ class ExplorationEngine:
                                 "error_code": "TLS_ERROR",
                                 "error": str(exc),
                                 "elapsed": int(time.time() - t0),
+                                "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
                             }
                         last_error = str(exc)
                         last_error_code = "SITE_UNREACHABLE"
@@ -723,6 +722,7 @@ class ExplorationEngine:
                             "error_code": code,
                             "error": str(exc),
                             "elapsed": int(time.time() - t0),
+                            "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
                         }
 
                 elapsed_final = int(time.time() - t0)
@@ -731,13 +731,10 @@ class ExplorationEngine:
                     "error_code": last_error_code,
                     "error": last_error or f"Warmup timed out after {elapsed_final}s",
                     "elapsed": elapsed_final,
+                    "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
                 }
         finally:
-            ticker_stop.set()
-            try:
-                await ticker_task
-            except Exception:
-                pass
+            pass
 
     async def _capture_and_emit_screenshot(self, page, full_page: bool = False) -> dict | None:
         """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
@@ -874,12 +871,10 @@ class ExplorationEngine:
                     })
                     await self.interruptible(page.evaluate(f"window.scrollTo({{ top: {scroll_pos}, behavior: 'smooth' }})"))
                     await self.interruptible(asyncio.sleep(0.15))
-                    await self._capture_and_emit_screenshot(page, full_page=False)
 
                 # Return smoothly to the top of the page
                 await page.evaluate("window.scrollTo({ top: 0, behavior: 'smooth' })")
                 await self.interruptible(asyncio.sleep(0.1))
-                await self._capture_and_emit_screenshot(page, full_page=False)
 
             # 2. Inspect and highlight a primary navigation or interactive control
             target_info = await page.evaluate(
@@ -1029,6 +1024,17 @@ class ExplorationEngine:
         """
         FIRST_NAVIGATION_TIMEOUT_MS = 75000
         should_close_browser = True
+        timing_breakdown: dict[str, float] = {}
+        t_start_explore = time.perf_counter()
+        self._has_first_frame = False
+
+        # Hop 1: worker started
+        await self._emit("connection_phase", {"hop": "worker_started", "timestamp": time.time()})
+        try:
+            await publish_state(str(self.exploration_id), state="connecting", connection_hop="worker_started")
+        except Exception:
+            pass
+
         try:
             page = self._browser.page if (self._browser and self._browser.is_started) else None
             is_resuming = (credential is not None or selected_role is not None) and bool(
@@ -1053,6 +1059,20 @@ class ExplorationEngine:
                         "candidate_missions": [],
                     }
 
+                # Latency-aware timeouts: scale timeouts from measured TTFB
+                ttfb_s = float(preflight.get("ttfb_seconds") or 5.0)
+                nav_timeout_s = min(max(ttfb_s * 3.0, 15.0), 90.0)
+                FIRST_NAVIGATION_TIMEOUT_MS = int(nav_timeout_s * 1000)
+                readiness_timeout_s = min(max(ttfb_s * 3.0, 15.0), 60.0)
+                settle_timeout_s = min(max(ttfb_s * 1.5, 5.0), 15.0)
+                logger.info(
+                    "Latency-aware timeouts (ttfb=%.2fs): nav=%.1fs, readiness=%.1fs, settle=%.1fs",
+                    ttfb_s, nav_timeout_s, readiness_timeout_s, settle_timeout_s,
+                )
+            else:
+                readiness_timeout_s = 20.0
+                settle_timeout_s = 10.0
+
             if not self._browser:
                 self._browser = BrowserSession(block_heavy_resources=True)
             if not self._browser.is_started:
@@ -1065,7 +1085,16 @@ class ExplorationEngine:
                 })
                 t_launch = time.perf_counter()
                 await self._browser.start()
-                logger.info("Exploration step timing [browser_start]: %.2fs", time.perf_counter() - t_launch)
+                t_launch_dur = time.perf_counter() - t_launch
+                timing_breakdown["browser_launch"] = round(t_launch_dur, 3)
+                logger.info("Exploration step timing [browser_start]: %.2fs", t_launch_dur)
+
+                # Hop 2: browser launched
+                await self._emit("connection_phase", {"hop": "browser_launched", "timestamp": time.time(), "elapsed_s": round(t_launch_dur, 3)})
+                try:
+                    await publish_state(str(self.exploration_id), state="connecting", connection_hop="browser_launched")
+                except Exception:
+                    pass
 
                 page = self._browser.page
                 page.set_default_navigation_timeout(FIRST_NAVIGATION_TIMEOUT_MS)
@@ -1073,10 +1102,19 @@ class ExplorationEngine:
 
                 # Start CDP screencast immediately right from page creation
                 async def _on_live_frame(frame_bytes: bytes):
+                    if not getattr(self, "_has_first_frame", False):
+                        self._has_first_frame = True
+                        await self._emit("connection_phase", {"hop": "first_frame_delivered", "timestamp": time.time()})
                     await self._handle_live_frame(frame_bytes, self._browser.page if self._browser else None)
 
                 try:
                     await self._browser.start_screencast(on_frame=_on_live_frame)
+                    # Hop 3: stream connected
+                    await self._emit("connection_phase", {"hop": "stream_connected", "timestamp": time.time()})
+                    try:
+                        await publish_state(str(self.exploration_id), state="connecting", connection_hop="stream_connected")
+                    except Exception:
+                        pass
                 except Exception as sc_err:
                     logger.debug("Screencast start notice: %s", sc_err)
 
@@ -1091,6 +1129,27 @@ class ExplorationEngine:
                 page.set_default_timeout(ACTION_TIMEOUT_MS)
 
             if not is_resuming:
+                async def _on_nav_phase(phase_data: dict[str, Any]):
+                    phase = phase_data.get("phase")
+                    timing_breakdown[phase] = phase_data.get("elapsed_s", 0)
+                    await self._emit("load_phase", phase_data)
+                    pending_desc = None
+                    if self._browser:
+                        slowest = self._browser.get_slowest_pending_host()
+                        if slowest:
+                            pending_desc = f"Page loaded; waiting on {slowest[0]} (pending {int(slowest[1])}s)"
+                    try:
+                        await publish_state(
+                            str(self.exploration_id),
+                            state="loading",
+                            load_phase=phase,
+                            pending_message=pending_desc,
+                        )
+                    except Exception:
+                        pass
+
+                self._browser.on_load_phase = _on_nav_phase
+
                 # 1. Navigate to target URL with retry
                 await self._emit("state_change", {"status": "LOADING"})
                 await self._emit("progress", {
@@ -1107,45 +1166,28 @@ class ExplorationEngine:
                         raise asyncio.CancelledError("Exploration cancelled during navigation")
                     try:
                         self._pages_visited_count += 1
-                        # Use domcontentloaded + patient timeout instead of waiting for full load/networkidle
-                        response = await self.interruptible(page.goto(self.url, wait_until="domcontentloaded", timeout=FIRST_NAVIGATION_TIMEOUT_MS))
+                        nav_phases = await self.interruptible(self._browser.navigate(
+                            self.url,
+                            timeout_ms=FIRST_NAVIGATION_TIMEOUT_MS,
+                        ))
+                        timing_breakdown["navigation_commit"] = nav_phases.get("commit", {}).get("elapsed_s", 0)
+                        timing_breakdown["domcontentloaded"] = nav_phases.get("domcontentloaded", {}).get("elapsed_s", 0)
+                        timing_breakdown["fcp"] = nav_phases.get("first_contentful_paint", {}).get("fcp_s", 0) or 0
 
-                        # For SPAs (React, Vite, Next.js), wait until container elements or text hydrate
+                        # Check container hydration
+                        t_hyd = time.perf_counter()
                         try:
                             await self.interruptible(page.wait_for_function(
                                 "() => {"
                                 "  const root = document.querySelector('#root, #__next, #app, main, [role=\"main\"], body');"
                                 "  return root && (root.children.length > 0 || (root.innerText && root.innerText.trim().length > 20));"
                                 "}",
-                                timeout=4000,
+                                timeout=2000,
                             ))
                         except Exception:
                             pass
+                        timing_breakdown["hydration_wait"] = round(time.perf_counter() - t_hyd, 3)
 
-                        # Settle dynamic styles, fonts, and client mounting
-                        await self.interruptible(asyncio.sleep(0.5))
-
-                        # Trigger lazy-loaded components, images, and intersection observers across the entire document
-                        try:
-                            await page.evaluate(
-                                """async () => {
-                                    const total = Math.max(
-                                        document.body.scrollHeight || 0,
-                                        document.documentElement.scrollHeight || 0
-                                    );
-                                    let current = 0;
-                                    const step = 600;
-                                    while (current < total) {
-                                        window.scrollBy(0, step);
-                                        current += step;
-                                        await new Promise((r) => setTimeout(r, 40));
-                                    }
-                                    window.scrollTo(0, 0);
-                                }"""
-                            )
-                            await asyncio.sleep(0.5)
-                        except Exception:
-                            pass
                         # Emit URL change so frontend can update address bar immediately
                         await self._emit("page.url_changed", {
                             "url": page.url,
@@ -1254,10 +1296,11 @@ class ExplorationEngine:
                 # Assess page readiness before discovery
                 settings = get_settings()
                 self._requested_url = self.url
+                t_ready_start = time.perf_counter()
                 readiness_waiter = ReadinessWaiter(
                     probe=lambda: self._probe_readiness(page),
                     intervals=settings.page_readiness_intervals,
-                    total_timeout=settings.PAGE_READINESS_TIMEOUT_SECONDS,
+                    total_timeout=readiness_timeout_s,
                     sleep=asyncio.sleep,
                 )
 
@@ -1274,6 +1317,7 @@ class ExplorationEngine:
                     initial_readiness,
                     is_cancelled=lambda: self._is_cancelled or self._cancel_event.is_set(),
                 ))
+                timing_breakdown["readiness_wait"] = round(time.perf_counter() - t_ready_start, 3)
                 self._page_ready = self._readiness.is_ready
 
                 await self._emit("page.readiness", self._readiness.to_dict())
@@ -1283,6 +1327,22 @@ class ExplorationEngine:
                         "id": "exp-readiness-wait",
                         "message": "Application became ready",
                         "status": "completed",
+                    })
+
+                # Settle wait
+                t_settle_start = time.perf_counter()
+                settle_res = await readiness_waiter.wait_for_settle(
+                    page,
+                    max_wait_s=settle_timeout_s,
+                    pending_checker=lambda: self._browser.get_slowest_pending_host() if self._browser else None,
+                )
+                timing_breakdown["dom_settle"] = round(time.perf_counter() - t_settle_start, 3)
+                if settle_res.get("pending_host"):
+                    pending_msg = f"Page loaded; waiting on {settle_res['pending_host']} (pending {int(settle_res.get('pending_age_s', 0))}s)"
+                    await self._emit("progress", {
+                        "id": "exp-pending-wait",
+                        "message": pending_msg,
+                        "status": "active",
                     })
 
                 if not self._readiness.is_ready and self._readiness.state not in (PageReadiness.AUTHENTICATION_REQUIRED,):
@@ -1336,7 +1396,9 @@ class ExplorationEngine:
                     await self._emit("brand.discovered", brand_meta)
 
                 # Capture and stream fully rendered initial snapshot immediately (standard viewport)
+                t_ss = time.perf_counter()
                 await self._capture_and_emit_screenshot(page, full_page=False)
+                timing_breakdown["screenshot"] = round(time.perf_counter() - t_ss, 3)
 
                 # 3. Observe initial page
                 await self._emit("state_change", {"status": "EXPLORING"})
@@ -1345,7 +1407,27 @@ class ExplorationEngine:
                     "message": "Observing application page",
                     "status": "active",
                 })
+                t_obs = time.perf_counter()
                 observation = await self._browser.observe()
+                timing_breakdown["observer_scan"] = round(time.perf_counter() - t_obs, 3)
+                timing_breakdown["time_to_first_observation"] = round(time.perf_counter() - t_start_explore, 3)
+
+                logger.info(
+                    "Exploration latency breakdown: total_to_first_obs=%.2fs "
+                    "[launch=%.2fs, commit=%.2fs, dcl=%.2fs, fcp=%.2fs, readiness=%.2fs, hydration=%.2fs, settle=%.2fs, screenshot=%.2fs, observer=%.2fs]",
+                    timing_breakdown["time_to_first_observation"],
+                    timing_breakdown.get("browser_launch", 0),
+                    timing_breakdown.get("navigation_commit", 0),
+                    timing_breakdown.get("domcontentloaded", 0),
+                    timing_breakdown.get("fcp", 0),
+                    timing_breakdown.get("readiness_wait", 0),
+                    timing_breakdown.get("hydration_wait", 0),
+                    timing_breakdown.get("dom_settle", 0),
+                    timing_breakdown.get("screenshot", 0),
+                    timing_breakdown.get("observer_scan", 0),
+                )
+                await self._emit("exploration.timing_breakdown", timing_breakdown)
+
                 await self._emit("agent.observed", {
                     "elements_count": len(observation.get("elements", [])),
                     "forms_count": len(observation.get("forms", [])),

@@ -41,11 +41,15 @@ async def test_preflight_wakes_up_sleeping_site():
         nonlocal attempt_count
         attempt_count += 1
         if attempt_count < 2:
-            # Simulate initial delay while container spins up
-            await asyncio.sleep(2.1)
-            raise httpx.ConnectTimeout("Connection timed out while waking up")
+            # Simulate platform waking interstitial from Render
+            mock_wake = MagicMock()
+            mock_wake.status_code = 200
+            mock_wake.headers = {"server": "Render"}
+            mock_wake.text = "<html><body>Your free instance is waking up</body></html>"
+            return mock_wake
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/html"}
         mock_resp.text = "<html><body>Welcome to Huntly</body></html>"
         return mock_resp
 
@@ -54,15 +58,15 @@ async def test_preflight_wakes_up_sleeping_site():
 
     assert result["success"] is True
     assert result["status_code"] == 200
+    assert "ttfb_seconds" in result
 
-    # Verify warmup notification was emitted with elapsed_seconds
-    warmup_events = [
+    # Verify wake notification was emitted when signature matched
+    wake_events = [
         payload for event_type, payload in emitted_events
-        if "Waking up the site" in payload.get("message", "")
+        if "waking up" in payload.get("message", "").lower()
     ]
-    assert len(warmup_events) >= 1
-    assert "elapsed_seconds" in warmup_events[0]
-    assert warmup_events[0]["elapsed_seconds"] >= 2
+    assert len(wake_events) >= 1
+    assert "Render" in wake_events[0]["message"]
 
 
 @pytest.mark.asyncio
@@ -241,8 +245,9 @@ async def test_viewport_stream_exploration_channel():
 
 @pytest.mark.asyncio
 async def test_preflight_45s_delay_acceptance():
-    """Acceptance test: against a fixture that delays its first response, the UI shows
-    the wake-up message and elapsed time within 2s, and no more than 2s ever passes without an event.
+    """Acceptance test: against a fixture that presents a waking interstitial, the UI shows
+    the platform wake message only when the signature matches, polls, and announces host is awake.
+    When a server simply takes time to respond with no wake signature, no guess message is emitted.
     """
     import time
     emitted_events = []
@@ -258,11 +263,19 @@ async def test_preflight_45s_delay_acceptance():
         event_emitter=mock_emitter,
     )
 
+    attempt = 0
     async def mock_get(url, **kwargs):
-        # Simulate delay with ticking
-        await asyncio.sleep(4.5)
+        nonlocal attempt
+        attempt += 1
+        if attempt == 1:
+            resp = MagicMock()
+            resp.status_code = 200
+            resp.headers = {"server": "Render"}
+            resp.text = "<html><body>Your free instance is waking up</body></html>"
+            return resp
         resp = MagicMock()
         resp.status_code = 200
+        resp.headers = {"content-type": "text/html"}
         resp.text = "<html><body>Awake!</body></html>"
         return resp
 
@@ -271,23 +284,18 @@ async def test_preflight_45s_delay_acceptance():
 
     assert result["success"] is True
 
-    # 1. Wake-up message emitted within 2.2s
+    # 1. Wake-up message emitted based on Render signature match
     warmup_events = [
         p for ev, p in emitted_events
         if ev == "progress" and p.get("id") == "exp-warmup"
     ]
     assert len(warmup_events) >= 2
-    assert "Waking up the site... hosts like this can take up to a minute" in warmup_events[0]["message"]
-    assert warmup_events[0]["elapsed_seconds"] == 2
+    assert "Render" in warmup_events[0]["message"]
+    assert "waking up" in warmup_events[0]["message"].lower()
 
-    # 2. No more than 2.2s ever passes without an event
-    for i in range(1, len(timestamps)):
-        gap = timestamps[i] - timestamps[i - 1]
-        assert gap <= 2.2, f"Event gap was {gap}s (> 2.0s without an event)"
-
-    # 3. Final completion message
+    # 2. Final completion message
     assert warmup_events[-1]["status"] == "completed"
-    assert "Site is awake" in warmup_events[-1]["message"]
+    assert "Host is awake" in warmup_events[-1]["message"]
 
 
 @pytest.mark.asyncio
