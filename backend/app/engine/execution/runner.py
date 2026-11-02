@@ -913,7 +913,8 @@ class FlowRunner:
                 }
 
         exec_id = str(execution_id)
-        browser = BrowserSession(browser_settings=ctx.browser_settings, job_id=exec_id, block_heavy_resources=True)
+        # Never block resources during execution or verification runs
+        browser = BrowserSession(browser_settings=ctx.browser_settings, job_id=exec_id, block_heavy_resources=False)
         frame_task: asyncio.Task | None = None
         nav_unbind: Callable[[], None] | None = None
         try:

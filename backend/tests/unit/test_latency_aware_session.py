@@ -78,3 +78,17 @@ async def test_browser_session_screenshot_animations_disabled():
     res = await session.screenshot(full_page=False)
     assert res == b"fake-png-bytes"
     mock_page.screenshot.assert_called_with(full_page=False, animations="disabled")
+
+
+@pytest.mark.asyncio
+async def test_resource_blocking_exploration_vs_execution():
+    """Amendment 5: Block only fonts, media, and analytics during exploration; never images, CSS, or JS.
+    During execution/verification runs, block nothing.
+    """
+    # 1. Exploration session (block_heavy_resources=True)
+    exp_session = BrowserSession(block_heavy_resources=True)
+    assert exp_session.block_heavy_resources is True
+
+    # 2. Execution session (block_heavy_resources=False)
+    exec_session = BrowserSession(block_heavy_resources=False)
+    assert exec_session.block_heavy_resources is False

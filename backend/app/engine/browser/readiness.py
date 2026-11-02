@@ -980,19 +980,62 @@ class ReadinessWaiter:
                 pass
 
         # 3. DOM mutation quiet period: wait until the DOM stops mutating
+        # Ignores carousels, tickers, and mutations repeating on a fixed cadence (timers/animations)
         remaining = deadline - _time.monotonic()
         if remaining > 0:
             try:
                 await page.evaluate(
                     """([quietMs, maxWaitMs]) => new Promise((resolve) => {
                         let timer = setTimeout(resolve, quietMs);
-                        const observer = new MutationObserver(() => {
+                        const mutationTimes = [];
+
+                        function isIgnoredElement(node) {
+                            if (!node) return false;
+                            const el = node.nodeType === 1 ? node : node.parentElement;
+                            if (el && el.closest) {
+                                return !!el.closest(
+                                    'carousel, [data-carousel], .carousel, [aria-roledescription="carousel"], ' +
+                                    '.swiper, .swiper-slide, .slick-slider, .owl-carousel, .ticker, [data-ticker], marquee, ' +
+                                    '.marquee, [data-animated], [data-timer]'
+                                );
+                            }
+                            return false;
+                        }
+
+                        const observer = new MutationObserver((mutations) => {
+                            const significant = mutations.filter(m => !isIgnoredElement(m.target));
+                            if (significant.length === 0) return;
+
+                            const now = performance.now();
+                            mutationTimes.push(now);
+
+                            // Detect fixed-cadence repeating mutations (e.g. interval timers/animations)
+                            if (mutationTimes.length >= 4) {
+                                const last4 = mutationTimes.slice(-4);
+                                const d1 = last4[1] - last4[0];
+                                const d2 = last4[2] - last4[1];
+                                const d3 = last4[3] - last4[2];
+                                const avgInterval = (d1 + d2 + d3) / 3;
+                                if (avgInterval >= 250) {
+                                    const maxDev = Math.max(
+                                        Math.abs(d1 - avgInterval),
+                                        Math.abs(d2 - avgInterval),
+                                        Math.abs(d3 - avgInterval)
+                                    );
+                                    if (maxDev < avgInterval * 0.25) {
+                                        return; // Ignore fixed-cadence timer
+                                    }
+                                }
+                            }
+
                             if (timer) clearTimeout(timer);
                             timer = setTimeout(resolve, quietMs);
                         });
+
                         observer.observe(document.body || document.documentElement, {
                             childList: true, subtree: true, attributes: true
                         });
+
                         const hardStop = setTimeout(() => {
                             observer.disconnect();
                             if (timer) clearTimeout(timer);
