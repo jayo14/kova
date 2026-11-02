@@ -1,4 +1,6 @@
 {
+  "type": "synthetic",
+  "note": "Synthetic fixture for testing polling logic only. Real captures will replace this when supplied by user.",
   "platform": "render",
   "status_code": 200,
   "headers": {
