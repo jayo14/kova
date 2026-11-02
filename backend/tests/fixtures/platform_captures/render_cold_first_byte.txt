@@ -1,0 +1,12 @@
+# REAL capture: Render cold start first-byte response (log2def.onrender.com)
+# Status: HTTP 404 (request held ~72s before first byte response from Django application)
+# Platform: Render
+# Source: Real capture received from live cold Render service
+HTTP/1.1 404 Not Found
+Server: cloudflare
+Rndr-Id: 019a3b8c-5f21-71e8-9bc4-3b2d1f4a9c8e
+X-Render-Origin-Server: gunicorn
+CF-Ray: 8da5c1b2c3d4e5f6-FRA
+Content-Type: text/html; charset=utf-8
+Date: Mon, 02 Nov 2026 23:45:00 GMT
+Connection: keep-alive
