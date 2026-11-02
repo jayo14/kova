@@ -159,6 +159,9 @@ class BrowserSession:
         self._step_network_logs: list[dict[str, Any]] = []
         self._capturing_step_network: bool = False
         self._cdp_session: Any | None = None
+        self.in_flight_requests: dict[Any, dict[str, Any]] = {}
+        self.load_phases: dict[str, Any] = {}
+        self.on_load_phase: Callable[[dict[str, Any]], Any] | None = None
 
     async def start(self):
         """Launch browser and create isolated context + page.
@@ -191,6 +194,8 @@ class BrowserSession:
         self.console_errors = []
         self.failed_requests = []
         self.download_events = []
+        self.in_flight_requests = {}
+        self.load_phases = {}
         if old_context is not None:
             try:
                 await old_context.close()
@@ -285,6 +290,45 @@ class BrowserSession:
         except Exception:
             pass
         return False
+
+    def get_pending_requests(self) -> list[dict[str, Any]]:
+        """Return active in-flight network requests sorted by duration (oldest first)."""
+        now = time.perf_counter()
+        pending: list[dict[str, Any]] = []
+        for req, info in list(self.in_flight_requests.items()):
+            url = info.get("url", "")
+            if url.startswith(("data:", "about:", "blob:")):
+                continue
+            age_s = round(now - info.get("start_time", now), 1)
+            pending.append({
+                "url": url,
+                "host": info.get("host", ""),
+                "resource_type": info.get("resource_type", ""),
+                "method": info.get("method", "GET"),
+                "age_s": age_s,
+            })
+        pending.sort(key=lambda x: x["age_s"], reverse=True)
+        return pending
+
+    def get_slowest_pending_host(self) -> tuple[str, float] | None:
+        """Return (host, age_s) of the oldest meaningful pending backend or asset request."""
+        pending = self.get_pending_requests()
+        # First preference: active xhr/fetch/api/document requests
+        for item in pending:
+            host = item["host"]
+            url_lower = item["url"].lower()
+            if not host:
+                continue
+            if any(ign in url_lower for ign in ("/ping", "/health", "/vitals", "telemetry", "analytics")):
+                continue
+            if item["resource_type"] in ("ping", "websocket", "eventsource", "font", "media"):
+                continue
+            return host, item["age_s"]
+        # Fallback: any pending host
+        for item in pending:
+            if item["host"]:
+                return item["host"], item["age_s"]
+        return None
 
     async def _setup_context(self):
         """Create context + page with interception, tracing, and observers."""
@@ -458,8 +502,25 @@ class BrowserSession:
             except Exception as e:
                 logger.debug("Error in response listener: %s", e)
 
+        def _on_request(req):
+            try:
+                host = (urlparse(req.url).hostname or "").lower()
+                self.in_flight_requests[req] = {
+                    "url": req.url,
+                    "host": host,
+                    "resource_type": getattr(req, "resource_type", "other"),
+                    "method": getattr(req, "method", "GET"),
+                    "start_time": time.perf_counter(),
+                }
+            except Exception:
+                pass
+
+        def _on_request_finished(req):
+            self.in_flight_requests.pop(req, None)
+
         async def _on_request_failed(request):
             try:
+                self.in_flight_requests.pop(request, None)
                 failure_str = str(request.failure or "")
                 if "blockedbyclient" in failure_str.lower() and self.block_heavy_resources:
                     return
@@ -522,6 +583,8 @@ class BrowserSession:
             except Exception as e:
                 logger.debug("Error in pageerror listener: %s", e)
 
+        self._page.on("request", _on_request)
+        self._page.on("requestfinished", _on_request_finished)
         self._page.on("response", _on_response)
         self._page.on("requestfailed", _on_request_failed)
         self._page.on("console", _on_console)
@@ -649,24 +712,101 @@ class BrowserSession:
 
     # --- Navigation ---
 
-    async def navigate(self, url: str):
-        """Navigate to a URL and wait for DOM content to load.
+    async def navigate(
+        self,
+        url: str,
+        timeout_ms: int = 45000,
+        wait_until: str = "domcontentloaded",
+        on_phase: Callable[[dict[str, Any]], Any] | None = None,
+    ) -> dict[str, Any]:
+        """Navigate to a URL and track timestamped real load phases.
 
         SSRF: checks both the target URL and the final post-redirect URL.
         """
         if not _is_safe_url(url):
             raise ValueError("Blocked navigation to unsafe URL")
-        await self.page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+        t_nav_start = time.perf_counter()
+        phases: dict[str, Any] = {"start_time": time.time()}
+
+        async def _emit_phase(phase: str, **kwargs):
+            elapsed = round(time.perf_counter() - t_nav_start, 3)
+            phase_data = {"phase": phase, "elapsed_s": elapsed, "timestamp": time.time(), **kwargs}
+            phases[phase] = phase_data
+            cb = on_phase or self.on_load_phase
+            if cb:
+                try:
+                    res = cb(phase_data)
+                    if asyncio.iscoroutine(res):
+                        await res
+                except Exception as e:
+                    logger.debug("Load phase callback error: %s", e)
+
+        # 1. Navigation commit (headers received, with status)
+        response = None
+        try:
+            response = await self.page.goto(url, wait_until="commit", timeout=timeout_ms)
+            status = response.status if response else None
+            await _emit_phase("commit", status=status, url=self.page.url)
+        except Exception as e:
+            logger.debug("Commit wait finished: %s", e)
+
+        # 2. DOMContentLoaded
+        try:
+            await self.page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+            await _emit_phase("domcontentloaded", url=self.page.url)
+        except Exception as e:
+            logger.debug("DOMContentLoaded wait finished: %s", e)
+
+        # 3. First Contentful Paint
+        try:
+            fcp = await self.page.evaluate("""() => new Promise(res => {
+                const e = performance.getEntriesByName('first-contentful-paint')[0];
+                if (e) return res(e.startTime);
+                new PerformanceObserver((l, o) => {
+                    const entry = l.getEntries()[0];
+                    if (entry) { res(entry.startTime); o.disconnect(); }
+                }).observe({type: 'paint', buffered: true});
+                setTimeout(() => res(null), 8000);
+            })""")
+            fcp_s = round(fcp / 1000.0, 3) if fcp is not None else None
+            await _emit_phase("first_contentful_paint", fcp_ms=fcp, fcp_s=fcp_s)
+        except Exception as e:
+            logger.debug("FCP evaluation finished: %s", e)
+
+        # 4. DOM settled (mutation quiet period)
+        try:
+            await self.page.evaluate("""([quietMs, maxWaitMs]) => new Promise((resolve) => {
+                let timer = setTimeout(resolve, quietMs);
+                const observer = new MutationObserver(() => {
+                    if (timer) clearTimeout(timer);
+                    timer = setTimeout(resolve, quietMs);
+                });
+                observer.observe(document.body || document.documentElement, {
+                    childList: true, subtree: true, attributes: true
+                });
+                setTimeout(() => {
+                    observer.disconnect();
+                    if (timer) clearTimeout(timer);
+                    resolve();
+                }, maxWaitMs);
+            })""", [300, 3000])
+            await _emit_phase("dom_settled")
+        except Exception as e:
+            logger.debug("DOM settled finished: %s", e)
+
+        self.load_phases = phases
+
         # Redirect chain may land on blocked host — re-check final URL
         final_url = self.page.url or ""
         if final_url and not _is_safe_url(final_url):
-            # Navigate away to blank to leave a safe state
             try:
                 await self.page.goto("about:blank", wait_until="commit", timeout=5000)
             except Exception:
                 pass
             raise ValueError("Blocked post-redirect navigation to unsafe URL")
-        logger.debug("Navigated to %s", final_url or url)
+        logger.debug("Navigated to %s (phases=%s)", final_url or url, list(phases.keys()))
+        return phases
 
     async def go_back(self):
         """Navigate back in browser history."""
@@ -759,9 +899,16 @@ class BrowserSession:
         await self.page.mouse.wheel(0, delta)
         logger.debug("Scrolled %s by %dpx", direction, amount)
 
-    async def screenshot(self, full_page: bool = False) -> bytes:
-        """Take a screenshot of the current page. Returns PNG bytes."""
-        return await self.page.screenshot(full_page=full_page)
+    async def screenshot(self, full_page: bool = False, animations: str = "disabled") -> bytes:
+        """Take a screenshot of the current page with animations disabled and time logged."""
+        t0 = time.perf_counter()
+        try:
+            data = await self.page.screenshot(full_page=full_page, animations=animations)
+        except Exception:
+            data = await self.page.screenshot(full_page=False, animations=animations)
+        elapsed = time.perf_counter() - t0
+        logger.info("Screenshot completed in %.3fs (full_page=%s)", elapsed, full_page)
+        return data
 
     async def capture_step_screenshot(
         self,
