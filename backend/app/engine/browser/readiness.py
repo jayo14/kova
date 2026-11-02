@@ -28,7 +28,10 @@ from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
-from app.engine.browser.platform_wake import detect_platform_wake
+from app.engine.browser.platform_wake import (
+    classify_target_document,
+    detect_platform_wake,
+)
 
 __all__ = [
     "RETRYABLE_STATES",
@@ -707,7 +710,7 @@ def classify_page(
             category="browser_error",
         )
 
-    # 2. Transport / gateway failures are infrastructure, not application defects.
+    # 2. Transport / gateway failures and target document classification
     status = signals.http_status
     if status in (502, 503, 504):
         return result(
@@ -715,6 +718,20 @@ def classify_page(
             f"The host returned HTTP {status}; the application behind the proxy was unreachable",
             0.92,
             category="proxy_error",
+        )
+
+    is_backend_or_error, backend_error_msg = classify_target_document(
+        signals.http_status,
+        signals.headers,
+        signals.body_text,
+        signals.title,
+    )
+    if is_backend_or_error:
+        return result(
+            PageReadiness.APPLICATION_ERROR,
+            backend_error_msg,
+            0.95,
+            category="target_classification_error",
         )
     if status == 500:
         return result(
