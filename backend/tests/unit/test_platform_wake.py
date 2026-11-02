@@ -25,7 +25,7 @@ def test_render_waking_detected():
     assert result.matched is True
     assert result.platform == "Render"
     assert result.is_waking is True
-    assert result.message == "The host (Render) is waking up"
+    assert result.message == "The hosting service (Render) is waking up"
 
 
 def test_heroku_error_detected():

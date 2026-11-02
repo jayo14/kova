@@ -279,7 +279,7 @@ def detect_platform_wake(
         matched, reason = sig.matches(headers, status_code, title, body_text, url)
         if matched:
             if sig.is_waking:
-                msg = f"The host ({sig.platform}) is waking up"
+                msg = f"The hosting service ({sig.platform}) is waking up"
             else:
                 msg = f"The hosting platform ({sig.platform}) returned an infrastructure error"
             return PlatformWakeResult(

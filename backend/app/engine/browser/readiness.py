@@ -28,6 +28,8 @@ from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
+from app.engine.browser.platform_wake import detect_platform_wake
+
 __all__ = [
     "RETRYABLE_STATES",
     "PageReadiness",
@@ -321,6 +323,7 @@ class PageSignals:
     has_password_field: bool = False
     has_email_field: bool = False
     browser_error: str | None = None
+    headers: dict[str, str] = field(default_factory=dict)
 
     @property
     def host(self) -> str:
@@ -752,7 +755,32 @@ def classify_page(
             category="access_denied",
         )
 
-    # 6. Provider interstitial. Branding alone is not enough; structure must agree.
+    # 6. Provider interstitial. Verified by concrete signatures or structural branding.
+    platform_sig = detect_platform_wake(
+        signals.headers,
+        signals.http_status,
+        signals.title,
+        signals.body_text,
+        signals.observed_url or signals.requested_url,
+    )
+    if platform_sig.matched and not identity_matched:
+        if platform_sig.is_waking:
+            return result(
+                PageReadiness.HOSTING_INTERSTITIAL,
+                platform_sig.message or f"The host ({platform_sig.platform}) is waking up",
+                0.95,
+                category="hosting_waking",
+                uncertainty=platform_sig.matched_by,
+            )
+        else:
+            return result(
+                PageReadiness.PROXY_OR_GATEWAY_ERROR,
+                platform_sig.message or f"The hosting platform ({platform_sig.platform}) returned an infrastructure error",
+                0.92,
+                category="platform_error",
+                uncertainty=platform_sig.matched_by,
+            )
+
     interstitial, interstitial_reason = _looks_like_hosting_interstitial(
         signals, text, title
     )
