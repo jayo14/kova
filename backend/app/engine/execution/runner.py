@@ -2318,7 +2318,11 @@ class FlowRunner:
             "step_id": eff_step_id,
         }
         try:
-            ss_bytes = await browser.page.screenshot(type="jpeg", quality=70)
+            t_ss = time.perf_counter()
+            ss_bytes = await browser.page.screenshot(type="jpeg", quality=70, animations="disabled")
+            ss_duration = time.perf_counter() - t_ss
+            if ss_duration > 0.5:
+                logger.info("Evidence screenshot took %.2fs (animations=disabled)", ss_duration)
             if ss_bytes:
                 storage_res = screenshot_storage.upload_execution_screenshot(
                     execution_id=execution_id,
@@ -3373,7 +3377,11 @@ class FlowRunner:
         ss_bytes = None
         ss_note = None
         try:
-            ss_bytes = await browser.page.screenshot(type="png")
+            t_ss = time.perf_counter()
+            ss_bytes = await browser.page.screenshot(type="png", animations="disabled")
+            ss_duration = time.perf_counter() - t_ss
+            if ss_duration > 0.5:
+                logger.info("Step evidence screenshot took %.2fs (animations=disabled)", ss_duration)
         except Exception as ss_err:
             ss_note = f"Screenshot capture failed: {ss_err}"
             logger.debug("Step screenshot capture failed: %s", ss_err)
