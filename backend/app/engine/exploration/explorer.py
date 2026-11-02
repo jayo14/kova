@@ -1794,9 +1794,15 @@ class ExplorationEngine:
             else:
                 return {"error": f"Unknown navigation action: {action}"}
 
-            # Wait for page to settle
+            # Wait for page to settle using DOM quiet window instead of networkidle
             try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
+                from app.engine.browser.readiness import ReadinessWaiter
+                waiter = ReadinessWaiter(probe=lambda: None)
+                await waiter.wait_for_settle(
+                    page,
+                    max_wait_s=2.5,
+                    pending_checker=lambda: self._browser.get_slowest_pending_host() if self._browser else None,
+                )
             except Exception:
                 pass
 
