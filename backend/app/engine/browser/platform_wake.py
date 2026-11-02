@@ -41,10 +41,11 @@ def identify_platform(
     url_lower = (url or "").lower()
 
     # 1. Post-response headers check
+    # Render identification strictly uses rndr-id and x-render-origin-server.
+    # Real responses have "server: cloudflare", so "server: render" is never checked.
     if (
         "rndr-id" in normalized_headers
         or "x-render-origin-server" in normalized_headers
-        or normalized_headers.get("server") == "render"
     ):
         return "Render"
     if "x-heroku-queue-wait-time" in normalized_headers or "vegur" in normalized_headers.get("via", ""):
@@ -302,8 +303,8 @@ SYNTHETIC_RENDER_WAKE_SIGNATURE = PlatformSignature(
     is_synthetic=True,
     status_codes=frozenset({200, 502, 503, 504}),
     header_patterns=(
-        ("server", r"render"),
         ("x-render-origin-server", r".+"),
+        ("rndr-id", r".+"),
     ),
     title_tokens=("service waking up", "render", "free instance", "application loading"),
     body_tokens=(

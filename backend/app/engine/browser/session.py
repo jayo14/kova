@@ -776,13 +776,16 @@ class BrowserSession:
         except Exception as e:
             logger.debug("FCP evaluation finished: %s", e)
 
-        # 4. DOM settled: mutation quiet window (ignoring carousels and fixed-cadence timers)
+        # 4. DOM settled: mutation quiet window
+        # Primary mechanism: cadence-based periodic mutation filter (timers, tickers, spinners, animations).
+        # Supplementary fast-path: known carousel/ticker classes.
         try:
             await self.page.evaluate("""([quietMs, maxWaitMs]) => new Promise((resolve) => {
                 let timer = setTimeout(resolve, quietMs);
                 const mutationTimes = [];
 
-                function isIgnoredElement(node) {
+                // Supplementary fast-path: known carousel/ticker classes
+                function isKnownCarouselOrTicker(node) {
                     if (!node) return false;
                     const el = node.nodeType === 1 ? node : node.parentElement;
                     if (el && el.closest) {
@@ -796,26 +799,30 @@ class BrowserSession:
                 }
 
                 const observer = new MutationObserver((mutations) => {
-                    const significant = mutations.filter(m => !isIgnoredElement(m.target));
-                    if (significant.length === 0) return;
+                    // Supplementary fast-path filter
+                    const nonCarousel = mutations.filter(m => !isKnownCarouselOrTicker(m.target));
+                    if (nonCarousel.length === 0) return;
 
                     const now = performance.now();
                     mutationTimes.push(now);
 
+                    // Primary mechanism: cadence-based periodic mutation filter
+                    // If mutations arrive on a regular recurring interval (timers, tickers, carousels, spinners),
+                    // treat as background cadence rather than application loading/settling.
                     if (mutationTimes.length >= 4) {
                         const last4 = mutationTimes.slice(-4);
                         const d1 = last4[1] - last4[0];
                         const d2 = last4[2] - last4[1];
                         const d3 = last4[3] - last4[2];
                         const avgInterval = (d1 + d2 + d3) / 3;
-                        if (avgInterval >= 250) {
+                        if (avgInterval >= 150) {
                             const maxDev = Math.max(
                                 Math.abs(d1 - avgInterval),
                                 Math.abs(d2 - avgInterval),
                                 Math.abs(d3 - avgInterval)
                             );
-                            if (maxDev < avgInterval * 0.25) {
-                                return; // Ignore fixed-cadence repeating timer
+                            if (maxDev < avgInterval * 0.30) {
+                                return; // Ignore periodic cadence
                             }
                         }
                     }

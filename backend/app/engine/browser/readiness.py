@@ -997,7 +997,8 @@ class ReadinessWaiter:
                 pass
 
         # 3. DOM mutation quiet period: wait until the DOM stops mutating
-        # Ignores carousels, tickers, and mutations repeating on a fixed cadence (timers/animations)
+        # Primary mechanism: cadence-based periodic mutation filter (timers, carousels, tickers, spinners).
+        # Supplementary fast-path: known carousel/ticker classes.
         remaining = deadline - _time.monotonic()
         if remaining > 0:
             try:
@@ -1006,7 +1007,8 @@ class ReadinessWaiter:
                         let timer = setTimeout(resolve, quietMs);
                         const mutationTimes = [];
 
-                        function isIgnoredElement(node) {
+                        // Supplementary fast-path: known carousel/ticker classes
+                        function isKnownCarouselOrTicker(node) {
                             if (!node) return false;
                             const el = node.nodeType === 1 ? node : node.parentElement;
                             if (el && el.closest) {
@@ -1020,27 +1022,30 @@ class ReadinessWaiter:
                         }
 
                         const observer = new MutationObserver((mutations) => {
-                            const significant = mutations.filter(m => !isIgnoredElement(m.target));
-                            if (significant.length === 0) return;
+                            // Supplementary fast-path filter
+                            const nonCarousel = mutations.filter(m => !isKnownCarouselOrTicker(m.target));
+                            if (nonCarousel.length === 0) return;
 
                             const now = performance.now();
                             mutationTimes.push(now);
 
-                            // Detect fixed-cadence repeating mutations (e.g. interval timers/animations)
+                            // Primary mechanism: cadence-based periodic mutation filter
+                            // If mutations arrive on a regular recurring interval (timers, tickers, carousels, spinners),
+                            // treat as background cadence rather than application loading/settling.
                             if (mutationTimes.length >= 4) {
                                 const last4 = mutationTimes.slice(-4);
                                 const d1 = last4[1] - last4[0];
                                 const d2 = last4[2] - last4[1];
                                 const d3 = last4[3] - last4[2];
                                 const avgInterval = (d1 + d2 + d3) / 3;
-                                if (avgInterval >= 250) {
+                                if (avgInterval >= 150) {
                                     const maxDev = Math.max(
                                         Math.abs(d1 - avgInterval),
                                         Math.abs(d2 - avgInterval),
                                         Math.abs(d3 - avgInterval)
                                     );
-                                    if (maxDev < avgInterval * 0.25) {
-                                        return; // Ignore fixed-cadence timer
+                                    if (maxDev < avgInterval * 0.30) {
+                                        return; // Ignore periodic cadence
                                     }
                                 }
                             }
