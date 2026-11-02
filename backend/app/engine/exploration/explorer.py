@@ -591,12 +591,18 @@ class ExplorationEngine:
     async def _warmup_preflight(self, target_url: str) -> dict[str, Any]:
         """Warm up sleeping hosts with patient HTTP GET and measure first-byte latency.
 
-        Never emits timer-based guess messages. Status messages are emitted only
-        when a platform wake or error signature is positively matched.
+        Never emits timer-based guess messages. Emits measured fact:
+        'Waiting for the server to respond (Ns)' while headers are in-flight,
+        with a 2s heartbeat so the UI is never silent.
+        Caps wake polling at 3 minutes and reports the exact last observed status on timeout.
         """
         t0 = time.time()
         t_perf_0 = time.perf_counter()
         emitted_wake_sig = False
+        received_headers = False
+        active_wake_platform = None
+        last_status_code = None
+        last_ttfb = None
 
         headers = {
             "User-Agent": (
@@ -606,10 +612,44 @@ class ExplorationEngine:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        max_preflight_seconds = 90.0
+        # Cap wake polling: default 3 minutes (180s)
+        max_preflight_seconds = 180.0
         deadline = t0 + max_preflight_seconds
         last_error = None
         last_error_code = "TIMEOUT"
+
+        ticker_stop = asyncio.Event()
+
+        async def _heartbeat():
+            while not ticker_stop.is_set():
+                try:
+                    await asyncio.wait_for(ticker_stop.wait(), timeout=2.0)
+                    break
+                except asyncio.TimeoutError:
+                    pass
+                if ticker_stop.is_set():
+                    break
+                elapsed = int(time.time() - t0)
+                if not received_headers:
+                    # Measured fact: request sent, waiting for response headers. No cause.
+                    await self._emit("state_change", {"status": "CONNECTING"})
+                    await self._emit("progress", {
+                        "id": "exp-warmup",
+                        "message": f"Waiting for the server to respond ({elapsed}s)",
+                        "status": "active",
+                        "elapsed_seconds": elapsed,
+                    })
+                elif active_wake_platform:
+                    # Verified wake signature matched: heartbeat during wake polling
+                    await self._emit("state_change", {"status": "CONNECTING"})
+                    await self._emit("progress", {
+                        "id": "exp-warmup",
+                        "message": f"The hosting service ({active_wake_platform}) is waking up ({elapsed}s)",
+                        "status": "active",
+                        "elapsed_seconds": elapsed,
+                    })
+
+        ticker_task = asyncio.create_task(_heartbeat())
 
         try:
             async with httpx.AsyncClient(
@@ -620,7 +660,10 @@ class ExplorationEngine:
                 while time.time() < deadline:
                     try:
                         resp = await client.get(target_url, headers=headers)
+                        received_headers = True
+                        last_status_code = resp.status_code
                         ttfb_seconds = round(time.perf_counter() - t_perf_0, 3)
+                        last_ttfb = ttfb_seconds
                         text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
 
                         # Check bot challenges
@@ -641,7 +684,7 @@ class ExplorationEngine:
                                 "ttfb_seconds": ttfb_seconds,
                             }
 
-                        # Check for verified hosting wake signature
+                        # Check for verified/synthetic hosting wake signature
                         wake_sig = detect_platform_wake(
                             dict(resp.headers),
                             resp.status_code,
@@ -650,6 +693,7 @@ class ExplorationEngine:
                             target_url,
                         )
                         if wake_sig.matched and wake_sig.is_waking:
+                            active_wake_platform = wake_sig.platform
                             if not emitted_wake_sig:
                                 emitted_wake_sig = True
                                 await self._emit("state_change", {"status": "CONNECTING"})
@@ -726,15 +770,22 @@ class ExplorationEngine:
                         }
 
                 elapsed_final = int(time.time() - t0)
+                status_text = f"HTTP {last_status_code}" if last_status_code else "no response headers received"
+                err_msg = f"Wake polling timed out after {elapsed_final}s. Last observed status: {status_text}" + (f" ({last_error})" if last_error else "")
                 return {
                     "success": False,
                     "error_code": last_error_code,
-                    "error": last_error or f"Warmup timed out after {elapsed_final}s",
+                    "status_code": last_status_code,
+                    "error": err_msg,
                     "elapsed": elapsed_final,
-                    "ttfb_seconds": round(time.perf_counter() - t_perf_0, 3),
+                    "ttfb_seconds": last_ttfb or round(time.perf_counter() - t_perf_0, 3),
                 }
         finally:
-            pass
+            ticker_stop.set()
+            try:
+                await ticker_task
+            except Exception:
+                pass
 
     async def _capture_and_emit_screenshot(self, page, full_page: bool = False) -> dict | None:
         """Capture screenshot, emit immediate data URI for live viewport, and upload to S3."""
