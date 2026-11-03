@@ -146,22 +146,27 @@ from fastapi import Depends
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session_factory() as session:
+    session = async_session_factory()
+    try:
+        yield session
+        await session.commit()
+    except asyncio.CancelledError:
         try:
-            yield session
-            await session.commit()
-        except asyncio.CancelledError:
-            try:
-                await asyncio.shield(session.rollback())
-            except Exception:
-                pass
-            raise
+            await asyncio.shield(session.rollback())
         except Exception:
-            try:
-                await asyncio.shield(session.rollback())
-            except Exception:
-                pass
-            raise
+            pass
+        raise
+    except Exception:
+        try:
+            await asyncio.shield(session.rollback())
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            await session.close()
+        except Exception:
+            pass
 
 
 async def get_session(db: AsyncSession = Depends(get_db)) -> AsyncSession:

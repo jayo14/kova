@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 TASK_HARD_TIMEOUT = 900
 
 
-@celery_app.task(bind=True, name="run_execution", max_retries=1, time_limit=TASK_HARD_TIMEOUT)
+@celery_app.task(bind=True, name="run_execution", max_retries=1, time_limit=TASK_HARD_TIMEOUT, ignore_result=True)
 def run_execution(self, execution_id: str):
     """Execute a flow in the background.
 

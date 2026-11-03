@@ -248,3 +248,31 @@ async def test_stale_execution_tasks_skipped():
 
         res = await _run_execution_async(mock_task, str(uuid.uuid4()))
         assert res == {"status": "skipped", "reason": "already_terminal"}
+
+
+def test_celery_result_backend_disabled_and_results_ignored():
+    """Verify Celery app has task_ignore_result=True and uses DisabledBackend by default."""
+    from app.workers.celery_app import celery_app
+    from celery.backends.base import DisabledBackend
+
+    assert celery_app.conf.task_ignore_result is True
+    assert isinstance(celery_app.backend, DisabledBackend)
+
+
+@pytest.mark.asyncio
+async def test_enqueue_exploration_handles_broker_error_gracefully():
+    """Verify ExplorationService._enqueue_exploration logs broker error without raising."""
+    from app.modules.exploration.service import ExplorationService
+
+    mock_db = AsyncMock()
+    mock_session = MagicMock()
+    mock_session.id = uuid.uuid4()
+    mock_session.status = "CREATED"
+    mock_session.project_id = None
+
+    service = ExplorationService(mock_db)
+    service.repo.get_by_id = AsyncMock(return_value=mock_session)
+
+    with patch("app.workers.tasks.exploration.run_exploration.apply_async", side_effect=Exception("Redis connection lost")):
+        # Must not raise exception
+        await service._enqueue_exploration(mock_session.id)

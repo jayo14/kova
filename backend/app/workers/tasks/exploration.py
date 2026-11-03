@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 TASK_HARD_TIMEOUT = 3660
 
 
-@celery_app.task(bind=True, name="run_exploration", max_retries=1, time_limit=TASK_HARD_TIMEOUT)
+@celery_app.task(bind=True, name="run_exploration", max_retries=1, time_limit=TASK_HARD_TIMEOUT, ignore_result=True)
 def run_exploration(
     self,
     session_id: str,

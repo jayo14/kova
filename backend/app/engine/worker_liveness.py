@@ -25,12 +25,15 @@ _redis_client: aioredis.Redis | None = None
 def _get_redis_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "decode_responses": True,
-        "socket_connect_timeout": 3.0,
-        "socket_timeout": 3.0,
+        "socket_connect_timeout": 10.0,
+        "socket_timeout": 10.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
     }
     if "rediss://" in str(settings.REDIS_URL):
         reqs_map = {"required": ssl.CERT_REQUIRED, "optional": ssl.CERT_OPTIONAL, "none": ssl.CERT_NONE}
-        kwargs["ssl_cert_reqs"] = reqs_map.get(settings.REDIS_SSL_CERT_REQS.lower(), ssl.CERT_REQUIRED)
+        kwargs["ssl_cert_reqs"] = reqs_map.get((settings.REDIS_SSL_CERT_REQS or "none").lower(), ssl.CERT_NONE)
         if settings.REDIS_SSL_CA_CERTS:
             kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
     return kwargs
@@ -45,6 +48,7 @@ async def get_liveness_redis() -> aioredis.Redis:
 
 async def get_live_workers() -> list[dict[str, Any]]:
     """Query live worker heartbeat keys from Redis."""
+    global _redis_client
     try:
         r = await get_liveness_redis()
         pattern = f"{settings.REDIS_KEY_PREFIX}worker:alive:*"
@@ -63,6 +67,12 @@ async def get_live_workers() -> list[dict[str, Any]]:
         return workers
     except Exception as exc:
         logger.debug("Error checking live workers in Redis: %s", exc)
+        if _redis_client is not None:
+            try:
+                await _redis_client.aclose()
+            except Exception:
+                pass
+            _redis_client = None
         return []
 
 
@@ -72,6 +82,7 @@ async def get_queue_backlog(plan: str | None = None) -> tuple[int, int]:
     Returns:
         (total_backlog, plan_queue_depth)
     """
+    global _redis_client
     prefix = settings.CELERY_QUEUE_PREFIX
     all_queues = [
         f"{prefix}kova-free",
@@ -91,6 +102,12 @@ async def get_queue_backlog(plan: str | None = None) -> tuple[int, int]:
                 target_depth = depth
     except Exception as exc:
         logger.debug("Error checking queue lengths in Redis: %s", exc)
+        if _redis_client is not None:
+            try:
+                await _redis_client.aclose()
+            except Exception:
+                pass
+            _redis_client = None
 
     return total_backlog, target_depth
 

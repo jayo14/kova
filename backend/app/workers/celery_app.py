@@ -16,23 +16,33 @@ from app.observability.tracing import get_tracer
 
 logger = logging.getLogger(__name__)
 
+# Kova stores all task progress, states, events, and discoveries directly in
+# PostgreSQL and streams them via Redis pub/sub. Celery's result backend is
+# entirely unneeded and its async pub/sub consumer permanently crashes the
+# Celery application with "Retry limit exceeded while trying to reconnect to
+# the Celery result store backend" if Redis drops connections for > 20s.
+# We disable the result backend by default (backend=None).
+result_backend = None
+if settings.ENABLE_CELERY_RESULT_BACKEND and settings.CELERY_RESULT_BACKEND:
+    result_backend = str(settings.CELERY_RESULT_BACKEND).strip() or None
+
 celery_app = Celery(
     "kova",
     broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
+    backend=result_backend,
 )
 
 
-def _get_ssl_config(url: str) -> dict | None:
+def _get_ssl_config(url: str | None) -> dict | None:
     if not url or "rediss://" not in str(url):
         return None
-    ssl_reqs = settings.REDIS_SSL_CERT_REQS.lower()
+    ssl_reqs = (settings.REDIS_SSL_CERT_REQS or "none").lower()
     reqs_map = {
         "required": ssl.CERT_REQUIRED,
         "optional": ssl.CERT_OPTIONAL,
         "none": ssl.CERT_NONE,
     }
-    cert_reqs = reqs_map.get(ssl_reqs, ssl.CERT_REQUIRED)
+    cert_reqs = reqs_map.get(ssl_reqs, ssl.CERT_NONE)
     cfg: dict = {"ssl_cert_reqs": cert_reqs}
     if settings.REDIS_SSL_CA_CERTS:
         cfg["ca_certs"] = settings.REDIS_SSL_CA_CERTS
@@ -50,7 +60,26 @@ celery_app.conf.update(
     enable_utc=True,
     task_track_started=True,
     task_acks_late=True,
+    task_ignore_result=True,
+    task_store_errors_even_if_ignored=False,
     worker_prefetch_multiplier=1,
+    result_backend_transport_options={
+        "retry_on_timeout": True,
+        "socket_timeout": 30.0,
+        "socket_connect_timeout": 30.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "max_retries": None,
+    },
+    broker_transport_options={
+        "retry_on_timeout": True,
+        "socket_timeout": 30.0,
+        "socket_connect_timeout": 30.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "visibility_timeout": 43200,
+        "max_retries": None,
+    },
     # Soft limit sits above the exploration wall-clock budget (600s) so the task
     # gets a graceful cleanup window before the recovery watchdog declares it
     # abandoned at 660s. The hard kill is raised per-task to 3660s.
@@ -64,7 +93,7 @@ celery_app.conf.update(
         Queue(f"{q_prefix}kova-enterprise", Exchange(f"{q_prefix}kova-enterprise", type="direct"), routing_key=f"{q_prefix}kova-enterprise"),
     ],
     broker_use_ssl=_get_ssl_config(str(settings.CELERY_BROKER_URL)),
-    redis_backend_use_ssl=_get_ssl_config(str(settings.CELERY_RESULT_BACKEND)),
+    redis_backend_use_ssl=_get_ssl_config(str(settings.CELERY_RESULT_BACKEND)) if result_backend else None,
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])
@@ -88,33 +117,43 @@ _heartbeat_stop = threading.Event()
 
 def _run_worker_heartbeat(hostname: str) -> None:
     key = f"{settings.REDIS_KEY_PREFIX}worker:alive:{hostname}"
-    kwargs = {}
+    kwargs: dict = {
+        "decode_responses": True,
+        "socket_timeout": 5.0,
+        "socket_connect_timeout": 5.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
+    }
     if "rediss://" in str(settings.REDIS_URL):
         reqs_map = {"required": ssl.CERT_REQUIRED, "optional": ssl.CERT_OPTIONAL, "none": ssl.CERT_NONE}
-        kwargs["ssl_cert_reqs"] = reqs_map.get(settings.REDIS_SSL_CERT_REQS.lower(), ssl.CERT_REQUIRED)
+        kwargs["ssl_cert_reqs"] = reqs_map.get((settings.REDIS_SSL_CERT_REQS or "none").lower(), ssl.CERT_NONE)
         if settings.REDIS_SSL_CA_CERTS:
             kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
 
     client = None
-    try:
-        client = redis.from_url(settings.REDIS_URL, decode_responses=True, socket_timeout=5.0, **kwargs)
-    except Exception as exc:
-        logger.warning("Worker heartbeat Redis connection failed: %s", exc)
-        return
-
     while not _heartbeat_stop.is_set():
         try:
+            if client is None:
+                client = redis.from_url(settings.REDIS_URL, **kwargs)
             val = json.dumps({"hostname": hostname, "timestamp": time.time(), "prefix": settings.CELERY_QUEUE_PREFIX})
             client.set(key, val, ex=15)
         except Exception as exc:
             logger.debug("Failed writing worker heartbeat for %s: %s", hostname, exc)
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                client = None
         _heartbeat_stop.wait(5.0)
 
-    try:
-        client.delete(key)
-        client.close()
-    except Exception:
-        pass
+    if client:
+        try:
+            client.delete(key)
+            client.close()
+        except Exception:
+            pass
 
 
 @worker_ready.connect

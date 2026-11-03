@@ -128,16 +128,24 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://127.0.0.1:6379/0"
 
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
-    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    CELERY_RESULT_BACKEND: str | None = None
+    ENABLE_CELERY_RESULT_BACKEND: bool = False
     CELERY_QUEUE_PREFIX: str = ""
     REDIS_KEY_PREFIX: str = ""
-    REDIS_SSL_CERT_REQS: str = "required"
+    REDIS_SSL_CERT_REQS: str = "none"
     REDIS_SSL_CA_CERTS: str | None = None
     QUEUED_NO_WORKER_TIMEOUT_SECONDS: int = 120
 
-    @field_validator("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", mode="after")
+    @field_validator("CELERY_BROKER_URL", mode="after")
     @classmethod
     def normalize_celery_urls(cls, v: str) -> str:
+        return v
+
+    @field_validator("CELERY_RESULT_BACKEND", mode="after")
+    @classmethod
+    def normalize_celery_result_backend(cls, v: str | None) -> str | None:
+        if v is not None and not str(v).strip():
+            return None
         return v
     ENVIRONMENT: str = "development"
     DEBUG: bool = True

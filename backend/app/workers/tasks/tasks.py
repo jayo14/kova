@@ -28,7 +28,7 @@ TASK_HARD_TIMEOUT = 600
 # Do not redefine it here — Celery name collision would drop one registration.
 
 
-@celery_app.task(bind=True, name="run_multiple_executions", max_retries=1, time_limit=TASK_HARD_TIMEOUT)
+@celery_app.task(bind=True, name="run_multiple_executions", max_retries=1, time_limit=TASK_HARD_TIMEOUT, ignore_result=True)
 def run_multiple_executions(self, execution_ids: list[str], parallel: bool = True):
     """Execute multiple flows in parallel or sequentially.
 

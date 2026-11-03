@@ -119,21 +119,27 @@ class ExplorationService:
                 if org:
                     queue = get_queue_for_plan(org.plan)
 
-        async_result = await asyncio.to_thread(
-            run_exploration.apply_async,
-            args=[str(session_id)],
-            queue=queue,
-            exchange=queue,
-            routing_key=queue,
-        )
-        task_id = getattr(async_result, "id", None)
-        if task_id:
-            await self.repo.update_status(session_id, celery_task_id=task_id)
-            await self.db.commit()
-        logger.info(
-            "Enqueued exploration %s to Celery queue %s (task_id=%s)",
-            session_id, queue, task_id
-        )
+        try:
+            async_result = await asyncio.to_thread(
+                run_exploration.apply_async,
+                args=[str(session_id)],
+                queue=queue,
+                exchange=queue,
+                routing_key=queue,
+            )
+            task_id = getattr(async_result, "id", None)
+            if task_id:
+                await self.repo.update_status(session_id, celery_task_id=task_id)
+                await self.db.commit()
+            logger.info(
+                "Enqueued exploration %s to Celery queue %s (task_id=%s)",
+                session_id, queue, task_id
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to enqueue exploration %s to Celery queue %s: %s (recovery watchdog will retry)",
+                session_id, queue, exc,
+            )
 
     async def create_and_start_exploration(
         self,

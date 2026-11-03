@@ -84,8 +84,11 @@ def _get_dispatch_redis() -> aioredis.Redis | None:
         return _dispatch_redis
     kwargs: dict[str, object] = {
         "decode_responses": True,
-        "socket_connect_timeout": 2.0,
-        "socket_timeout": 2.0,
+        "socket_connect_timeout": 10.0,
+        "socket_timeout": 10.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
     }
     if str(settings.REDIS_URL).startswith("rediss://"):
         kwargs["ssl_cert_reqs"] = "none"
@@ -108,8 +111,11 @@ def _get_broker_redis() -> aioredis.Redis | None:
         return _broker_redis
     kwargs: dict[str, object] = {
         "decode_responses": True,
-        "socket_connect_timeout": 2.0,
-        "socket_timeout": 2.0,
+        "socket_connect_timeout": 10.0,
+        "socket_timeout": 10.0,
+        "socket_keepalive": True,
+        "health_check_interval": 30,
+        "retry_on_timeout": True,
     }
     if str(settings.CELERY_BROKER_URL).startswith("rediss://"):
         kwargs["ssl_cert_reqs"] = "none"
@@ -137,6 +143,13 @@ async def _log_queue_depths() -> dict[str, int]:
             depths[queue] = int(await client.llen(queue))
     except Exception:
         logger.warning("Could not read Celery queue depths", exc_info=True)
+        global _broker_redis
+        if _broker_redis is not None:
+            try:
+                await _broker_redis.aclose()
+            except Exception:
+                pass
+            _broker_redis = None
         return {}
     if any(depths.values()):
         logger.warning(
@@ -171,6 +184,13 @@ async def _claim_exploration_dispatch(session_id: str) -> bool:
             session_id,
             exc_info=True,
         )
+        global _dispatch_redis
+        if _dispatch_redis is not None:
+            try:
+                await _dispatch_redis.aclose()
+            except Exception:
+                pass
+            _dispatch_redis = None
         return False
     return bool(claimed)
 
@@ -183,6 +203,13 @@ async def _release_exploration_dispatch(session_id: str) -> None:
         await client.delete(_dispatch_lock_key(session_id))
     except Exception:
         logger.warning("Could not release dispatch lock for exploration %s", session_id)
+        global _dispatch_redis
+        if _dispatch_redis is not None:
+            try:
+                await _dispatch_redis.aclose()
+            except Exception:
+                pass
+            _dispatch_redis = None
 
 
 def _release_dispatch_lock_on_failure(session_id: str):
