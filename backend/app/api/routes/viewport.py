@@ -265,24 +265,26 @@ async def _pump_frames(execution_id: str, websocket: WebSocket, relay: FrameRela
     incoming: asyncio.Queue[tuple[bytes, str, str]] = asyncio.Queue(maxsize=1)
 
     async def producer() -> None:
-        agen = subscribe_frames(execution_id)
-        try:
-            async for jpeg, state, masking in agen:
-                frame = (jpeg, state, masking)
-                if incoming.full():
+        while True:
+            try:
+                agen = subscribe_frames(execution_id)
+                async for jpeg, state, masking in agen:
+                    frame = (jpeg, state, masking)
+                    if incoming.full():
+                        try:
+                            incoming.get_nowait()
+                            relay.dropped_queue += 1
+                        except asyncio.QueueEmpty:
+                            pass
                     try:
-                        incoming.get_nowait()
+                        incoming.put_nowait(frame)
+                    except asyncio.QueueFull:
                         relay.dropped_queue += 1
-                    except asyncio.QueueEmpty:
-                        pass
-                try:
-                    incoming.put_nowait(frame)
-                except asyncio.QueueFull:
-                    relay.dropped_queue += 1
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.debug("Frame producer error: %s", e)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.debug("Frame producer error: %s", e)
+                await asyncio.sleep(0.5)
 
     producer_task = asyncio.create_task(producer())
     try:

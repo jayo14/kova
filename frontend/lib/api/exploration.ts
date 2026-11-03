@@ -690,12 +690,16 @@ export async function startExploration(
       setCurrentProjectId(session.project_id);
     }
 
-    // Safety net: periodically sync session state — runs independently of SSE
+    // Safety net: periodically sync session state — runs as fallback if SSE is inactive
     let emptyReadyPollCount = 0;
     const pollInterval = setInterval(async () => {
       const targetId = getCurrentSessionId();
       if (!targetId) {
         clearInterval(pollInterval);
+        return;
+      }
+      // Prefer active SSE stream over 3s polling: skip poll when SSE is actively streaming
+      if (activeStreamSessionId === targetId) {
         return;
       }
       try {

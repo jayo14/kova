@@ -127,7 +127,7 @@ class ControlRecord:
         )
 
 
-CONTROL_PREFIX = "kova:control"
+CONTROL_PREFIX = f"{getattr(settings, 'REDIS_KEY_PREFIX', '')}kova:control"
 COMMAND_CHANNEL = f"{CONTROL_PREFIX}:commands"
 STATE_KEY_PREFIX = f"{CONTROL_PREFIX}:state"
 INPUT_KEY_PREFIX = f"{CONTROL_PREFIX}:input"
@@ -154,6 +154,20 @@ def _get_control_lock(execution_id: str) -> asyncio.Lock:
     if execution_id not in _control_locks:
         _control_locks[execution_id] = asyncio.Lock()
     return _control_locks[execution_id]
+
+
+def _get_redis_ssl_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if "rediss://" in str(settings.REDIS_URL):
+        reqs_map = {
+            "required": ssl.CERT_REQUIRED,
+            "optional": ssl.CERT_OPTIONAL,
+            "none": ssl.CERT_NONE,
+        }
+        kwargs["ssl_cert_reqs"] = reqs_map.get(str(settings.REDIS_SSL_CERT_REQS).lower(), ssl.CERT_REQUIRED)
+        if settings.REDIS_SSL_CA_CERTS:
+            kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
+    return kwargs
 
 
 async def _get_redis() -> aioredis.Redis | None:
@@ -183,10 +197,8 @@ async def _get_redis() -> aioredis.Redis | None:
             "decode_responses": True,
             "socket_connect_timeout": 3.0,
             "socket_timeout": 3.0,
+            **_get_redis_ssl_kwargs(),
         }
-        if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
-            kwargs["ssl_check_hostname"] = False
         client = aioredis.from_url(settings.REDIS_URL, **kwargs)
         await asyncio.wait_for(client.ping(), timeout=3.0)
         _redis = client
@@ -198,7 +210,6 @@ async def _get_redis() -> aioredis.Redis | None:
         logger.debug("Redis unavailable for control channel; using in-memory store: %s", exc)
         _redis_checked = True
         _redis_available = False
-        return None
         return None
 
 
@@ -234,10 +245,8 @@ async def _get_pubsub_redis() -> aioredis.Redis | None:
             "socket_timeout": None,
             "socket_keepalive": True,
             "health_check_interval": 30,
+            **_get_redis_ssl_kwargs(),
         }
-        if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
-            kwargs["ssl_check_hostname"] = False
         client = aioredis.from_url(settings.REDIS_URL, **kwargs)
         await asyncio.wait_for(client.ping(), timeout=5.0)
         _pubsub_redis = client
@@ -782,7 +791,7 @@ async def set_project_deleted(project_id: str, ttl: int = 3600) -> None:
     r = await _get_redis()
     if r is not None:
         try:
-            await r.set(f"project:deleted:{project_id}", "1", ex=ttl)
+            await r.set(f"{CONTROL_PREFIX}project:deleted:{project_id}", "1", ex=ttl)
         except Exception as e:
             logger.debug("Redis set_project_deleted failed: %s", e)
 
@@ -796,7 +805,7 @@ async def is_project_deleted(project_id: str | None) -> bool:
     r = await _get_redis()
     if r is not None:
         try:
-            return bool(await r.get(f"project:deleted:{project_id}"))
+            return bool(await r.get(f"{CONTROL_PREFIX}project:deleted:{project_id}"))
         except Exception:
             pass
     return False

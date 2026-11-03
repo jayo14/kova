@@ -125,6 +125,7 @@ class ExplorationRead(BaseModel):
     question: dict | None = None
     credential_request: dict | None = None
     error_message: str | None = None
+    queue_info: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

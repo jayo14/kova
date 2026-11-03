@@ -32,7 +32,7 @@ class CountingProvider:
     def get_usage(self):
         return {"total_tokens": self.calls * 100, "model_calls": self.calls}
 
-    async def generate_structured(self, system, prompt, schema):
+    async def generate_structured(self, system, prompt, schema, **kwargs):
         self.calls += 1
         if self.fail_after is not None and self.calls >= self.fail_after:
             from app.engine.ai.provider import AIProviderError

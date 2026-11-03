@@ -64,6 +64,7 @@ services:
       - ./backend/.env
     restart: unless-stopped
     read_only: true
+    shm_size: "1gb"
     tmpfs:
       - /tmp:size=2g,mode=1777
       - /home/kova/.cache:size=1g,mode=1777

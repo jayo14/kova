@@ -5,8 +5,8 @@ to Redis. The FastAPI viewport gateway subscribes and forwards to WebSocket
 clients. This is the browser data plane — ephemeral, never persisted.
 
 Channels (binary-safe):
-  kova:viewport:frame:{execution_id}  — raw JPEG bytes + state tag
-  kova:viewport:state:{execution_id}  — JSON state/url/title/control updates
+  {prefix}kova:viewport:frame:{execution_id}  — raw JPEG bytes + state tag
+  {prefix}kova:viewport:state:{execution_id}  — JSON state/url/title/control updates
 
 Frame wire format on the Redis channel:
   b"{state}|{masking}\x00{jpeg_bytes}"  (two short ASCII tags; masking is
@@ -15,9 +15,10 @@ Frame wire format on the Redis channel:
 """
 
 import asyncio
-import ssl
 import json
 import logging
+import ssl
+import time
 from typing import Any, AsyncIterator
 
 import redis.asyncio as aioredis
@@ -34,10 +35,6 @@ _bin_loop: asyncio.AbstractEventLoop | None = None
 _memory_frame_subscribers: dict[str, set[asyncio.Queue[tuple[bytes, str, str]]]] = {}
 _memory_state_subscribers: dict[str, set[asyncio.Queue[dict[str, Any]]]] = {}
 
-FRAME_PREFIX = b"kova:viewport:frame"
-
-STATE_PREFIX = b"kova:viewport:state"
-
 # Cap frame size to ~512KB — larger screenshots are a bug or attack
 MAX_FRAME_BYTES = 512 * 1024
 
@@ -53,6 +50,20 @@ _SENSITIVE_QUERY_KEYS = {
     "refresh_token",
     "id_token",
 }
+
+
+def _get_redis_ssl_kwargs() -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    if "rediss://" in str(settings.REDIS_URL):
+        reqs_map = {
+            "required": ssl.CERT_REQUIRED,
+            "optional": ssl.CERT_OPTIONAL,
+            "none": ssl.CERT_NONE,
+        }
+        kwargs["ssl_cert_reqs"] = reqs_map.get(settings.REDIS_SSL_CERT_REQS.lower(), ssl.CERT_REQUIRED)
+        if settings.REDIS_SSL_CA_CERTS:
+            kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
+    return kwargs
 
 
 def sanitize_url(raw_url: str) -> str:
@@ -79,26 +90,13 @@ def sanitize_url(raw_url: str) -> str:
 
 
 def frame_channel(execution_id: str) -> str:
-    return f"kova:viewport:frame:{execution_id}"
+    prefix = getattr(settings, "REDIS_KEY_PREFIX", "")
+    return f"{prefix}kova:viewport:frame:{execution_id}"
 
 
 def state_channel(execution_id: str) -> str:
-    return f"kova:viewport:state:{execution_id}"
-
-
-async def _recreate_if_loop_changed(
-    client: aioredis.Redis | None,
-    loop_holder: list,
-    current_loop: asyncio.AbstractEventLoop,
-) -> aioredis.Redis | None:
-    if client is not None and loop_holder[0] is not None and loop_holder[0] is not current_loop:
-        try:
-            await client.aclose()
-        except Exception:
-            pass
-        loop_holder[0] = None
-        return None
-    return client
+    prefix = getattr(settings, "REDIS_KEY_PREFIX", "")
+    return f"{prefix}kova:viewport:state:{execution_id}"
 
 
 async def _text_client() -> aioredis.Redis:
@@ -117,8 +115,7 @@ async def _text_client() -> aioredis.Redis:
             "socket_connect_timeout": 3.0,
             "socket_timeout": 3.0,
         }
-        if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+        kwargs.update(_get_redis_ssl_kwargs())
         _text_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _text_loop = loop
     return _text_redis
@@ -140,11 +137,29 @@ async def _bin_client() -> aioredis.Redis:
             "socket_connect_timeout": 3.0,
             "socket_timeout": 3.0,
         }
-        if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+        kwargs.update(_get_redis_ssl_kwargs())
         _bin_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
         _bin_loop = loop
     return _bin_redis
+
+
+def _create_pubsub_client(decode_responses: bool = False) -> aioredis.Redis:
+    """Create a dedicated Redis client specifically for pub/sub streams.
+
+    Requirements:
+    - socket_timeout=None: long-lived subscriptions must never time out on idle
+    - health_check_interval=30: proactive keepalive detection
+    - socket_keepalive=True: OS-level TCP keepalive
+    """
+    kwargs: dict[str, Any] = {
+        "decode_responses": decode_responses,
+        "socket_connect_timeout": 5.0,
+        "socket_timeout": None,
+        "health_check_interval": 30,
+        "socket_keepalive": True,
+    }
+    kwargs.update(_get_redis_ssl_kwargs())
+    return aioredis.from_url(settings.REDIS_URL, **kwargs)
 
 
 def encode_frame_tag(state: str, masking: str) -> bytes:
@@ -172,14 +187,7 @@ async def publish_frame(
     state: str = "observing",
     masking: str = "unknown",
 ) -> None:
-    """Publish a live viewport frame. Ephemeral — not persisted.
-
-    ``masking`` records whether the sensitive-field mask was applied to this
-    frame ("masked"), is unavailable ("off", frame should have been withheld),
-    or is unknown (producer predates masking).
-
-    Degrades gracefully without raising or blocking when Redis is unavailable.
-    """
+    """Publish a live viewport frame. Ephemeral — not persisted."""
     if not frame_bytes or len(frame_bytes) > MAX_FRAME_BYTES:
         return
 
@@ -205,7 +213,6 @@ async def publish_frame(
         )
     except Exception as e:
         logger.debug("Frame publish failed for %s (graceful degradation): %s", execution_id, e)
-
 
 
 async def publish_state(
@@ -252,61 +259,101 @@ async def publish_state(
         logger.debug("State publish failed for %s: %s", execution_id, e)
 
 
-
 async def subscribe_frames(execution_id: str) -> AsyncIterator[tuple[bytes, str, str]]:
-    """Yield (jpeg_bytes, state, masking) frames. Caller owns pubsub lifecycle."""
-    r = await _bin_client()
-    pubsub = r.pubsub()
-    await pubsub.subscribe(frame_channel(execution_id))
-    try:
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue
-            data = message.get("data") or b""
-            if not isinstance(data, (bytes, bytearray)):
-                continue
-            sep = data.find(b"\x00")
-            if sep < 0:
-                yield bytes(data), "observing", "unknown"
-            else:
-                state, masking = decode_frame_tag(data[:sep])
-                yield bytes(data[sep + 1:]), state, masking
-    finally:
+    """Yield (jpeg_bytes, state, masking) frames with auto-reconnecting pubsub."""
+    channel = frame_channel(execution_id)
+    backoff = 0.5
+    max_backoff = 5.0
+
+    while True:
+        client = None
+        pubsub = None
         try:
-            await pubsub.unsubscribe(frame_channel(execution_id))
-            await pubsub.aclose()
-        except Exception:
-            pass
+            client = _create_pubsub_client(decode_responses=False)
+            pubsub = client.pubsub()
+            await pubsub.subscribe(channel)
+            backoff = 0.5
+
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                data = message.get("data") or b""
+                if not isinstance(data, (bytes, bytearray)):
+                    continue
+                sep = data.find(b"\x00")
+                if sep < 0:
+                    yield bytes(data), "observing", "unknown"
+                else:
+                    state, masking = decode_frame_tag(data[:sep])
+                    yield bytes(data[sep + 1:]), state, masking
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Frame pubsub connection dropped (%s), reconnecting in %.1fs", exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2.0, max_backoff)
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe(channel)
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            if client:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
 
 async def subscribe_states(execution_id: str) -> AsyncIterator[dict]:
-    """Yield parsed state messages. Caller owns pubsub lifecycle."""
-    r = await _text_client()
-    pubsub = r.pubsub()
-    await pubsub.subscribe(state_channel(execution_id))
-    try:
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue
-            data = message.get("data")
-            if not data:
-                continue
-            try:
-                parsed = json.loads(data)
-                if isinstance(parsed, dict):
-                    yield parsed
-            except (json.JSONDecodeError, TypeError):
-                continue
-    finally:
+    """Yield parsed state messages with auto-reconnecting pubsub."""
+    channel = state_channel(execution_id)
+    backoff = 0.5
+    max_backoff = 5.0
+
+    while True:
+        client = None
+        pubsub = None
         try:
-            await pubsub.unsubscribe(state_channel(execution_id))
-            await pubsub.aclose()
-        except Exception:
-            pass
+            client = _create_pubsub_client(decode_responses=True)
+            pubsub = client.pubsub()
+            await pubsub.subscribe(channel)
+            backoff = 0.5
+
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                data = message.get("data")
+                if not data:
+                    continue
+                try:
+                    parsed = json.loads(data)
+                    if isinstance(parsed, dict):
+                        yield parsed
+                except (json.JSONDecodeError, TypeError):
+                    continue
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("State pubsub connection dropped (%s), reconnecting in %.1fs", exc, backoff)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2.0, max_backoff)
+        finally:
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe(channel)
+                    await pubsub.aclose()
+                except Exception:
+                    pass
+            if client:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
 
 async def cleanup_stream(execution_id: str) -> None:
     """Clear memory queues and associated stream resources."""
     _memory_frame_subscribers.pop(execution_id, None)
     _memory_state_subscribers.pop(execution_id, None)
-

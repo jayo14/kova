@@ -119,8 +119,14 @@ async def test_stop_during_navigation(db_session, monkeypatch):
         nav_started.set()
         await asyncio.sleep(10.0)
 
+    async def mock_navigate(*args, **kwargs):
+        nav_started.set()
+        await asyncio.sleep(10.0)
+        return {"commit": 0.1, "dcl": 0.2}
+
     mock_page.goto = mock_goto
     mock_browser.page = mock_page
+    mock_browser.navigate = mock_navigate
 
     with patch.object(ExplorationEngine, "_warmup_preflight", return_value={"success": True, "status_code": 200}), patch("app.engine.exploration.explorer.BrowserSession", return_value=mock_browser):
         worker_task = asyncio.create_task(_run_exploration_async(None, str(session.id)))

@@ -129,6 +129,11 @@ class Settings(BaseSettings):
 
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+    CELERY_QUEUE_PREFIX: str = ""
+    REDIS_KEY_PREFIX: str = ""
+    REDIS_SSL_CERT_REQS: str = "required"
+    REDIS_SSL_CA_CERTS: str | None = None
+    QUEUED_NO_WORKER_TIMEOUT_SECONDS: int = 120
 
     @field_validator("CELERY_BROKER_URL", "CELERY_RESULT_BACKEND", mode="after")
     @classmethod

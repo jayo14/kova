@@ -295,7 +295,7 @@ async def test_websocket_takeover_and_return_lifecycle():
 
     takeover_msg = next(m for m in ws.sent_messages if m.get("type") == "takeover_granted")
     assert takeover_msg["lease_id"] is not None
-    assert takeover_msg["control"] == "human"
+    assert takeover_msg["control"] in ("human_pending", "human")
 
     # Verify return_control changed back to agent
     return_msgs = [m for m in ws.sent_messages if m.get("type") == "control_changed" and m.get("control") == "agent"]

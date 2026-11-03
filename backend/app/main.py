@@ -143,6 +143,7 @@ if settings.is_production:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        max_age=600,
     )
 else:
     app.add_middleware(
@@ -151,6 +152,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        max_age=600,
     )
 
 

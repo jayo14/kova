@@ -30,10 +30,19 @@ COPY . .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --default-timeout=100 --retries=5 --prefer-binary .
 
-# Install Playwright browser
-RUN playwright install chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install --with-deps chromium && chmod -R a+rX /ms-playwright
 
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Create non-root user for runtime
+RUN groupadd -r kova && useradd -r -g kova -m -d /home/kova kova && \
+    chown -R kova:kova /app /home/kova
+
+RUN mkdir -p /tmp/kova-browser-profile && chown -R kova:kova /tmp/kova-browser-profile
+
+USER kova
+ENV KOVA_ROLE=api
 EXPOSE 8000
-
-# Bind to Render's $PORT or default to 8000
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+ENTRYPOINT ["docker-entrypoint.sh"]

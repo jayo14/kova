@@ -74,8 +74,20 @@ async def _run_exploration_async(
             task_start_time = time.time()
             session = await repo.get_by_id(session_uuid, for_update=True)
             if session is None:
-                logger.error("Exploration session %s not found", session_id)
-                raise ValueError(f"Exploration session {session_id} not found")
+                logger.info("Exploration session %s not found (stale task), skipping", session_id)
+                return {"status": "skipped", "reason": "session_missing"}
+
+            if session.project_id:
+                from app.engine.execution.control import is_project_deleted
+                if await is_project_deleted(str(session.project_id)):
+                    logger.info("Exploration %s project %s is marked deleted, skipping", session_id, session.project_id)
+                    return {"status": "skipped", "reason": "project_deleted"}
+                from app.modules.projects.repository import ProjectRepository
+                proj_repo = ProjectRepository(db)
+                project = await proj_repo.get_by_id(session.project_id)
+                if project is None:
+                    logger.info("Exploration %s project %s deleted from database, skipping", session_id, session.project_id)
+                    return {"status": "skipped", "reason": "project_deleted"}
     
             terminal_states = {
                 ExplorationStatus.COMPLETED.value,

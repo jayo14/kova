@@ -215,3 +215,29 @@ docker compose logs -f kova-worker
 # Follow API gateway logs
 docker compose logs -f kova-api
 ```
+
+---
+
+## 6. Multi-Environment & Queue Isolation
+
+When sharing a Redis instance across multiple environments (e.g., local development, staging, CI, or multiple developers), configure queue and key prefixes in your `.env`:
+
+```ini
+# Prefix all Celery task queues (e.g. dev:kova-free, dev:kova-pro)
+CELERY_QUEUE_PREFIX=dev:
+
+# Prefix all Redis pub/sub channels, control states, and worker heartbeats
+REDIS_KEY_PREFIX=dev:
+```
+
+### Inspecting and Purging Queues
+
+To inspect task backlogs and safely purge Celery tasks without touching database state:
+
+```bash
+# Interactive inspection & confirmation
+python scripts/purge_queues.py
+
+# Unattended purge (e.g. in CI or reset scripts)
+python scripts/purge_queues.py --yes
+```

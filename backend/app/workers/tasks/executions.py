@@ -70,8 +70,8 @@ async def _run_execution_async(task, execution_id: str):
             # Load execution
             execution = await exec_repo.get_by_id(exec_uuid, for_update=True)
             if execution is None:
-                logger.error("Execution %s not found", execution_id)
-                raise ValueError(f"Execution {execution_id} not found")
+                logger.info("Execution %s not found (stale task), skipping", execution_id)
+                return {"status": "skipped", "reason": "execution_missing"}
     
             # Claim the execution under a row lock before touching credentials or
             # launching Chromium. Duplicate broker deliveries see INITIALIZING (or
@@ -100,8 +100,20 @@ async def _run_execution_async(task, execution_id: str):
             # Load flow
             flow = await flow_repo.get_by_id(flow_id)
             if flow is None:
-                logger.error("Flow %s not found", flow_id)
-                raise ValueError(f"Flow {flow_id} not found")
+                logger.info("Flow %s for execution %s not found (stale task), skipping", flow_id, execution_id)
+                return {"status": "skipped", "reason": "flow_missing"}
+
+            if flow.project_id:
+                from app.engine.execution.control import is_project_deleted
+                if await is_project_deleted(str(flow.project_id)):
+                    logger.info("Execution %s project %s is marked deleted, skipping", execution_id, flow.project_id)
+                    return {"status": "skipped", "reason": "project_deleted"}
+                from app.modules.projects.repository import ProjectRepository
+                proj_repo = ProjectRepository(db)
+                project = await proj_repo.get_by_id(flow.project_id)
+                if project is None:
+                    logger.info("Execution %s project %s deleted from database, skipping", execution_id, flow.project_id)
+                    return {"status": "skipped", "reason": "project_deleted"}
     
             flow_steps = flow_snapshot.get("steps", flow.steps)
             success_condition = flow_snapshot.get("success_condition", flow.success_condition)

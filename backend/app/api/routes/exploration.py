@@ -79,7 +79,10 @@ async def create_exploration(
     """Start an autonomous exploration session for a target URL."""
     service = ExplorationService(db)
     session = await service.create_and_start_exploration(data, user.id)
-    return session
+    from app.engine.worker_liveness import get_queued_status_payload
+    read_obj = ExplorationRead.model_validate(session)
+    read_obj.queue_info = await get_queued_status_payload()
+    return read_obj
 
 
 @router.get("/{session_id}", response_model=ExplorationRead)
@@ -90,6 +93,41 @@ async def get_exploration(
 ):
     """Get the current state of an exploration session."""
     session = await _get_authorized_session(session_id, user.id, db)
+    if session.status in (ExplorationStatus.CREATED.value, "queued"):
+        from datetime import datetime, timezone
+        from app.engine.worker_liveness import get_queued_status_payload, get_live_workers
+
+        if session.created_at:
+            created = session.created_at
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            if (now - created).total_seconds() > settings.QUEUED_NO_WORKER_TIMEOUT_SECONDS:
+                live_workers = await get_live_workers()
+                if not live_workers:
+                    repo = ExplorationRepository(db)
+                    event_repo = ExplorationEventRepository(db)
+                    session = await repo.update_status(
+                        session.id,
+                        status=ExplorationStatus.FAILED,
+                        error_message="No worker is running to process the queued session",
+                    )
+                    await event_repo.create(
+                        exploration_id=session.id,
+                        event_type="error",
+                        payload={
+                            "error_code": "NO_WORKER",
+                            "message": "No worker is running to process the queued session",
+                            "reason": "NO_WORKER",
+                        },
+                    )
+                    await db.commit()
+                    return session
+
+        read_obj = ExplorationRead.model_validate(session)
+        read_obj.queue_info = await get_queued_status_payload()
+        return read_obj
+
     return session
 
 
@@ -387,6 +425,16 @@ async def stream_exploration_events(
         try:
             # Send initial connected heartbeat to immediately flush response headers past buffering proxies
             yield ": connected\n\n"
+            from app.engine.worker_liveness import get_queued_status_payload, get_live_workers
+            from datetime import datetime, timezone
+
+            # Emit initial queue status if session is in initial queued/created state
+            async with async_session_factory() as init_db:
+                init_repo = ExplorationRepository(init_db)
+                init_session = await init_repo.get_by_id(parsed_id)
+                if init_session and init_session.status in (ExplorationStatus.CREATED.value, "queued"):
+                    init_payload = await get_queued_status_payload()
+                    yield f"event: progress\ndata: {json.dumps({'message': init_payload['message'], 'queue_info': init_payload})}\n\n"
 
             while True:
                 if await request.is_disconnected():
@@ -420,6 +468,39 @@ async def stream_exploration_events(
                     # Check if session is terminal
                     current_session = await session_repo.get_by_id(parsed_id)
                     if current_session:
+                        # Check queued timeout if no worker is active
+                        if current_session.status in (ExplorationStatus.CREATED.value, "queued"):
+                            if current_session.created_at:
+                                created = current_session.created_at
+                                if created.tzinfo is None:
+                                    created = created.replace(tzinfo=timezone.utc)
+                                now = datetime.now(timezone.utc)
+                                if (now - created).total_seconds() > settings.QUEUED_NO_WORKER_TIMEOUT_SECONDS:
+                                    live_workers = await get_live_workers()
+                                    if not live_workers:
+                                        await session_repo.update_status(
+                                            parsed_id,
+                                            status=ExplorationStatus.FAILED,
+                                            error_message="No worker is running to process the queued session",
+                                        )
+                                        await event_repo.create(
+                                            exploration_id=parsed_id,
+                                            event_type="error",
+                                            payload={
+                                                "error_code": "NO_WORKER",
+                                                "message": "No worker is running to process the queued session",
+                                                "reason": "NO_WORKER",
+                                            },
+                                        )
+                                        await poll_db.commit()
+                                        current_session = await session_repo.get_by_id(parsed_id)
+
+                            if current_session.status in (ExplorationStatus.CREATED.value, "queued") and ping_counter % 3 == 0:
+                                q_status = await get_queued_status_payload()
+                                chunks_to_send.append(
+                                    f"event: progress\ndata: {json.dumps({'message': q_status['message'], 'queue_info': q_status})}\n\n"
+                                )
+
                         terminal_statuses = {
                             ExplorationStatus.READY.value,
                             ExplorationStatus.COMPLETED.value,
