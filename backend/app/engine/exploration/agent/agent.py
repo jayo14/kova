@@ -19,7 +19,6 @@ from urllib.parse import urljoin, urlparse
 
 from pydantic import ValidationError
 
-from app.config.settings import get_settings
 from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
 from app.engine.ai.provider import get_ai_provider, TaskType
 from app.engine.exploration.agent.policy import is_dangerous_control, is_safe_to_click
@@ -82,6 +81,8 @@ class ExplorationAgent:
         self._capabilities: dict[str, DiscoveredCapability] = {}
         self._origin = ""
         self._history: list[str] = []
+        self._last_model_call_end: float | None = None
+        self._pending_obs: dict[str, Any] | None = None
 
     async def _emit(self, event_type: str, payload: dict[str, Any]) -> None:
         if not self.event_emitter:
@@ -198,9 +199,14 @@ class ExplorationAgent:
             steps += 1
             t_step_start = time.perf_counter()
 
-            t_obs_start = time.perf_counter()
-            observation = await self.observe_current()
-            t_obs = time.perf_counter() - t_obs_start
+            if self._pending_obs is not None:
+                observation = self._pending_obs
+                self._pending_obs = None
+                t_obs = 0.001
+            else:
+                t_obs_start = time.perf_counter()
+                observation = await self.observe_current()
+                t_obs = time.perf_counter() - t_obs_start
 
             node = self.sitemap.get_or_create_node(observation["url"], observation)
             await self._emit(
@@ -211,8 +217,15 @@ class ExplorationAgent:
             self._record_dangerous(observation, node)
 
             t_ai_start = time.perf_counter()
+            if self._last_model_call_end is not None:
+                gap_between_models = t_ai_start - self._last_model_call_end
+                logger.info(
+                    "Gap between consecutive model calls: %.2fs [previous action and observation]",
+                    gap_between_models,
+                )
             proposal = await self._propose(observation, node)
             t_ai = time.perf_counter() - t_ai_start
+            self._last_model_call_end = time.perf_counter()
             if proposal is None:
                 termination = "frontier_empty"
                 break
@@ -238,10 +251,16 @@ class ExplorationAgent:
             t_act_start = time.perf_counter()
             success = await self._execute(proposal)
             t_act = time.perf_counter() - t_act_start
+
+            t_after_obs_start = time.perf_counter()
+            after_obs = await self.observe_current()
+            t_after_obs = time.perf_counter() - t_after_obs_start
+            self._pending_obs = after_obs
+
             t_step_total = time.perf_counter() - t_step_start
             logger.info(
-                "Exploration step %d timing breakdown: total=%.2fs [observe=%.2fs, ai=%.2fs, action=%.2fs]",
-                steps, t_step_total, t_obs, t_ai, t_act,
+                "Exploration step %d timing breakdown: total=%.2fs [observe=%.2fs, model=%.2fs, action=%.2fs, post_obs=%.2fs]",
+                steps, t_step_total, t_obs, t_ai, t_act, t_after_obs,
             )
             self._actions_taken += 1
             try:
@@ -249,7 +268,6 @@ class ExplorationAgent:
             except Exception:
                 pass
 
-            after_obs = await self.observe_current()
             after = self.sitemap.get_or_create_node(after_obs["url"], after_obs)
 
             if success:

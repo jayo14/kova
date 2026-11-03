@@ -14,12 +14,10 @@ Verifies:
 
 from __future__ import annotations
 
-import asyncio
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -30,7 +28,6 @@ from app.engine.browser.platform_wake import (
     is_sleeping_free_instance_platform,
 )
 from app.engine.exploration.explorer import ExplorationEngine
-from app.modules.exploration.models import ExplorationStatus
 
 
 def test_real_render_capture_headers_file_exists():
@@ -124,6 +121,63 @@ def test_classify_target_document_json_body_and_bare_server_errors():
     app_html = "<html><head><title>Acme App</title></head><body><header><nav><a href='/features'>Features</a></nav></header><main><h1>Welcome</h1></main></body></html>"
     is_backend3, _ = classify_target_document(200, {"content-type": "text/html"}, app_html, "Acme App")
     assert is_backend3 is False
+
+
+def test_classify_target_document_bot_challenge_and_auth_required():
+    # 1. Cloudflare "Just a moment..." page
+    cf_body = "<html><head><title>Just a moment...</title></head><body>Enable JavaScript and cookies to continue. Cloudflare Ray ID: 890123</body></html>"
+    cf_res = classify_target_document(403, {"server": "cloudflare", "cf-ray": "890123"}, cf_body, "Just a moment...")
+    assert cf_res.is_invalid is True
+    assert cf_res.error_code == "BOT_BLOCKED"
+    assert "Bot verification challenge detected" in cf_res.message
+    assert "backend or error page" not in cf_res.message
+    assert cf_res.can_continue is False
+
+    # 2. Turnstile challenge
+    turnstile_body = "<html><head><title>Security Check</title></head><body><div class='cf-turnstile' data-sitekey='xxx'></div>Please verify you are human</body></html>"
+    ts_res = classify_target_document(200, {}, turnstile_body, "Security Check")
+    assert ts_res.is_invalid is True
+    assert ts_res.error_code == "BOT_BLOCKED"
+    assert ts_res.can_continue is False
+
+    # 3. HTTP 401 Unauthorized
+    auth_401 = classify_target_document(401, {}, "Unauthorized", "401 Unauthorized")
+    assert auth_401.is_invalid is True
+    assert auth_401.error_code == "AUTH_REQUIRED"
+    assert "Authentication Required" in auth_401.message
+    assert "backend or error page" not in auth_401.message
+    assert auth_401.can_continue is False
+
+    # 4. HTTP 403 Forbidden without bot tokens
+    auth_403 = classify_target_document(403, {}, "Forbidden: Access is denied", "Forbidden")
+    assert auth_403.is_invalid is True
+    assert auth_403.error_code == "AUTH_REQUIRED"
+    assert "backend or error page" not in auth_403.message
+    assert auth_403.can_continue is False
+
+    # 5. Root 404 is INVALID_TARGET with can_continue=True
+    err_404 = classify_target_document(404, {}, "Not Found", "404 Not Found")
+    assert err_404.is_invalid is True
+    assert err_404.error_code == "INVALID_TARGET"
+    assert err_404.can_continue is True
+
+
+@pytest.mark.asyncio
+async def test_invalid_target_continue_anyway_option(slow_test_server):
+    target_url = f"{slow_test_server}/django-debug-404"
+
+    # Default: allow_invalid_target is False -> returns INVALID_TARGET with can_continue=True and option
+    explorer_default = ExplorationEngine(url=target_url, exploration_id="test_opt1")
+    res1 = await explorer_default._warmup_preflight(target_url)
+    assert res1["success"] is False
+    assert res1["error_code"] == "INVALID_TARGET"
+    assert res1["can_continue"] is True
+    assert res1["options"] == [{"id": "continue_anyway", "label": "Continue anyway"}]
+
+    # When allow_invalid_target=True -> proceeds despite INVALID_TARGET
+    explorer_allowed = ExplorationEngine(url=target_url, exploration_id="test_opt2", allow_invalid_target=True)
+    res2 = await explorer_allowed._warmup_preflight(target_url)
+    assert res2["success"] is True
 
 
 class MockSlowServerHandler(BaseHTTPRequestHandler):

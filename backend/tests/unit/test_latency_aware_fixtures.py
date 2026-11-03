@@ -3,10 +3,9 @@ import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 import pytest
-from unittest.mock import MagicMock
 
 from app.engine.browser.session import BrowserSession
-from app.engine.browser.readiness import ReadinessWaiter, PageReadiness
+from app.engine.browser.readiness import ReadinessWaiter
 from app.engine.browser.platform_wake import detect_platform_wake
 
 

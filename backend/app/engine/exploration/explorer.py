@@ -114,6 +114,7 @@ class ExplorationEngine:
         credential_id: str | None = None,
         project_id: uuid.UUID | None = None,
         db_session: Any | None = None,
+        allow_invalid_target: bool = False,
     ):
         self.exploration_id = exploration_id
         self.url = url
@@ -122,6 +123,7 @@ class ExplorationEngine:
         self.credential_id = credential_id
         self.project_id = project_id
         self._db_session = db_session
+        self.allow_invalid_target = allow_invalid_target
         self._browser: BrowserSession | None = existing_browser
         self._is_cancelled = False
         self._cancel_event = asyncio.Event()
@@ -163,11 +165,18 @@ class ExplorationEngine:
 
     async def interruptible(self, coro):
         """Wrap a coroutine so it terminates immediately if cancellation is triggered."""
-        if self._is_cancelled or self._cancel_event.is_set():
+        if not asyncio.iscoroutine(coro) and not hasattr(coro, "__await__"):
+            return coro
+
+        cancel_event = getattr(self, "_cancel_event", None)
+        if getattr(self, "_is_cancelled", False) or (cancel_event is not None and cancel_event.is_set()):
             raise asyncio.CancelledError("Operation cancelled before execution")
 
+        if cancel_event is None:
+            return await coro
+
         coro_task = asyncio.ensure_future(coro)
-        cancel_waiter = asyncio.create_task(self._cancel_event.wait())
+        cancel_waiter = asyncio.create_task(cancel_event.wait())
 
         try:
             done, pending = await asyncio.wait(
@@ -441,22 +450,25 @@ class ExplorationEngine:
         lower_title = (title or "").lower()
         lower_text = (visible_text or "").lower()
 
-        # Target classification: 404/403/5xx, Django debug, JSON body, bare server error
+        # Target classification: 404/5xx, Django debug, JSON body, bare server error, BOT_BLOCKED, AUTH_REQUIRED
         status_code = getattr(self, "_last_nav_status", None)
         headers = getattr(self, "_last_nav_headers", {}) or {}
 
-        is_backend, backend_msg = classify_target_document(
+        classification = classify_target_document(
             status_code,
             headers,
             visible_text,
             title,
         )
-        if is_backend:
-            raise PageValidationError(
-                backend_msg,
-                status_code=status_code or 404,
-                final_url=final_url,
-            )
+        if classification.is_invalid:
+            if classification.error_code == "INVALID_TARGET" and self.allow_invalid_target:
+                logger.info("Proceeding with page validation despite INVALID_TARGET (allow_invalid_target=True)")
+            else:
+                raise PageValidationError(
+                    classification.message,
+                    status_code=status_code or 404,
+                    final_url=final_url,
+                )
 
         # Check for Vercel/hosting NOT_FOUND pages
         if "404" in lower_title and "not found" in lower_title:
@@ -714,42 +726,30 @@ class ExplorationEngine:
 
                         text = resp.text.lower() if hasattr(resp, "text") and resp.text else ""
 
-                        # Check bot challenges
-                        if resp.status_code in (401, 403) and (
-                            "cloudflare" in text
-                            or "just a moment" in text
-                            or "turnstile" in text
-                            or "ddos-guard" in text
-                            or "captcha" in text
-                            or "attention required" in text
-                        ):
-                            return {
-                                "success": False,
-                                "error_code": "BOT_BLOCKED",
-                                "status_code": resp.status_code,
-                                "error": "Bot verification challenge detected (Cloudflare/CAPTCHA)",
-                                "elapsed": int(time.time() - t0),
-                                "ttfb_seconds": ttfb_seconds,
-                                "last_phase": last_phase,
-                            }
-
-                        # Target classification: 404/403/5xx, Django debug, JSON body, bare server error
-                        is_backend, backend_msg = classify_target_document(
+                        # Target classification: BOT_BLOCKED, AUTH_REQUIRED, INVALID_TARGET
+                        classification = classify_target_document(
                             resp.status_code,
                             dict(resp.headers),
                             resp.text if hasattr(resp, "text") and resp.text else "",
                             "",
                         )
-                        if is_backend:
-                            return {
-                                "success": False,
-                                "error_code": "INVALID_TARGET",
-                                "status_code": resp.status_code,
-                                "error": backend_msg,
-                                "elapsed": int(time.time() - t0),
-                                "ttfb_seconds": ttfb_seconds,
-                                "last_phase": last_phase,
-                            }
+                        if classification.is_invalid:
+                            if classification.error_code == "INVALID_TARGET" and self.allow_invalid_target:
+                                logger.info("Proceeding with preflight despite INVALID_TARGET because allow_invalid_target=True")
+                            else:
+                                res: dict[str, Any] = {
+                                    "success": False,
+                                    "error_code": classification.error_code or "INVALID_TARGET",
+                                    "status_code": resp.status_code,
+                                    "error": classification.message,
+                                    "elapsed": int(time.time() - t0),
+                                    "ttfb_seconds": ttfb_seconds,
+                                    "last_phase": last_phase,
+                                    "can_continue": classification.can_continue,
+                                }
+                                if classification.can_continue:
+                                    res["options"] = [{"id": "continue_anyway", "label": "Continue anyway"}]
+                                return res
 
                         # Check for verified/synthetic hosting wake signature
                         wake_sig = detect_platform_wake(
@@ -1190,12 +1190,22 @@ class ExplorationEngine:
                 if not preflight.get("success"):
                     err_code = preflight.get("error_code", "SITE_UNREACHABLE")
                     err_msg = preflight.get("error", "Site unreachable")
-                    await self._emit("state_change", {"status": "FAILED", "error_code": err_code})
-                    await self._emit("exploration.failed", {"error": err_msg, "error_code": err_code})
+                    can_continue = preflight.get("can_continue", False)
+                    options = preflight.get("options", [])
+                    status_str = "BLOCKED" if can_continue else "FAILED"
+                    await self._emit("state_change", {"status": status_str, "error_code": err_code})
+                    await self._emit("exploration.blocked" if can_continue else "exploration.failed", {
+                        "error": err_msg,
+                        "error_code": err_code,
+                        "can_continue": can_continue,
+                        "options": options,
+                    })
                     return {
-                        "status": ExplorationStatus.FAILED,
+                        "status": ExplorationStatus.BLOCKED if can_continue else ExplorationStatus.FAILED,
                         "error_code": err_code,
                         "error_message": f"Preflight failed: {err_code} - {err_msg}",
+                        "can_continue": can_continue,
+                        "options": options,
                         "discoveries": [],
                         "candidate_missions": [],
                     }
@@ -1307,12 +1317,22 @@ class ExplorationEngine:
                         raise asyncio.CancelledError("Exploration cancelled during navigation")
                     try:
                         self._pages_visited_count += 1
-                        nav_phases = await self.interruptible(self._browser.navigate(
-                            self.url,
-                            timeout_ms=FIRST_NAVIGATION_TIMEOUT_MS,
-                        ))
-                        if asyncio.iscoroutine(nav_phases) or hasattr(nav_phases, "__await__"):
-                            nav_phases = await nav_phases
+                        if hasattr(self._browser, "navigate"):
+                            nav_res = self._browser.navigate(
+                                self.url,
+                                timeout_ms=FIRST_NAVIGATION_TIMEOUT_MS,
+                            )
+                            if asyncio.iscoroutine(nav_res) or hasattr(nav_res, "__await__"):
+                                nav_phases = await self.interruptible(nav_res)
+                            elif isinstance(nav_res, dict):
+                                nav_phases = nav_res
+                            else:
+                                nav_phases = {}
+                        elif hasattr(self._browser, "goto"):
+                            await self.interruptible(self._browser.goto(self.url))
+                            nav_phases = {}
+                        else:
+                            nav_phases = {}
                         if not isinstance(nav_phases, dict):
                             nav_phases = {}
                         self._last_nav_status = nav_phases.get("commit", {}).get("status")
@@ -1419,12 +1439,21 @@ class ExplorationEngine:
                     await self._validate_page(page, navigation_error)
                 except PageValidationError as e:
                     error_msg = str(e)
-                    await self._emit("state_change", {"status": "FAILED", "error_code": "INVALID_TARGET"})
-                    await self._emit("exploration.failed", {"error": error_msg, "error_code": "INVALID_TARGET"})
+                    can_continue = not self.allow_invalid_target
+                    status_str = "BLOCKED" if can_continue else "FAILED"
+                    await self._emit("state_change", {"status": status_str, "error_code": "INVALID_TARGET"})
+                    await self._emit("exploration.blocked" if can_continue else "exploration.failed", {
+                        "error": error_msg,
+                        "error_code": "INVALID_TARGET",
+                        "can_continue": can_continue,
+                        "options": [{"id": "continue_anyway", "label": "Continue anyway"}] if can_continue else [],
+                    })
                     return {
-                        "status": ExplorationStatus.FAILED,
+                        "status": ExplorationStatus.BLOCKED if can_continue else ExplorationStatus.FAILED,
                         "error_code": "INVALID_TARGET",
                         "error_message": error_msg,
+                        "can_continue": can_continue,
+                        "options": [{"id": "continue_anyway", "label": "Continue anyway"}] if can_continue else [],
                         "discoveries": [],
                         "candidate_missions": [],
                     }

@@ -132,6 +132,38 @@ class BrowserSession:
         "crazyegg.com",
     )
 
+    BLOCKED_RESOURCE_PATTERNS: tuple[str, ...] = (
+        "*.woff",
+        "*.woff2",
+        "*.ttf",
+        "*.otf",
+        "*.eot",
+        "*.mp4",
+        "*.webm",
+        "*.ogg",
+        "*.mp3",
+        "*.wav",
+        "*google-analytics.com*",
+        "*googletagmanager.com*",
+        "*doubleclick.net*",
+        "*segment.io*",
+        "*segment.com*",
+        "*mixpanel.com*",
+        "*hotjar.com*",
+        "*clarity.ms*",
+        "*sentry.io*",
+        "*posthog.com*",
+        "*amplitude.com*",
+        "*datadoghq.com*",
+        "*logrocket.com*",
+        "*fullstory.com*",
+        "*connect.facebook.net*",
+        "*analytics.tiktok.com*",
+        "*heapanalytics.com*",
+        "*mouseflow.com*",
+        "*crazyegg.com*",
+    )
+
     def __init__(
         self,
         headless: bool = True,
@@ -148,6 +180,7 @@ class BrowserSession:
         self._context: BrowserContext | None = None
         self._page: Page | None = None
         self._pages: list[Page] = []
+        self._page_cdp_sessions: dict[Page, Any] = {}
         self.network_errors: list[dict[str, Any]] = []
         self.console_errors: list[dict[str, Any]] = []
         self.failed_requests: list[dict[str, Any]] = []
@@ -255,6 +288,18 @@ class BrowserSession:
             )
         self.download_events.append(event)
 
+    async def _setup_page_cdp_blocking(self, page: Page) -> None:
+        """Configure CDP Network.setBlockedURLs for zero-overhead browser-level resource drops."""
+        if not self.block_heavy_resources or not self._context:
+            return
+        try:
+            cdp = await self._context.new_cdp_session(page)
+            await cdp.send("Network.enable")
+            await cdp.send("Network.setBlockedURLs", {"urls": list(self.BLOCKED_RESOURCE_PATTERNS)})
+            self._page_cdp_sessions[page] = cdp
+        except Exception as e:
+            logger.debug("Failed to set CDP blocked URLs: %s", e)
+
     async def _on_new_page(self, page: Page) -> None:
         """Handle a new tab / popup opened by the browser.
 
@@ -263,6 +308,7 @@ class BrowserSession:
         """
         try:
             self._pages.append(page)
+            await self._setup_page_cdp_blocking(page)
             try:
                 await page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
@@ -384,6 +430,7 @@ class BrowserSession:
 
         self._page = await self._context.new_page()
         self._pages = [self._page]
+        await self._setup_page_cdp_blocking(self._page)
 
         # Track popups / new tabs so the session always follows the active page.
         self._context.on("page", self._on_new_page)
@@ -730,7 +777,9 @@ class BrowserSession:
         phases: dict[str, Any] = {"start_time": time.time()}
 
         async def _emit_phase(phase: str, **kwargs):
-            elapsed = round(time.perf_counter() - t_nav_start, 3)
+            elapsed = kwargs.pop("elapsed_s", None)
+            if elapsed is None:
+                elapsed = round(time.perf_counter() - t_nav_start, 3)
             phase_data = {"phase": phase, "elapsed_s": elapsed, "timestamp": time.time(), **kwargs}
             phases[phase] = phase_data
             cb = on_phase or self.on_load_phase
@@ -761,18 +810,32 @@ class BrowserSession:
             logger.debug("DOMContentLoaded wait finished: %s", e)
 
         # 3. First Contentful Paint
+        # Read directly from browser paint timing entry (performance.getEntriesByName("first-contentful-paint"))
+        # and never from when the Python check returned.
         try:
             fcp = await self.page.evaluate("""() => new Promise(res => {
-                const e = performance.getEntriesByName('first-contentful-paint')[0];
-                if (e) return res(e.startTime);
-                new PerformanceObserver((l, o) => {
-                    const entry = l.getEntries()[0];
-                    if (entry) { res(entry.startTime); o.disconnect(); }
-                }).observe({type: 'paint', buffered: true});
-                setTimeout(() => res(null), 8000);
+                const p = performance.getEntriesByName('first-contentful-paint')[0];
+                if (p) return res(p.startTime);
+                const observer = new PerformanceObserver((list, obs) => {
+                    const entry = list.getEntries().find(e => e.name === 'first-contentful-paint');
+                    if (entry) {
+                        obs.disconnect();
+                        res(entry.startTime);
+                    }
+                });
+                try {
+                    observer.observe({type: 'paint', buffered: true});
+                } catch (_) {
+                    return res(null);
+                }
+                setTimeout(() => {
+                    observer.disconnect();
+                    const fallback = performance.getEntriesByName('first-contentful-paint')[0] || performance.getEntriesByType('paint')[0];
+                    res(fallback ? fallback.startTime : null);
+                }, 6000);
             })""")
             fcp_s = round(fcp / 1000.0, 3) if fcp is not None else None
-            await _emit_phase("first_contentful_paint", fcp_ms=fcp, fcp_s=fcp_s)
+            await _emit_phase("first_contentful_paint", elapsed_s=fcp_s, fcp_ms=fcp, fcp_s=fcp_s)
         except Exception as e:
             logger.debug("FCP evaluation finished: %s", e)
 

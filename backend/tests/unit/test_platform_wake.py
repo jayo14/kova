@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-import pytest
 
 from app.engine.browser.platform_wake import detect_platform_wake
 

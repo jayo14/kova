@@ -720,19 +720,34 @@ def classify_page(
             category="proxy_error",
         )
 
-    is_backend_or_error, backend_error_msg = classify_target_document(
+    classification = classify_target_document(
         signals.http_status,
         signals.headers,
         signals.body_text,
         signals.title,
     )
-    if is_backend_or_error:
-        return result(
-            PageReadiness.APPLICATION_ERROR,
-            backend_error_msg,
-            0.95,
-            category="target_classification_error",
-        )
+    if classification.is_invalid:
+        if classification.error_code == "BOT_BLOCKED":
+            return result(
+                PageReadiness.ACCESS_DENIED,
+                classification.message,
+                0.95,
+                category="bot_challenge",
+            )
+        elif classification.error_code == "AUTH_REQUIRED":
+            return result(
+                PageReadiness.AUTHENTICATION_REQUIRED,
+                classification.message,
+                0.95,
+                category="auth_required",
+            )
+        else:
+            return result(
+                PageReadiness.APPLICATION_ERROR,
+                classification.message,
+                0.95,
+                category="target_classification_error",
+            )
     if status == 500:
         return result(
             PageReadiness.APPLICATION_ERROR,

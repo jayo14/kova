@@ -64,6 +64,9 @@ async def test_browser_session_navigate_phases(monkeypatch):
     assert phases["commit"]["status"] == 200
     assert "domcontentloaded" in phases
     assert "first_contentful_paint" in phases
+    assert phases["first_contentful_paint"]["fcp_ms"] == 1200.0
+    assert phases["first_contentful_paint"]["fcp_s"] == 1.2
+    assert phases["first_contentful_paint"]["elapsed_s"] == 1.2
     assert "dom_settled" in phases
     assert emitted_phases == ["commit", "domcontentloaded", "first_contentful_paint", "dom_settled"]
 

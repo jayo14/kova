@@ -20,7 +20,6 @@ import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping
-from urllib.parse import urlparse
 
 # Platforms known to sleep/spin down free instances after inactivity
 SLEEPING_FREE_INSTANCE_PLATFORMS: frozenset[str] = frozenset(
@@ -106,30 +105,104 @@ def format_slow_first_byte_message(
     return f"The server responded in {sec}s."
 
 
+class TargetClassification(tuple):
+    """Result of classifying a target document.
+
+    Subclasses tuple for seamless backward compatibility with
+    `is_backend, msg = classify_target_document(...)`.
+    """
+
+    def __new__(
+        cls,
+        is_invalid: bool,
+        message: str,
+        error_code: str | None = None,
+        can_continue: bool = False,
+    ):
+        obj = super().__new__(cls, (is_invalid, message))
+        obj.is_invalid = is_invalid
+        obj.message = message
+        obj.error_code = error_code
+        obj.can_continue = can_continue
+        return obj
+
+
 def classify_target_document(
     status_code: int | None,
     headers: Mapping[str, str],
     body_text: str,
     title: str = "",
-) -> tuple[bool, str]:
-    """Classify whether the root document is an error/debug/API backend rather than a web application.
+) -> TargetClassification:
+    """Classify whether the root document is an error/debug/API backend, bot-challenge, or auth barrier.
 
-    If the first document returns 404/403/5xx, or looks like an API/debug/error page
-    (Django debug 404 template, JSON body, bare gunicorn/nginx error), returns (True, error_message).
+    - Bot verification challenges (Cloudflare "Just a moment", Turnstile, CAPTCHA) -> BOT_BLOCKED.
+    - HTTP 401 or 403 -> AUTH_REQUIRED.
+    - Root 404/5xx, Django debug template, JSON body, bare gunicorn/nginx -> INVALID_TARGET (with can_continue=True).
+    - Never reports 401/403 or bot challenges as "backend or error page".
     """
     normalized_headers = {k.lower(): v.lower() for k, v in headers.items()}
     text_lower = (body_text or "").lower()
     title_lower = (title or "").lower()
     content_type = normalized_headers.get("content-type", "")
+    full_text = f"{title_lower} {text_lower}"
 
     status = status_code or 200
 
-    # 1. Status code check: 404/403/5xx at root is a non-application target
-    if status in (404, 403, 500, 502, 503, 504):
-        msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
-        return True, msg
+    # 1. Bot challenge check (Cloudflare, Turnstile, CAPTCHA, DDoS-GUARD)
+    bot_challenge_markers = (
+        "just a moment",
+        "turnstile",
+        "cf-chl-",
+        "challenges.cloudflare.com",
+        "attention required! | cloudflare",
+        "checking your browser",
+        "checking if the site connection is secure",
+        "ddos-guard",
+        "recaptcha",
+        "hcaptcha",
+        "security check to access",
+        "verify you are human",
+        "verify that you are human",
+    )
+    if any(marker in full_text for marker in bot_challenge_markers):
+        return TargetClassification(
+            True,
+            "Bot verification challenge detected (Cloudflare/CAPTCHA). Automated access was blocked by the host.",
+            error_code="BOT_BLOCKED",
+            can_continue=False,
+        )
 
-    # 2. Django debug template check (can happen at 404 or 500 or misconfigured debug route)
+    # 2. HTTP 401 / 403 status codes are reported as AUTH_REQUIRED, never "backend or error page"
+    if status == 401:
+        return TargetClassification(
+            True,
+            "This URL returned HTTP 401 (Authentication Required). Access to this application requires credentials.",
+            error_code="AUTH_REQUIRED",
+            can_continue=False,
+        )
+    if status == 403:
+        # Check if Cloudflare 403 challenge
+        if "cf-ray" in normalized_headers or "cloudflare" in normalized_headers.get("server", ""):
+            if "cloudflare" in full_text or "forbidden" in full_text or "access denied" in full_text:
+                return TargetClassification(
+                    True,
+                    "Bot verification challenge detected (Cloudflare/CAPTCHA). Automated access was blocked by the host.",
+                    error_code="BOT_BLOCKED",
+                    can_continue=False,
+                )
+        return TargetClassification(
+            True,
+            "This URL returned HTTP 403 (Access Denied / Forbidden). Access to this application requires authorization.",
+            error_code="AUTH_REQUIRED",
+            can_continue=False,
+        )
+
+    # 3. Status code check: 404/5xx at root is a non-application target (INVALID_TARGET)
+    if status in (404, 500, 502, 503, 504):
+        msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
+        return TargetClassification(True, msg, error_code="INVALID_TARGET", can_continue=True)
+
+    # 4. Django debug template check (can happen at 404 or 500 or misconfigured debug route)
     django_debug_markers = (
         "using the urlconf defined in",
         "django tried these url patterns",
@@ -140,12 +213,12 @@ def classify_target_document(
     )
     if any(marker in text_lower for marker in django_debug_markers):
         msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
-        return True, msg
+        return TargetClassification(True, msg, error_code="INVALID_TARGET", can_continue=True)
 
-    # 3. JSON body at root check (API backend rather than frontend web application)
+    # 5. JSON body at root check (API backend rather than frontend web application)
     if "application/json" in content_type:
         msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
-        return True, msg
+        return TargetClassification(True, msg, error_code="INVALID_TARGET", can_continue=True)
 
     trimmed = body_text.strip()
     if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
@@ -153,11 +226,11 @@ def classify_target_document(
             parsed = json.loads(trimmed)
             if isinstance(parsed, (dict, list)):
                 msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
-                return True, msg
+                return TargetClassification(True, msg, error_code="INVALID_TARGET", can_continue=True)
         except Exception:
             pass
 
-    # 4. Bare server error pages (gunicorn, nginx, werkzeug, express)
+    # 6. Bare server error pages (gunicorn, nginx, werkzeug, express)
     bare_server_markers = (
         "cannot get /",
         "502 bad gateway",
@@ -168,9 +241,9 @@ def classify_target_document(
     if any(m in text_lower for m in bare_server_markers):
         if any(h in normalized_headers.get("server", "") for h in ("nginx", "gunicorn", "caddy", "apache")) or "x-render-origin-server" in normalized_headers:
             msg = f"This URL returned {status} at the root and looks like a backend or error page. Please check the URL and provide the web application address."
-            return True, msg
+            return TargetClassification(True, msg, error_code="INVALID_TARGET", can_continue=True)
 
-    return False, ""
+    return TargetClassification(False, "", error_code=None, can_continue=False)
 
 
 

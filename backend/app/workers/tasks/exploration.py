@@ -110,6 +110,7 @@ async def _run_exploration_async(
             credential = None
             selected_role = session.selected_role
             create_account = False
+            allow_invalid_target = False
             for item in pending_inputs:
                 kind = item.get("kind")
                 if kind == "credentials":
@@ -117,6 +118,8 @@ async def _run_exploration_async(
                     create_account = bool(item.get("create_account"))
                 elif kind == "answer":
                     selected_role = item.get("selected_role") or selected_role
+                elif kind in ("continue_anyway", "allow_invalid_target") or item.get("allow_invalid_target"):
+                    allow_invalid_target = True
     
             event_count = 0
             emit_lock = asyncio.Lock()
@@ -234,6 +237,7 @@ async def _run_exploration_async(
                 credential_id=None,
                 project_id=session.project_id,
                 db_session=db,
+                allow_invalid_target=allow_invalid_target,
             )
     
             exploration_task: asyncio.Task | None = None
