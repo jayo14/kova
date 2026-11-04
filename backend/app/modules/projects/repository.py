@@ -1,9 +1,12 @@
+import logging
 import uuid
 
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.projects.models import Project
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectRepository:
