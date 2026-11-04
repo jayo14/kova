@@ -5202,6 +5202,16 @@ class ExplorationEngine:
         el_type = element.get("type", "button")
         selector = element.get("selector")
 
+        # Reject non-actionable landing page showcases, testimonial cards, or mockup preview snippets
+        el_lower = el_name.lower()
+        if (
+            re.search(r"\b\d+\s+pages\b", el_lower)
+            or "check_circle" in el_lower
+            or any(kw in el_lower for kw in ["·", "tunde a.", "amaka o.", "ibrahim k."])
+            or (el_type not in ("a", "link", "button", "input") and not element.get("href") and any(w in el_lower for w in ["cover page", "weekly log", "chapter 3"]))
+        ):
+            return None
+
         if not selector or not selector.startswith("#"):
             clean_name = el_name.replace("'", "\\'")
             if el_type in ("link", "a"):

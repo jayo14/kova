@@ -263,6 +263,24 @@ def validate_journey(
             severity="error",
         ))
 
+    # Reject flimsy landing page showcase mockups and testimonials
+    showcase_patterns = [
+        r"\b\d+\s+pages\b",
+        r"\bcheck_circle\b",
+        r"\b(article|table_chart|engineering)\s+(cover|weekly|chapter)",
+        r"\b[A-Z][a-z]+\s+[A-Z]\.\s*·",
+    ]
+    if any(re.search(pat, mission.name or "", re.I) for pat in showcase_patterns) or (
+        mission.name and mission.name.startswith("Explore ") and (
+            any(w in mission.name.lower() for w in ["·", "pages", "cover page", "weekly log", "chapter 3"])
+        )
+    ):
+        defects.append(QualityDefect(
+            code="FLIMSY_MOCKUP_OR_TESTIMONIAL",
+            message="Static landing page showcase mockups or testimonials must not be treated as user journeys",
+            severity="error",
+        ))
+
     # 1. Goal clarity
     goal = (mission.user_goal or mission.objective or "").strip()
     if not goal or len(goal) < 8:
