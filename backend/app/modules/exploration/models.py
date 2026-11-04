@@ -10,6 +10,7 @@ from app.infrastructure.database.base import Base, JSONCompat
 
 class ExplorationStatus(str, enum.Enum):
     CREATED = "CREATED"
+    PENDING_DISPATCH = "PENDING_DISPATCH"
     CONNECTING = "CONNECTING"
     LOADING = "LOADING"
     VALIDATING_PAGE = "VALIDATING_PAGE"
@@ -33,7 +34,15 @@ class ExplorationStatus(str, enum.Enum):
 
 VALID_EXPLORATION_TRANSITIONS: dict[str, set[str]] = {
     ExplorationStatus.CREATED.value: {
+        ExplorationStatus.PENDING_DISPATCH.value,
         ExplorationStatus.CONNECTING.value,
+        ExplorationStatus.FAILED.value,
+        ExplorationStatus.CANCELLED.value,
+    },
+    ExplorationStatus.PENDING_DISPATCH.value: {
+        ExplorationStatus.CONNECTING.value,
+        ExplorationStatus.LOADING.value,
+        ExplorationStatus.EXPLORING.value,
         ExplorationStatus.FAILED.value,
         ExplorationStatus.CANCELLED.value,
     },

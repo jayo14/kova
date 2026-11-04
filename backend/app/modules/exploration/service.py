@@ -99,6 +99,7 @@ class ExplorationService:
         # Any other state means a task is already running or the session is done.
         enqueuable = {
             ExplorationStatus.CREATED.value,
+            ExplorationStatus.PENDING_DISPATCH.value,
             ExplorationStatus.AUTHENTICATING.value,
             ExplorationStatus.DISCOVERING.value,
         }
@@ -120,12 +121,25 @@ class ExplorationService:
                     queue = get_queue_for_plan(org.plan)
 
         try:
-            async_result = await asyncio.to_thread(
-                run_exploration.apply_async,
-                args=[str(session_id)],
-                queue=queue,
-                exchange=queue,
-                routing_key=queue,
+            publish_kwargs = {
+                "args": [str(session_id)],
+                "queue": queue,
+                "exchange": queue,
+                "routing_key": queue,
+                "retry": True,
+                "retry_policy": {
+                    "max_retries": 2,
+                    "interval_start": 0.1,
+                    "interval_step": 0.2,
+                    "interval_max": 0.5,
+                },
+            }
+            async_result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    run_exploration.apply_async,
+                    **publish_kwargs,
+                ),
+                timeout=2.5,
             )
             task_id = getattr(async_result, "id", None)
             if task_id:
@@ -136,10 +150,19 @@ class ExplorationService:
                 session_id, queue, task_id
             )
         except Exception as exc:
-            logger.error(
-                "Failed to enqueue exploration %s to Celery queue %s: %s (recovery watchdog will retry)",
+            logger.warning(
+                "Failed to enqueue exploration %s to Celery queue %s within bounded timeout: %s. Setting status to PENDING_DISPATCH.",
                 session_id, queue, exc,
             )
+            try:
+                await self.repo.update_status(
+                    session_id,
+                    status=ExplorationStatus.PENDING_DISPATCH,
+                )
+                session.status = ExplorationStatus.PENDING_DISPATCH.value
+                await self.db.commit()
+            except Exception as db_exc:
+                logger.error("Failed to mark exploration %s as PENDING_DISPATCH: %s", session_id, db_exc)
 
     async def create_and_start_exploration(
         self,

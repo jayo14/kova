@@ -10,7 +10,7 @@ import logging
 import uuid
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -73,12 +73,15 @@ async def _get_authorized_session(
 @router.post("/", response_model=ExplorationRead, status_code=status.HTTP_201_CREATED)
 async def create_exploration(
     data: ExplorationCreate,
+    response: Response,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ):
     """Start an autonomous exploration session for a target URL."""
     service = ExplorationService(db)
     session = await service.create_and_start_exploration(data, user.id)
+    if session.status in (ExplorationStatus.PENDING_DISPATCH.value, "pending_dispatch"):
+        response.status_code = status.HTTP_202_ACCEPTED
     from app.engine.worker_liveness import get_queued_status_payload
     read_obj = ExplorationRead.model_validate(session)
     read_obj.queue_info = await get_queued_status_payload()
@@ -93,7 +96,7 @@ async def get_exploration(
 ):
     """Get the current state of an exploration session."""
     session = await _get_authorized_session(session_id, user.id, db)
-    if session.status in (ExplorationStatus.CREATED.value, "queued"):
+    if session.status in (ExplorationStatus.CREATED.value, ExplorationStatus.PENDING_DISPATCH.value, "queued", "pending_dispatch"):
         from datetime import datetime, timezone
         from app.engine.worker_liveness import get_queued_status_payload, get_live_workers
 
@@ -433,7 +436,7 @@ async def stream_exploration_events(
             async with async_session_factory() as init_db:
                 init_repo = ExplorationRepository(init_db)
                 init_session = await init_repo.get_by_id(parsed_id)
-                if init_session and init_session.status in (ExplorationStatus.CREATED.value, "queued"):
+                if init_session and init_session.status in (ExplorationStatus.CREATED.value, ExplorationStatus.PENDING_DISPATCH.value, "queued", "pending_dispatch"):
                     init_payload = await get_queued_status_payload()
                     last_sent_progress_message = init_payload.get("message")
                     yield f"event: progress\ndata: {json.dumps({'message': init_payload['message'], 'queue_info': init_payload})}\n\n"
@@ -471,7 +474,7 @@ async def stream_exploration_events(
                     current_session = await session_repo.get_by_id(parsed_id)
                     if current_session:
                         # Check queued timeout if no worker is active
-                        if current_session.status in (ExplorationStatus.CREATED.value, "queued"):
+                        if current_session.status in (ExplorationStatus.CREATED.value, ExplorationStatus.PENDING_DISPATCH.value, "queued", "pending_dispatch"):
                             if current_session.created_at:
                                 created = current_session.created_at
                                 if created.tzinfo is None:
@@ -497,7 +500,7 @@ async def stream_exploration_events(
                                         await poll_db.commit()
                                         current_session = await session_repo.get_by_id(parsed_id)
 
-                            if current_session.status in (ExplorationStatus.CREATED.value, "queued") and ping_counter % 3 == 0:
+                            if current_session.status in (ExplorationStatus.CREATED.value, ExplorationStatus.PENDING_DISPATCH.value, "queued", "pending_dispatch") and ping_counter % 3 == 0:
                                 q_status = await get_queued_status_payload()
                                 if q_status.get("message") != last_sent_progress_message:
                                     last_sent_progress_message = q_status.get("message")

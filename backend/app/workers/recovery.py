@@ -1,8 +1,9 @@
 """Recover execution and exploration records left behind by API or worker process failures."""
 
 import asyncio
-import ssl
 import logging
+import random
+import ssl
 from datetime import datetime, timedelta, timezone
 
 import redis.asyncio as aioredis
@@ -58,6 +59,7 @@ EXPLORATION_TERMINAL_STATES = {
 # States that mean "a Celery task should be consuming this row right now".
 EXPLORATION_DISPATCH_STATES = {
     ExplorationStatus.CREATED.value,
+    ExplorationStatus.PENDING_DISPATCH.value,
     ExplorationStatus.AUTHENTICATING.value,
     ExplorationStatus.DISCOVERING.value,
 }
@@ -247,7 +249,7 @@ def _recovery_action(status: str, age_seconds: float) -> str | None:
     return None
 
 
-def _exploration_recovery_action(status: str, age_seconds: float) -> str | None:
+def _exploration_recovery_action(status: str, age_seconds: float, attempts: int = 0) -> str | None:
     """Decide what recovery should do with one exploration session.
 
     Checkpoints (READY/AUTH_REQUIRED/ASKING/PAUSED) are durable and resumable,
@@ -255,6 +257,8 @@ def _exploration_recovery_action(status: str, age_seconds: float) -> str | None:
     """
     if status in EXPLORATION_TERMINAL_STATES or status in EXPLORATION_CHECKPOINT_STATES:
         return None
+    if attempts >= 5:
+        return "fail_queue_unavailable"
     if status in EXPLORATION_DISPATCH_STATES:
         if age_seconds >= EXPLORATION_ABANDONED_SECONDS:
             return "timeout"
@@ -266,7 +270,16 @@ def _exploration_recovery_action(status: str, age_seconds: float) -> str | None:
             and age_seconds >= EXPLORATION_DISPATCH_ABANDONED_SECONDS
         ):
             return "fail_dispatch"
-        if age_seconds >= EXPLORATION_DISPATCH_GRACE_SECONDS:
+
+        # Apply exponential backoff with jitter for pending dispatch retries
+        base_backoff = min(15.0 * (1.5 ** attempts), 120.0)
+        jitter = random.uniform(0.5, 3.0)
+        required_wait = (
+            (base_backoff + jitter)
+            if status == ExplorationStatus.PENDING_DISPATCH.value
+            else EXPLORATION_DISPATCH_GRACE_SECONDS
+        )
+        if age_seconds >= required_wait:
             return "dispatch"
         return None
     if age_seconds >= EXPLORATION_ABANDONED_SECONDS:
@@ -348,7 +361,7 @@ async def reconcile_executions() -> dict[str, int]:
 async def reconcile_explorations() -> dict[str, int]:
     """Redispatch stale pending exploration rows and terminalize abandoned worker leases."""
     now = datetime.now(timezone.utc)
-    dispatch_ids: list[str] = []
+    dispatch_items: list[tuple[str, str]] = []  # (session_id, queue)
     release_lock_ids: list[str] = []
     timed_out = 0
     dispatch_failed = 0
@@ -364,12 +377,61 @@ async def reconcile_explorations() -> dict[str, int]:
         event_repo = ExplorationEventRepository(db)
 
         for session in sessions:
-            age = (now - _as_utc(session.updated_at)).total_seconds()
-            action = _exploration_recovery_action(session.status, age)
+            if not session or session.status in EXPLORATION_TERMINAL_STATES:
+                continue
 
-            if action == "dispatch":
+            age = (now - _as_utc(session.updated_at)).total_seconds()
+            metadata = dict(session.metadata_ or {})
+            attempts = int(metadata.get("dispatch_attempts", 0))
+
+            action = _exploration_recovery_action(session.status, age, attempts)
+
+            if action == "fail_queue_unavailable":
+                try:
+                    await repo.update_status(
+                        session.id,
+                        ExplorationStatus.FAILED,
+                        error_message="QUEUE_UNAVAILABLE: Celery worker queue unavailable after maximum retry attempts",
+                    )
+                    await event_repo.create(
+                        exploration_id=session.id,
+                        event_type="exploration.failed",
+                        payload={
+                            "reason": "QUEUE_UNAVAILABLE",
+                            "error_code": "QUEUE_UNAVAILABLE",
+                            "attempts": attempts,
+                            "waited_seconds": int(age),
+                        },
+                    )
+                    dispatch_failed += 1
+                    release_lock_ids.append(str(session.id))
+                except Exception:
+                    await db.rollback()
+                    logger.exception("Failed to mark exploration %s as QUEUE_UNAVAILABLE", session.id)
+            elif action == "dispatch":
                 if await _claim_exploration_dispatch(str(session.id)):
-                    dispatch_ids.append(str(session.id))
+                    # Route to plan-appropriate queue while DB session is active
+                    queue = "kova-free"
+                    if session.project_id:
+                        from app.modules.projects.repository import ProjectRepository
+                        from app.modules.organizations.repository import OrganizationRepository
+                        from app.workers.celery_app import get_queue_for_plan
+
+                        try:
+                            project_repo = ProjectRepository(db)
+                            project = await project_repo.get_by_id(session.project_id)
+                            if project and project.org_id:
+                                org_repo = OrganizationRepository(db)
+                                org = await org_repo.get_by_id(project.org_id)
+                                if org:
+                                    queue = get_queue_for_plan(org.plan)
+                        except Exception:
+                            queue = "kova-free"
+
+                    # Increment retry attempts
+                    metadata["dispatch_attempts"] = attempts + 1
+                    session.metadata_ = metadata
+                    dispatch_items.append((str(session.id), queue))
                 else:
                     logger.debug(
                         "Exploration %s already has a pending dispatch", session.id
@@ -417,31 +479,13 @@ async def reconcile_explorations() -> dict[str, int]:
                     )
         await db.commit()
 
+    # Outside the DB session: release locks and dispatch Celery tasks
     for session_id in release_lock_ids:
         await _release_exploration_dispatch(session_id)
 
-    for session_id in dispatch_ids:
+    for session_id, queue in dispatch_items:
         try:
             from app.workers.tasks.exploration import run_exploration
-            from app.workers.celery_app import get_queue_for_plan
-
-            # Route to the plan-appropriate queue based on the session's
-            # project -> organization plan.
-            queue = "kova-free"
-            try:
-                session = await db.get(ExplorationSession, session_id)
-                if session and session.project_id:
-                    from app.modules.projects.repository import ProjectRepository
-                    project_repo = ProjectRepository(db)
-                    project = await project_repo.get_by_id(session.project_id)
-                    if project and project.org_id:
-                        from app.modules.organizations.repository import OrganizationRepository
-                        org_repo = OrganizationRepository(db)
-                        org = await org_repo.get_by_id(project.org_id)
-                        if org:
-                            queue = get_queue_for_plan(org.plan)
-            except Exception:
-                queue = "kova-free"
 
             task = asyncio.create_task(
                 asyncio.to_thread(
@@ -462,7 +506,7 @@ async def reconcile_explorations() -> dict[str, int]:
             )
 
     return {
-        "redispatched": len(dispatch_ids),
+        "redispatched": len(dispatch_items),
         "timed_out": timed_out,
         "dispatch_failed": dispatch_failed,
     }
