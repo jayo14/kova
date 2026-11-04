@@ -1073,11 +1073,16 @@ class ExplorationEngine:
         except Exception as e:
             logger.debug("Page exploration streaming completed: %s", e)
 
-    async def _run_agent_exploration(self, page: Any) -> dict[str, Any] | None:
+    async def _run_agent_exploration(
+        self,
+        page: Any,
+        credential: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Run the bounded observe -> act -> observe crawl when enabled.
 
-        The agent navigates the page away from the observed URL, so the original
-        URL is restored afterwards and legacy discovery continues unchanged.
+        When the agent reaches an authenticated workspace or performs workflows,
+        the authenticated state is preserved so subsequent discovery operates on
+        the real application workspace.
         """
         settings = get_settings()
         if not getattr(settings, "EXPLORATION_AGENT_ENABLED", False):
@@ -1092,9 +1097,11 @@ class ExplorationEngine:
             "max_model_calls": settings.EXPLORATION_AGENT_MAX_MODEL_CALLS,
         }
         start_url = getattr(page, "url", self.url)
-        agent = ExplorationAgent(self, page, self._emit, budget=budget)
+        creds = credential or getattr(self, "_project_credentials", None) or getattr(self, "credential", None)
+        agent = ExplorationAgent(self, page, self._emit, budget=budget, credentials=creds)
 
         await self._emit("exploration.agent.started", {"url": start_url})
+        result = None
         try:
             result = await self.interruptible(agent.run())
         except asyncio.CancelledError:
@@ -1104,7 +1111,8 @@ class ExplorationEngine:
             return None
         finally:
             try:
-                if getattr(page, "url", None) != start_url:
+                is_auth = (result or {}).get("understanding", {}).get("is_authenticated", False)
+                if not is_auth and getattr(page, "url", None) != start_url:
                     await page.goto(start_url, wait_until="domcontentloaded", timeout=15000)
             except Exception:
                 logger.debug("Could not restore page after agent run", exc_info=True)
@@ -1886,12 +1894,31 @@ class ExplorationEngine:
                 "status": "active",
             })
 
-            agent_result = await self._run_agent_exploration(page)
+            agent_result = await self._run_agent_exploration(page, credential=credential)
             discoveries, missions = await self._discover_workflows(
                 page, observation, selected_role,
                 agent_capabilities=(agent_result or {}).get("capabilities") or [],
             )
             discoveries = self._merge_agent_capabilities(discoveries, agent_result)
+
+            # Synthesize evidence-backed journeys from application understanding
+            if agent_result and agent_result.get("understanding"):
+                try:
+                    from app.engine.exploration.agent.journey_synthesizer import JourneySynthesizer
+                    from app.engine.exploration.agent.understanding import ApplicationUnderstanding
+
+                    und = ApplicationUnderstanding.model_validate(agent_result["understanding"])
+                    synthesizer = JourneySynthesizer(und, app_name=observation.get("title"))
+                    epistemic_missions = synthesizer.synthesize_journeys()
+                    if epistemic_missions:
+                        existing_names = {m.name.lower() for m in missions}
+                        for em in epistemic_missions:
+                            if em.name.lower() not in existing_names:
+                                missions.insert(0, em)
+                                existing_names.add(em.name.lower())
+                except Exception as exc:
+                    logger.debug("Synthesizing journeys from understanding failed: %s", exc)
+
             await self._capture_and_emit_screenshot(page, full_page=False)
 
             await self._emit("progress", {
