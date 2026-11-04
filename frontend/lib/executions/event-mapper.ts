@@ -627,7 +627,7 @@ export function mapExecutionEvents(events: ExecutionEvent[]): ActivityItem[] {
     ? -1
     : activities.map((a) => a.status).lastIndexOf("active");
 
-  return activities.map((item, index) => {
+  const mappedActivities = activities.map((item, index) => {
     if (item.status === "active" && index !== lastActiveIndex) {
       let pastLabel = item.label;
       if (pastLabel === "Performing action") pastLabel = "Action performed";
@@ -646,4 +646,18 @@ export function mapExecutionEvents(events: ExecutionEvent[]): ActivityItem[] {
     }
     return item;
   });
+
+  // Dedupe identical consecutive activity events: show once with count and last-seen time
+  const deduplicated: ActivityItem[] = [];
+  for (const act of mappedActivities) {
+    const prev = deduplicated[deduplicated.length - 1];
+    if (prev && prev.label === act.label && prev.status === act.status) {
+      prev.count = (prev.count || 1) + 1;
+      prev.lastSeenTime = act.timestamp || new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    } else {
+      deduplicated.push({ ...act, count: 1 });
+    }
+  }
+
+  return deduplicated;
 }

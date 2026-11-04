@@ -421,6 +421,7 @@ async def stream_exploration_events(
         has_missions_event = False
         ready_wait_cycles = 0
         ping_counter = 0
+        last_sent_progress_message: str | None = None
 
         try:
             # Send initial connected heartbeat to immediately flush response headers past buffering proxies
@@ -434,6 +435,7 @@ async def stream_exploration_events(
                 init_session = await init_repo.get_by_id(parsed_id)
                 if init_session and init_session.status in (ExplorationStatus.CREATED.value, "queued"):
                     init_payload = await get_queued_status_payload()
+                    last_sent_progress_message = init_payload.get("message")
                     yield f"event: progress\ndata: {json.dumps({'message': init_payload['message'], 'queue_info': init_payload})}\n\n"
 
             while True:
@@ -497,9 +499,11 @@ async def stream_exploration_events(
 
                             if current_session.status in (ExplorationStatus.CREATED.value, "queued") and ping_counter % 3 == 0:
                                 q_status = await get_queued_status_payload()
-                                chunks_to_send.append(
-                                    f"event: progress\ndata: {json.dumps({'message': q_status['message'], 'queue_info': q_status})}\n\n"
-                                )
+                                if q_status.get("message") != last_sent_progress_message:
+                                    last_sent_progress_message = q_status.get("message")
+                                    chunks_to_send.append(
+                                        f"event: progress\ndata: {json.dumps({'message': q_status['message'], 'queue_info': q_status})}\n\n"
+                                    )
 
                         terminal_statuses = {
                             ExplorationStatus.READY.value,

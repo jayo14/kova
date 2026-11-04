@@ -122,12 +122,40 @@ export function exploreReducer(
           )
         : state.activities;
 
+      const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      const lastItem = updatedPrior.length > 0 ? updatedPrior[updatedPrior.length - 1] : null;
+
+      // Dedupe identical consecutive activity events (same message and status)
+      if (
+        lastItem &&
+        lastItem.message === action.activity.message &&
+        lastItem.status === action.activity.status
+      ) {
+        const deduplicatedLast: AgentActivityItem = {
+          ...lastItem,
+          ...action.activity,
+          id: lastItem.id,
+          count: (lastItem.count || 1) + 1,
+          lastSeenTime: nowTime,
+        };
+        return {
+          ...state,
+          activities: [...updatedPrior.slice(0, -1), deduplicatedLast],
+        };
+      }
+
       const exists = updatedPrior.find((a) => a.id === action.activity.id);
       const activities = exists
         ? updatedPrior.map((a) =>
-            a.id === action.activity.id ? action.activity : a
+            a.id === action.activity.id
+              ? {
+                  ...action.activity,
+                  count: a.count,
+                  lastSeenTime: a.lastSeenTime,
+                }
+              : a
           )
-        : [...updatedPrior, action.activity];
+        : [...updatedPrior, { ...action.activity, count: 1, lastSeenTime: nowTime }];
       return {
         ...state,
         activities,

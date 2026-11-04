@@ -101,14 +101,24 @@ export function AgentActivity({
 
               <span
                 className={cn(
-                  "text-body-sm transition-colors",
+                  "text-body-sm transition-colors flex items-center flex-wrap gap-1.5",
                   isCompleted && "text-muted-foreground",
                   isCurrentActive && "font-medium text-foreground",
                   item.status === "pending" && "text-muted-foreground/60",
                   item.status === "failed" && "text-destructive"
                 )}
               >
-                {displayMessage}
+                <span>{displayMessage}</span>
+                {item.count && item.count > 1 ? (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 bg-secondary text-secondary-foreground border border-border/60 rounded">
+                    ×{item.count}
+                  </span>
+                ) : null}
+                {item.count && item.count > 1 && item.lastSeenTime ? (
+                  <span className="text-[11px] text-muted-foreground/70 font-mono">
+                    ({item.lastSeenTime})
+                  </span>
+                ) : null}
               </span>
             </div>
           );

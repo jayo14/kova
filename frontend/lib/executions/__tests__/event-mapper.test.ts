@@ -294,5 +294,46 @@ describe("Activity Mapping and Action Collapsing", () => {
     assert.equal(activities[4].label, "Verification: application confirmed the password change");
     assert.equal(activities[4].status, "completed");
   });
+
+  it("deduplicates identical consecutive activity events with count and last seen time", () => {
+    const events: ExecutionEvent[] = [
+      {
+        id: "repeat-1",
+        executionId: "ex-rep",
+        eventType: "agent.state_changed",
+        payload: { action: "click" },
+        createdAt: "2026-09-16T10:00:01Z",
+      },
+      {
+        id: "repeat-2",
+        executionId: "ex-rep",
+        eventType: "agent.state_changed",
+        payload: { action: "click" },
+        createdAt: "2026-09-16T10:00:02Z",
+      },
+      {
+        id: "repeat-3",
+        executionId: "ex-rep",
+        eventType: "agent.state_changed",
+        payload: { action: "click" },
+        createdAt: "2026-09-16T10:00:03Z",
+      },
+      {
+        id: "repeat-4",
+        executionId: "ex-rep",
+        eventType: "execution.completed",
+        payload: {},
+        createdAt: "2026-09-16T10:00:04Z",
+      },
+    ];
+
+    const activities = mapExecutionEvents(events);
+    // The 3 consecutive identical actions should be collapsed to 1 with count=3
+    assert.equal(activities.length, 2);
+    assert.equal(activities[0].count, 3);
+    assert.equal(activities[0].lastSeenTime, "2026-09-16T10:00:03Z");
+    assert.equal(activities[0].label, "Executed click successfully");
+    assert.equal(activities[1].count, 1);
+  });
 });
 

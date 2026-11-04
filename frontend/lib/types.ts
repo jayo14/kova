@@ -47,6 +47,9 @@ export interface AgentActivityItem {
   id: string;
   status: "pending" | "active" | "completed" | "failed";
   message: string;
+  count?: number;
+  lastSeenTime?: string;
+  detail?: string;
 }
 
 export interface QuestionOption {
@@ -288,6 +291,8 @@ export interface ActivityItem {
   status: "pending" | "active" | "completed" | "failed";
   timestamp?: string;
   icon?: string;
+  count?: number;
+  lastSeenTime?: string;
 }
 
 export interface ExecutionListParams {

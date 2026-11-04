@@ -10,6 +10,8 @@ export interface AgentActivityItem {
   text: string;
   detail?: string;
   status: ActivityStatus;
+  count?: number;
+  lastSeenTime?: string;
 }
 
 interface AgentActivityProps {
@@ -68,10 +70,15 @@ export function AgentActivity({ activities, className }: AgentActivityProps) {
                 )}
               >
                 {item.text}
+                {item.count && item.count > 1 ? (
+                  <span className="ml-2 text-[10px] font-semibold px-1.5 py-0.2 bg-secondary text-secondary-foreground border border-border/60 rounded">
+                    ×{item.count}
+                  </span>
+                ) : null}
               </p>
-              {item.detail && (
+              {(item.detail || (item.count && item.count > 1 && item.lastSeenTime)) && (
                 <p className="text-caption text-muted-foreground mt-0.5 truncate">
-                  {item.detail}
+                  {item.detail || `Last seen at ${item.lastSeenTime}`}
                 </p>
               )}
             </div>
