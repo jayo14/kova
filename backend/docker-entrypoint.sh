@@ -12,10 +12,12 @@ case "${KOVA_ROLE:-api}" in
     migrate
     exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" ;;
   worker)
-    exec celery -A app.workers.celery_app worker --loglevel=info --concurrency="$CONC" ;;
+    QUEUES="${CELERY_QUEUES:-kova-free,kova-pro,kova-enterprise}"
+    exec celery -A app.workers.celery_app worker --loglevel=info --concurrency="$CONC" -Q "$QUEUES" ;;
   all)
     migrate
-    celery -A app.workers.celery_app worker --loglevel=info --concurrency="$CONC" &
+    QUEUES="${CELERY_QUEUES:-kova-free,kova-pro,kova-enterprise}"
+    celery -A app.workers.celery_app worker --loglevel=info --concurrency="$CONC" -Q "$QUEUES" &
     WORKER_PID=$!
     uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" &
     API_PID=$!

@@ -42,7 +42,7 @@ trap cleanup INT TERM EXIT
 # Start Celery worker in its own process group with concurrency 1
 WORKER_LOG="/tmp/worker.log"
 > "$WORKER_LOG"
-setsid .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 > "$WORKER_LOG" 2>&1 &
+setsid .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 -Q kova-free,kova-pro,kova-enterprise > "$WORKER_LOG" 2>&1 &
 CELERY_PID=$!
 echo "Celery worker started (PID $CELERY_PID, concurrency 1, logs: $WORKER_LOG)"
 

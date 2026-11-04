@@ -14,6 +14,7 @@ from app.config.settings import settings
 from app.core.redis_tls import celery_ssl_options, redispy_ssl_kwargs
 from app.observability.metrics import WORKER_CONCURRENT_EXECUTIONS
 from app.observability.tracing import get_tracer
+import app.workers.health_server  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
