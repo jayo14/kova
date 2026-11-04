@@ -1643,19 +1643,26 @@ class ExplorationEngine:
                     # 2. If still no credential, investigate whether self-registration is available
                     if not credential:
                         current_url_lower = getattr(page, "url", "").lower()
-                        links = observation.get("links", [])
-                        controls = observation.get("controls", [])
+                        elements = observation.get("elements", []) or observation.get("interactive_elements", []) or []
+                        signup_keywords = ["sign up", "signup", "register", "create account", "get started", "join"]
+                        has_signup_in_obs = any(
+                            any(kw in ((el.get("name") or el.get("text") or el.get("label") or "").lower()) for kw in signup_keywords)
+                            for el in elements
+                        )
+                        has_signup_dom = False
+                        try:
+                            signup_loc = page.locator('a:has-text("Sign Up"), a:has-text("Sign up"), a:has-text("Register"), button:has-text("Sign Up"), button:has-text("Sign up")')
+                            if hasattr(signup_loc, "count"):
+                                cnt = signup_loc.count()
+                                has_signup_dom = (await cnt if inspect.isawaitable(cnt) else cnt) > 0
+                        except Exception:
+                            has_signup_dom = False
+
                         can_self_register = (
                             auth_classification.kind == "signup"
                             or any(kw in current_url_lower for kw in ["/signup", "/register", "/sign-up", "/join"])
-                            or any(
-                                any(kw in (l.get("name") or "").lower() for kw in ["sign up", "register", "create account", "get started", "join"])
-                                for l in links
-                            )
-                            or any(
-                                any(kw in (c.get("name") or "").lower() for kw in ["sign up", "register", "create account"])
-                                for c in controls
-                            )
+                            or has_signup_in_obs
+                            or has_signup_dom
                         )
 
                         if can_self_register:
@@ -5456,6 +5463,8 @@ class ExplorationEngine:
             credential_id=self.credential_id,
             element=element,
         )
+        if not journey_data:
+            return None
 
         return DiscoveredMission(
             id=f"mission-{uuid.uuid4().hex[:8]}",
