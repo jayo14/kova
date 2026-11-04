@@ -1634,72 +1634,85 @@ class ExplorationEngine:
                     or await self._detect_authentication(page, observation)
                 )
 
-                if is_auth_required and not credential:
-                    should_close_browser = False
-                    hostname = urlparse(self.url).hostname or "application"
-                    auth_reason = (
-                        f"This product requires an account. Kova needs a test account "
-                        f"to continue exploring {hostname}."
-                    )
-                    credential_request = CredentialRequest(
-                        type="login",
-                        reason=auth_reason,
-                    ).model_dump()
+                if is_auth_required:
+                    # 1. Check if stored project credentials exist
+                    if not credential and hasattr(self, "_project_credentials") and self._project_credentials:
+                        credential = self._project_credentials
 
-                    await self._emit("auth.required", {"request": credential_request})
-                    await self._emit("progress", {
-                        "id": "exp-auth",
-                        "message": "Found authentication barrier — mapping public areas",
-                        "status": "active",
-                    })
+                    # 2. If still no credential, investigate whether self-registration is available
+                    if not credential:
+                        current_url_lower = getattr(page, "url", "").lower()
+                        links = observation.get("links", [])
+                        controls = observation.get("controls", [])
+                        can_self_register = (
+                            auth_classification.kind == "signup"
+                            or any(kw in current_url_lower for kw in ["/signup", "/register", "/sign-up", "/join"])
+                            or any(
+                                any(kw in (l.get("name") or "").lower() for kw in ["sign up", "register", "create account", "get started", "join"])
+                                for l in links
+                            )
+                            or any(
+                                any(kw in (c.get("name") or "").lower() for kw in ["sign up", "register", "create account"])
+                                for c in controls
+                            )
+                        )
 
-                    # Discover workflows on current public page and navigation
-                    discoveries, missions = await self._discover_workflows(page, observation, selected_role)
-
-                    # Ensure authentication finding is included
-                    auth_finding = {
-                        "label": "Authentication Barrier",
-                        "description": "Sign in / registration required to access application workspace",
-                        "category": "auth",
-                    }
-                    has_auth_disc = any(
-                        (d.get("category") if isinstance(d, dict) else getattr(d, "category", "")) == "auth"
-                        for d in discoveries
-                    )
-                    if not has_auth_disc:
-                        from app.modules.exploration.schemas import DiscoveryItem
-                        discoveries.append(DiscoveryItem(**auth_finding))
-
-                    disc_payload = [d.model_dump() if hasattr(d, "model_dump") else d for d in discoveries]
-                    miss_payload = [m.model_dump() if hasattr(m, "model_dump") else m for m in missions]
-
-                    await self._emit("discovery", {"discoveries": disc_payload})
-                    await self._emit("missions", {"missions": miss_payload})
-
-                    # If public missions exist, mark READY so user can test them
-                    public_missions = [m for m in missions if getattr(m, "category", "") != "auth"]
-                    has_public_missions = len(public_missions) > 0
-
-                    if has_public_missions:
-                        await self._emit("state_change", {"status": "READY"})
-                        return {
-                            "status": ExplorationStatus.READY,
-                            "goal": self.goal,
-                            "selected_role": self._last_persona or selected_role or "Visitor",
-                            "credential_request": credential_request,
-                            "discoveries": disc_payload,
-                            "candidate_missions": miss_payload,
-                        }
-                    else:
-                        await self._emit("state_change", {"status": "AUTH_REQUIRED"})
-                        return {
-                            "status": ExplorationStatus.AUTH_REQUIRED,
-                            "goal": self.goal,
-                            "selected_role": self._last_persona or selected_role or "Visitor",
-                            "credential_request": credential_request,
-                            "discoveries": disc_payload,
-                            "candidate_missions": miss_payload,
-                        }
+                        if can_self_register:
+                            await self._emit("progress", {
+                                "id": "exp-auth-selfreg",
+                                "message": "Investigating application access via self-registration",
+                                "status": "active",
+                            })
+                            import uuid
+                            synthetic_email = f"test.kova.{uuid.uuid4().hex[:6]}@gmail.com"
+                            synthetic_pwd = f"KovaTestPass!{uuid.uuid4().hex[:8]}"
+                            synthetic_cred = {
+                                "name": "Kova Tester",
+                                "email": synthetic_email,
+                                "password": synthetic_pwd,
+                            }
+                            # Position browser on registration form if not already there
+                            await self._ensure_on_auth_form(page, is_signup=True)
+                            reg_success, reg_detail = await self._perform_login(page, synthetic_cred, is_signup=True)
+                            if reg_success:
+                                credential = synthetic_cred
+                                self.credential = synthetic_cred
+                                create_account = False
+                                await self._emit("authenticated", {})
+                                await self._emit("progress", {
+                                    "id": "exp-auth-selfreg",
+                                    "message": "Successfully registered test account and unlocked workspace",
+                                    "status": "completed",
+                                })
+                                await asyncio.sleep(1.0)
+                                observation = await self._browser.observe()
+                                await self._capture_and_emit_screenshot(page)
+                            else:
+                                from app.engine.browser.auth import diagnose_auth_failure, AuthFailureCategory
+                                diag = await diagnose_auth_failure(page, is_signup=True, initial_url=page.url, credential=synthetic_cred)
+                                reg_error = reg_detail or "Self-registration blocked by external security requirement."
+                                req_type = "login"
+                                if diag.category == AuthFailureCategory.EMAIL_VERIFICATION_REQUIRED:
+                                    req_type = "email_verification"
+                                elif diag.category == AuthFailureCategory.CAPTCHA_REQUIRED:
+                                    req_type = "captcha"
+                                cred_req = CredentialRequest(type=req_type, reason=reg_error).model_dump()
+                                await self._emit("auth.required", {"request": cred_req})
+                                await self._emit("progress", {
+                                    "id": "exp-auth-barrier",
+                                    "message": f"Authentication barrier: {reg_error} — mapping accessible areas",
+                                    "status": "active",
+                                })
+                        else:
+                            hostname = urlparse(self.url).hostname or "application"
+                            auth_reason = f"Application requires credentials to access workspace on {hostname}."
+                            cred_req = CredentialRequest(type="login", reason=auth_reason).model_dump()
+                            await self._emit("auth.required", {"request": cred_req})
+                            await self._emit("progress", {
+                                "id": "exp-auth-barrier",
+                                "message": f"Authentication barrier — mapping accessible areas",
+                                "status": "active",
+                            })
 
             # 4. Handle authentication if credentials provided
             if credential:
@@ -5290,6 +5303,11 @@ class ExplorationEngine:
         elem = element or {}
         selector = str(elem.get("selector") or "").lower()
         href = str(elem.get("href") or "").lower()
+        el_type = str(elem.get("type") or "").lower()
+
+        # Input fields and placeholders are not standalone user journeys
+        if el_type in ("input", "textarea") or "@" in lower or any(kw in lower for kw in ["enter your", "placeholder"]):
+            return "input_field"
 
         # Password visibility toggle
         if (
@@ -5367,55 +5385,12 @@ class ExplorationEngine:
 
         app_name = title or "the application"
 
-        if intent == "password_toggle":
-            password_input = "input[type='password'], input[name*='password' i], input[id*='password' i]"
-            toggle_sel = selector or "button[aria-label*='password' i], button:has-text('Show password'), button:has-text('Hide password')"
-            return {
-                "name": "Toggle password visibility",
-                "description": "Enter test text into the password field, toggle visibility to reveal cleartext, and toggle again to restore masking.",
-                "objective": "Verify that the password visibility toggle reveals masked text and returns to masked state",
-                "category": "control_exploration",
-                "kind": "control_exploration",
-                "journey": [
-                    f"Open {app_name}",
-                    "Enter test text into password input",
-                    f"Click '{el_name}' to reveal password",
-                    "Verify password input type changes to text",
-                    f"Click '{el_name}' again to mask password",
-                    "Verify password input type returns to password",
-                ],
-                "steps": [
-                    {"type": "navigate", "url": base_url},
-                    {"type": "wait", "value": "500"},
-                    {"type": "type", "target": password_input, "value": "SecretPassword123!"},
-                    {"type": "wait", "value": "200"},
-                    {"type": "click", "target": toggle_sel},
-                    {"type": "wait", "value": "200"},
-                    {"type": "click", "target": toggle_sel},
-                    {"type": "wait", "value": "200"},
-                ],
-                "success_condition": {
-                    "element_attribute": {
-                        "target": password_input,
-                        "attribute": "type",
-                        "value": "password",
-                    }
-                },
-                "confidence": 0.85,
-                "estimated_time": 10,
-                "user_goal": "Toggle password visibility to verify cleartext reveal and masking",
-                "expected_outcome": "Password field toggles between masked and visible states and returns to masked password type",
-                "classification": "functional",
-                "is_core": False,
-                "runnable": True,
-                "validation_status": "eligible",
-                "provenance": {
-                    "observed_controls": [el_name, toggle_sel, password_input],
-                    "observed_routes": [base_url],
-                    "preconditions": [],
-                    "unmet_preconditions": [],
-                },
-            }
+        if intent in ("password_toggle", "input_field"):
+            return None
+
+        from app.modules.exploration.journey_validator import is_flimsy_landing_element
+        if is_flimsy_landing_element(el_name) or "@" in el_name:
+            return None
 
         if intent == "oauth_login":
             provider = "Google" if "google" in el_name.lower() or "google" in selector.lower() else (
@@ -6035,6 +6010,9 @@ class ExplorationEngine:
                     "unmet_preconditions": [],
                 },
             }
+
+        if is_flimsy_landing_element(el_name) or "@" in el_name:
+            return None
 
         return {
             "name": f"Explore {el_name}",

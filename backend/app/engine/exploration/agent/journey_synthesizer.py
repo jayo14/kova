@@ -124,7 +124,8 @@ class JourneySynthesizer:
         ]
 
         is_authenticated_precondition = "authenticated_session" in cap.preconditions
-        runnable = not (is_authenticated_precondition and not self.understanding.auth_credentials_available)
+        has_access = self.understanding.is_currently_authenticated or self.understanding.auth_credentials_available
+        runnable = not is_authenticated_precondition or has_access
 
         return DiscoveredMission(
             id=f"mission-obs-{uuid.uuid4().hex[:8]}",

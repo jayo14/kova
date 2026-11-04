@@ -312,3 +312,105 @@ def test_journey_synthesizer_generates_grounded_missions():
 
     # Flimsy testimonial was excluded
     assert not any("John Doe" in name for name in mission_names)
+
+
+# ---------------------------------------------------------------------------
+# 5. Autonomous Auth Resolution & Workspace Transition Tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_autonomous_self_registration_crosses_auth_barrier_into_workspace():
+    """Verifies Kova detects self-registration, registers a test account, and unlocks workspace."""
+    und = ApplicationUnderstanding(
+        app_name="Quiza",
+        target_url="https://quiza.test/signin",
+    )
+
+    # 1. Encounter signin page with public registration link
+    signin_obs = {
+        "url": "https://quiza.test/signin",
+        "title": "Quiza - Sign In",
+        "links": [{"name": "Sign Up", "href": "https://quiza.test/signup"}],
+        "controls": [{"name": "Sign In", "type": "button"}],
+        "inputs": [{"name": "email", "type": "email"}, {"name": "password", "type": "password"}],
+    }
+
+    # Agent records auth requirement and discovers self-registration opportunity
+    und.auth_required = True
+    und.auth_type = "password_form"
+    und.self_registration_available = True
+    q = und.add_question(
+        "Can a new user register for this application?",
+        "Public self-registration creates active workspace",
+        "Register synthetic test account",
+    )
+
+    # 2. Simulate registration action execution
+    synthetic_account = {
+        "email": "test.kova.abc123@example.com",
+        "password": "SecurePassword123!",
+        "name": "Kova Tester",
+    }
+    signup_action = {
+        "action": "submit_form",
+        "target": {"url": "https://quiza.test/signup", "credentials": synthetic_account},
+    }
+
+    # 3. Simulate post-registration transition into workspace
+    und.record_transition(
+        from_url="https://quiza.test/signup",
+        action=signup_action,
+        to_url="https://quiza.test/dashboard",
+        effect="Successfully registered account and navigated to dashboard",
+    )
+    und.is_currently_authenticated = True
+    und.answer_question(q.question, "Confirmed: Registration succeeded and loaded dashboard")
+
+    # 4. Observe workspace capabilities inside dashboard
+    und.record_capability(
+        name="Generate Quiz from Study Material",
+        user_goal="Upload document or notes and generate smart AI quiz",
+        state=EpistemicState.CONFIRMED,
+        is_core=True,
+        expected_outcome="Quiz editor opened with generated questions",
+        preconditions=["authenticated_session"],
+    )
+    und.record_capability(
+        name="Manage Recent Quizzes",
+        user_goal="Review and retake previously created quizzes",
+        state=EpistemicState.OBSERVED,
+        is_core=True,
+        preconditions=["authenticated_session"],
+    )
+
+    # 5. Synthesize journeys
+    synthesizer = JourneySynthesizer(und, app_name="Quiza")
+    missions = synthesizer.synthesize_journeys()
+
+    # Verify that the generated missions are real application workflows
+    core_quiz_mission = next((m for m in missions if "Generate Quiz" in m.name), None)
+    assert core_quiz_mission is not None
+    assert core_quiz_mission.is_core is True
+    assert core_quiz_mission.discovery_status == "verified"
+    assert core_quiz_mission.recommended is True
+
+    # Verify that no password visibility toggles or email input placeholder journeys exist
+    mission_names = [m.name for m in missions]
+    assert not any("password visibility" in n.lower() for n in mission_names)
+    assert not any("name@example.com" in n.lower() for n in mission_names)
+
+
+def test_rejection_of_password_visibility_and_input_placeholder_journeys():
+    """Verifies that micro-interaction controls and email placeholders are rejected."""
+    micro_controls = [
+        "Toggle password visibility",
+        "Show password",
+        "Hide password",
+        "Explore name@example.com",
+        "Explore user@domain.com",
+        "Explore password",
+        "Explore email",
+    ]
+    for ctrl in micro_controls:
+        assert is_flimsy_landing_element(ctrl) is True, f"Failed to reject micro-control: {ctrl}"
+
