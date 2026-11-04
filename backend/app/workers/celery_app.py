@@ -11,6 +11,7 @@ from kombu import Exchange, Queue
 import redis
 
 from app.config.settings import settings
+from app.core.redis_tls import celery_ssl_options, redispy_ssl_kwargs
 from app.observability.metrics import WORKER_CONCURRENT_EXECUTIONS
 from app.observability.tracing import get_tracer
 
@@ -36,17 +37,7 @@ celery_app = Celery(
 def _get_ssl_config(url: str | None) -> dict | None:
     if not url or "rediss://" not in str(url):
         return None
-    ssl_reqs = (settings.REDIS_SSL_CERT_REQS or "none").lower()
-    reqs_map = {
-        "required": ssl.CERT_REQUIRED,
-        "optional": ssl.CERT_OPTIONAL,
-        "none": ssl.CERT_NONE,
-    }
-    cert_reqs = reqs_map.get(ssl_reqs, ssl.CERT_NONE)
-    cfg: dict = {"ssl_cert_reqs": cert_reqs}
-    if settings.REDIS_SSL_CA_CERTS:
-        cfg["ca_certs"] = settings.REDIS_SSL_CA_CERTS
-    return cfg
+    return celery_ssl_options()
 
 
 q_prefix = settings.CELERY_QUEUE_PREFIX
@@ -126,10 +117,7 @@ def _run_worker_heartbeat(hostname: str) -> None:
         "retry_on_timeout": True,
     }
     if "rediss://" in str(settings.REDIS_URL):
-        reqs_map = {"required": ssl.CERT_REQUIRED, "optional": ssl.CERT_OPTIONAL, "none": ssl.CERT_NONE}
-        kwargs["ssl_cert_reqs"] = reqs_map.get((settings.REDIS_SSL_CERT_REQS or "none").lower(), ssl.CERT_NONE)
-        if settings.REDIS_SSL_CA_CERTS:
-            kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
+        kwargs.update(redispy_ssl_kwargs())
 
     client = None
     while not _heartbeat_stop.is_set():

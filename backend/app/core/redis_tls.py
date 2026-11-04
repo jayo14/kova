@@ -1,6 +1,20 @@
 import os
 import ssl
 
+try:
+    from dotenv import find_dotenv, load_dotenv
+
+    for env_path in (".env", "backend/.env", "../backend/.env"):
+        if os.path.exists(env_path):
+            load_dotenv(env_path)
+            break
+    else:
+        found = find_dotenv(usecwd=True)
+        if found:
+            load_dotenv(found)
+except Exception:
+    pass
+
 
 def _mode() -> str:
     return os.getenv("REDIS_SSL_CERT_REQS", "required").lower()  # required | optional | none
@@ -12,7 +26,6 @@ def _ca_certs_path() -> str | None:
         return None
     if os.path.exists(ca_path):
         return ca_path
-    # Check relative to backend directory or project root
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     candidate = os.path.join(base_dir, ca_path.lstrip("./"))
     if os.path.exists(candidate):
