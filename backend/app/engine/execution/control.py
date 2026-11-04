@@ -25,6 +25,7 @@ from typing import Any, AsyncIterator
 import redis.asyncio as aioredis
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -159,14 +160,7 @@ def _get_control_lock(execution_id: str) -> asyncio.Lock:
 def _get_redis_ssl_kwargs() -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     if "rediss://" in str(settings.REDIS_URL):
-        reqs_map = {
-            "required": ssl.CERT_REQUIRED,
-            "optional": ssl.CERT_OPTIONAL,
-            "none": ssl.CERT_NONE,
-        }
-        kwargs["ssl_cert_reqs"] = reqs_map.get(str(settings.REDIS_SSL_CERT_REQS).lower(), ssl.CERT_REQUIRED)
-        if settings.REDIS_SSL_CA_CERTS:
-            kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
+        kwargs.update(redispy_ssl_kwargs())
     return kwargs
 
 
