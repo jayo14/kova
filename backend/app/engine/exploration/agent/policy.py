@@ -16,8 +16,6 @@ DANGEROUS_PATTERNS = [
     r"\b(message|email)\s+(us|them|him|her|support|team|seller)\b",
     r"\b(submit|place\s+order)\b",
     r"\bapply\s+(now|for\s+(this\s+)?(job|position|role))\b",
-    r"\bregister\s+(an?\s+)?account\b",
-    r"\bsign\s?up\b",
     # Session and subscription teardown.
     r"\b(log\s?out|sign\s?out|signout)\b",
     r"\b(unsubscribe|cancel\s+(subscription|plan|account))\b",
