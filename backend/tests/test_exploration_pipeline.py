@@ -212,7 +212,8 @@ class TestExplorationEngine:
 
         discoveries, missions = await engine._discover_workflows(mock_page, observation, None)
         assert len(missions) == 0
-        assert len(discoveries) == 0
+        assert len(discoveries) == 1
+        assert discoveries[0].label == "No Actionable Flows Discovered"
 
 
 class TestHealthEndpoint:
