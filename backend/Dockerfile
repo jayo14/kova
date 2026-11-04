@@ -43,6 +43,6 @@ RUN groupadd -r kova && useradd -r -g kova -m -d /home/kova kova && \
 RUN mkdir -p /tmp/kova-browser-profile && chown -R kova:kova /tmp/kova-browser-profile
 
 USER kova
-ENV KOVA_ROLE=api
+ENV KOVA_ROLE=all
 EXPOSE 8000
 ENTRYPOINT ["docker-entrypoint.sh"]

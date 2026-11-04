@@ -10,7 +10,7 @@ migrate() { if [ "${RUN_MIGRATIONS:-0}" = "1" ]; then alembic upgrade head; fi; 
 PREFIX="${CELERY_QUEUE_PREFIX:-}"
 QUEUES="${CELERY_QUEUES:-${PREFIX}kova-free,${PREFIX}kova-pro,${PREFIX}kova-enterprise}"
 
-case "${KOVA_ROLE:-api}" in
+case "${KOVA_ROLE:-all}" in
   api)
     migrate
     exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" ;;
