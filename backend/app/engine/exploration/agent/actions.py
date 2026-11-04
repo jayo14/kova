@@ -20,6 +20,7 @@ async def execute_action(
     page: Any,
     proposal: AgentActionProposal,
     credentials: dict[str, Any] | None = None,
+    history: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Execute a validated exploration action on the browser page.
 
@@ -31,7 +32,7 @@ async def execute_action(
 
     try:
         if action == ExplorationAction.OPEN_LINK:
-            return await execute_open_link(page, target)
+            return await execute_open_link(page, target, history=history)
         if action in (
             ExplorationAction.CLICK_CONTROL,
             ExplorationAction.OPEN_MENU_OR_TAB,
@@ -47,7 +48,7 @@ async def execute_action(
         if action == ExplorationAction.SCROLL_TO_LOAD_MORE:
             return await execute_scroll(page)
         if action == ExplorationAction.GO_BACK:
-            return await execute_go_back(page)
+            return await execute_go_back(page, history=history)
 
         return False, f"Unsupported action type: {action}"
     except Exception as exc:
@@ -55,17 +56,26 @@ async def execute_action(
         return False, f"Action execution failed: {exc}"
 
 
-async def execute_open_link(page: Any, target: dict[str, Any]) -> tuple[bool, str]:
+async def execute_open_link(
+    page: Any,
+    target: dict[str, Any],
+    history: list[str] | None = None,
+) -> tuple[bool, str]:
     url = target.get("url") or target.get("href")
     if not url:
         return False, "No URL specified for open_link"
 
     try:
+        current = getattr(page, "url", None)
+        if current and history is not None:
+            history.append(str(current))
+
         await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-        try:
-            await page.wait_for_load_state("networkidle", timeout=3000)
-        except Exception:
-            pass
+        if hasattr(page, "wait_for_load_state"):
+            try:
+                await page.wait_for_load_state("networkidle", timeout=2000)
+            except Exception:
+                pass
         current = getattr(page, "url", url)
         return True, f"Navigated to {current}"
     except Exception as exc:
@@ -80,34 +90,46 @@ async def execute_click(page: Any, target: dict[str, Any]) -> tuple[bool, str]:
     selector = target.get("selector")
     if selector:
         try:
-            locator = page.locator(selector).first
-            if await locator.is_visible(timeout=1500):
-                await locator.scroll_into_view_if_needed(timeout=1000)
+            locator = page.locator(selector)
+            if hasattr(locator, "first"):
+                locator = locator.first
+            if await locator.is_visible(timeout=1000):
+                if hasattr(locator, "scroll_into_view_if_needed"):
+                    try:
+                        await locator.scroll_into_view_if_needed(timeout=1000)
+                    except Exception:
+                        pass
                 await locator.click(timeout=5000)
-                await asyncio.sleep(0.3)
                 return True, f"Clicked control via selector '{selector}'"
         except Exception:
             pass
 
     if name:
         try:
-            locator = page.get_by_text(str(name), exact=False).first
-            if await locator.is_visible(timeout=1500):
-                await locator.scroll_into_view_if_needed(timeout=1000)
+            locator = page.get_by_text(str(name), exact=False)
+            if hasattr(locator, "first"):
+                locator = locator.first
+            if await locator.is_visible(timeout=1000):
+                if hasattr(locator, "scroll_into_view_if_needed"):
+                    try:
+                        await locator.scroll_into_view_if_needed(timeout=1000)
+                    except Exception:
+                        pass
                 await locator.click(timeout=5000)
-                await asyncio.sleep(0.3)
                 return True, f"Clicked control with text '{name}'"
         except Exception:
             pass
 
-        try:
-            locator = page.get_by_role("button", name=str(name)).first
-            if await locator.is_visible(timeout=1000):
-                await locator.click(timeout=5000)
-                await asyncio.sleep(0.3)
-                return True, f"Clicked button role '{name}'"
-        except Exception:
-            pass
+        if hasattr(page, "get_by_role"):
+            try:
+                locator = page.get_by_role("button", name=str(name))
+                if hasattr(locator, "first"):
+                    locator = locator.first
+                if await locator.is_visible(timeout=1000):
+                    await locator.click(timeout=5000)
+                    return True, f"Clicked button role '{name}'"
+            except Exception:
+                pass
 
     return False, f"Could not find or click target control '{name or selector}'"
 
@@ -129,7 +151,9 @@ async def execute_fill_inputs(page: Any, target: dict[str, Any]) -> tuple[bool, 
         loc = None
         if selector:
             try:
-                l = page.locator(selector).first
+                l = page.locator(selector)
+                if hasattr(l, "first"):
+                    l = l.first
                 if await l.is_visible(timeout=1000):
                     loc = l
             except Exception:
@@ -138,7 +162,9 @@ async def execute_fill_inputs(page: Any, target: dict[str, Any]) -> tuple[bool, 
         if loc is None and name:
             for s in [f'input[name="{name}"]', f'textarea[name="{name}"]', f'[placeholder*="{name}" i]']:
                 try:
-                    l = page.locator(s).first
+                    l = page.locator(s)
+                    if hasattr(l, "first"):
+                        l = l.first
                     if await l.is_visible(timeout=500):
                         loc = l
                         break
@@ -147,11 +173,13 @@ async def execute_fill_inputs(page: Any, target: dict[str, Any]) -> tuple[bool, 
 
         if loc is not None:
             try:
-                await loc.focus()
+                if hasattr(loc, "focus"):
+                    await loc.focus()
                 await loc.fill(value)
-                await loc.evaluate(
-                    "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-                )
+                if hasattr(loc, "evaluate"):
+                    await loc.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                    )
                 filled_count += 1
             except Exception as e:
                 logger.debug("Failed filling input %s: %s", selector or name, e)
@@ -163,10 +191,11 @@ async def execute_submit_form(page: Any, target: dict[str, Any]) -> tuple[bool, 
     submit_selector = target.get("submit_selector") or target.get("selector")
     if submit_selector:
         try:
-            btn = page.locator(submit_selector).first
-            if await btn.is_visible(timeout=1500):
+            btn = page.locator(submit_selector)
+            if hasattr(btn, "first"):
+                btn = btn.first
+            if await btn.is_visible(timeout=1000):
                 await btn.click(timeout=5000)
-                await asyncio.sleep(0.5)
                 return True, f"Submitted form via button selector '{submit_selector}'"
         except Exception:
             pass
@@ -178,10 +207,11 @@ async def execute_submit_form(page: Any, target: dict[str, Any]) -> tuple[bool, 
         'form button:not([type="button"])',
     ]:
         try:
-            btn = page.locator(s).first
-            if await btn.is_visible(timeout=800):
+            btn = page.locator(s)
+            if hasattr(btn, "first"):
+                btn = btn.first
+            if await btn.is_visible(timeout=500):
                 await btn.click(timeout=5000)
-                await asyncio.sleep(0.5)
                 return True, f"Submitted form via generic button '{s}'"
         except Exception:
             pass
@@ -213,8 +243,10 @@ async def execute_authenticate(
     email_loc = None
     for s in email_selectors:
         try:
-            l = page.locator(s).first
-            if await l.is_visible(timeout=600):
+            l = page.locator(s)
+            if hasattr(l, "first"):
+                l = l.first
+            if await l.is_visible(timeout=500):
                 email_loc = l
                 break
         except Exception:
@@ -224,11 +256,13 @@ async def execute_authenticate(
         return False, "Could not find email/username input field on the page"
 
     try:
-        await email_loc.focus()
+        if hasattr(email_loc, "focus"):
+            await email_loc.focus()
         await email_loc.fill(email)
-        await email_loc.evaluate(
-            "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-        )
+        if hasattr(email_loc, "evaluate"):
+            await email_loc.evaluate(
+                "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+            )
     except Exception as exc:
         return False, f"Failed filling username/email: {exc}"
 
@@ -242,51 +276,32 @@ async def execute_authenticate(
     pwd_loc = None
     for s in password_selectors:
         try:
-            l = page.locator(s).first
-            if await l.is_visible(timeout=600):
+            l = page.locator(s)
+            if hasattr(l, "first"):
+                l = l.first
+            if await l.is_visible(timeout=500):
                 pwd_loc = l
                 break
         except Exception:
             pass
 
-    # Handle multi-step login where password appears after next
-    if not pwd_loc:
-        next_btn = None
-        for s in ['button[type="submit"]', 'button:has-text("Next")', 'button:has-text("Continue")']:
-            try:
-                b = page.locator(s).first
-                if await b.is_visible(timeout=500):
-                    next_btn = b
-                    break
-            except Exception:
-                pass
-        if next_btn:
-            try:
-                await next_btn.click(timeout=3000)
-                await asyncio.sleep(1.0)
-                for s in password_selectors:
-                    l = page.locator(s).first
-                    if await l.is_visible(timeout=2000):
-                        pwd_loc = l
-                        break
-            except Exception:
-                pass
-
     if not pwd_loc:
         return False, "Could not locate password field on authentication screen"
 
     try:
-        await pwd_loc.focus()
+        if hasattr(pwd_loc, "focus"):
+            await pwd_loc.focus()
         await pwd_loc.fill(password)
-        await pwd_loc.evaluate(
-            "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
-        )
+        if hasattr(pwd_loc, "evaluate"):
+            await pwd_loc.evaluate(
+                "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+            )
     except Exception as exc:
         return False, f"Failed filling password: {exc}"
 
     # Submit login
     submit_success, msg = await execute_submit_form(page, target)
-    if not submit_success:
+    if not submit_success and hasattr(pwd_loc, "press"):
         try:
             await pwd_loc.press("Enter")
             submit_success = True
@@ -296,22 +311,27 @@ async def execute_authenticate(
     if not submit_success:
         return False, "Failed submitting authentication form"
 
-    await asyncio.sleep(1.5)
     return True, "Submitted credentials for authentication"
 
 
 async def execute_scroll(page: Any) -> tuple[bool, str]:
     try:
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(0.4)
         return True, "Scrolled to load more content"
     except Exception as exc:
         return False, f"Scroll failed: {exc}"
 
 
-async def execute_go_back(page: Any) -> tuple[bool, str]:
+async def execute_go_back(
+    page: Any,
+    history: list[str] | None = None,
+) -> tuple[bool, str]:
     try:
         res = await page.go_back(wait_until="domcontentloaded", timeout=10000)
-        return res is not None, "Navigated back in browser history"
+        if res is not None:
+            if history:
+                history.pop()
+            return True, "Navigated back in browser history"
+        return False, "Browser could not go back"
     except Exception as exc:
         return False, f"Go back failed: {exc}"
