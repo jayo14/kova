@@ -609,8 +609,9 @@ export async function syncSessionState(
 
     // Now transition to the new state
     onEvent({ type: "state_change", state: normalizedState });
+    return session;
   } catch {
-    // Ignore sync errors
+    return null;
   }
 }
 

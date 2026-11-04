@@ -321,6 +321,10 @@ async def _pump_frames(execution_id: str, websocket: WebSocket, relay: FrameRela
         raise
     finally:
         producer_task.cancel()
+        try:
+            await producer_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 async def _pump_control(execution_id: str, websocket: WebSocket, last_sent: dict[str, Any]) -> None:
@@ -372,10 +376,15 @@ async def _pump_states(execution_id: str, websocket: WebSocket) -> None:
                 except Exception:
                     return
         except asyncio.CancelledError:
-            raise
+            break
         except Exception as e:
             logger.debug("State subscribe error: %s", e)
             await asyncio.sleep(0.5)
+        finally:
+            try:
+                await agen.aclose()
+            except Exception:
+                pass
 
 
 async def _pump_loop(execution_id: str, websocket: WebSocket, relay: FrameRelay) -> None:
@@ -405,6 +414,8 @@ async def _pump_loop(execution_id: str, websocket: WebSocket, relay: FrameRelay)
     )
     for t in pending:
         t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
     for t in done:
         try:
             t.result()

@@ -30,6 +30,7 @@ import {
   streamExplorationEvents,
   getExplorationSession,
   normalizeExploreStatus,
+  normalizeTargetUrl,
 } from "@/lib/api/exploration";
 import { createMission } from "@/lib/api/missions";
 import { createExecution, runBatchExecutions } from "@/lib/api/executions";
@@ -193,9 +194,30 @@ export function ExplorePage() {
     abortRef.current = controller;
 
     // Initial immediate state sync
-    syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev)).catch((err) => {
-      console.error("Failed to sync session:", err);
-    });
+    syncSessionState(initialSessionId, (ev) => handleEventRef.current(ev))
+      .then((sess) => {
+        if (sess && initialUrl) {
+          const sessionUrl = normalizeTargetUrl(sess.url);
+          const currentTarget = normalizeTargetUrl(initialUrl);
+          if (sessionUrl && currentTarget && sessionUrl !== currentTarget) {
+            console.warn("Session URL mismatch, discarding stale sessionId", { sessionUrl, currentTarget });
+            controller.abort();
+            startedSessionIdRef.current = null;
+            startedUrlRef.current = null;
+            setActiveSessionId(null);
+            setCurrentSessionId(null);
+            if (typeof window !== "undefined" && window.location) {
+              const nextParams = new URLSearchParams(window.location.search);
+              nextParams.delete("sessionId");
+              window.history.replaceState(null, "", `?${nextParams.toString()}`);
+            }
+            handleSubmit({ rawInput: initialUrl, url: initialUrl, goal: initialIntent || null });
+          }
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to sync session:", err);
+      });
 
     // Stream real-time events via SSE so page updates live without refreshing
     streamExplorationEvents(initialSessionId, (ev) => handleEventRef.current(ev), controller.signal).catch(() => {});
@@ -302,6 +324,9 @@ export function ExplorePage() {
     startedSessionIdRef.current = null;
     setActiveSessionId(null);
     setCurrentSessionId(null);
+    if (typeof window !== "undefined" && window.location) {
+      window.history.replaceState(null, "", `/explore?${query.toString()}`);
+    }
 
     start(submittedUrl, goal);
 
@@ -831,7 +856,7 @@ export function ExplorePage() {
               onThumbnailClick={handleThumbnailClick}
               onRetry={() => handleSubmit({ rawInput: state.url || initialUrl || "", url: state.url || initialUrl, goal: null })}
               projectId={resolvedProjectId || getCurrentProjectId()}
-              sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
+              sessionId={activeSessionId || undefined}
               className="h-full"
             />
           </div>
@@ -889,7 +914,7 @@ export function ExplorePage() {
               missions={state.missions}
               recommendation={state.recommendationNote}
               projectName={cleanProjectName}
-              sessionId={activeSessionId || getCurrentSessionId() || initialSessionId || undefined}
+              sessionId={activeSessionId || undefined}
               projectId={resolvedProjectId || getCurrentProjectId() || undefined}
               isBasicChecks={state.aiSynthesisFailed}
               onRetry={() => handleSubmit({ rawInput: state.url || initialUrl || "", url: state.url || initialUrl, goal: null })}

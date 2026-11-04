@@ -22,15 +22,23 @@ import type { ServerMessage, ViewportTruth } from "@/lib/viewport/truth";
 
 type ViewportState =
   | "connecting"
+  | "loading"
   | "observing"
   | "navigating"
   | "executing"
   | "verifying"
+  | "validating_page"
+  | "discovering"
+  | "analyzing"
+  | "planning"
+  | "ready"
+  | "completed"
   | "paused"
   | "user_control"
   | "resuming"
   | "failed"
-  | "disconnected";
+  | "disconnected"
+  | string;
 
 export type ConnectionHop =
   | "worker_started"
@@ -86,18 +94,50 @@ interface LiveViewportProps {
   platformWakeMessage?: string | null;
 }
 
-const stateConfig: Record<ViewportState, { label: string; color: string; icon: string }> = {
+interface StateDisplayConfig {
+  label: string;
+  color: string;
+  icon: string;
+}
+
+const DEFAULT_STATE_CONFIG: StateDisplayConfig = {
+  label: "Observing",
+  color: "bg-primary",
+  icon: "visibility",
+};
+
+const stateConfig: Record<string, StateDisplayConfig> = {
   connecting: { label: "Connecting...", color: "bg-muted-foreground/50", icon: "sync" },
+  loading: { label: "Loading site...", color: "bg-primary", icon: "sync" },
   observing: { label: "Observing", color: "bg-primary", icon: "visibility" },
   navigating: { label: "Navigating", color: "bg-blue-500", icon: "open_in_new" },
   executing: { label: "Executing", color: "bg-primary", icon: "play_arrow" },
   verifying: { label: "Verifying", color: "bg-emerald-500", icon: "check_circle" },
+  validating_page: { label: "Validating...", color: "bg-blue-500", icon: "search" },
+  discovering: { label: "Discovering...", color: "bg-primary", icon: "explore" },
+  analyzing: { label: "Analyzing...", color: "bg-primary", icon: "auto_awesome" },
+  planning: { label: "Planning...", color: "bg-primary", icon: "psychology" },
+  ready: { label: "Ready", color: "bg-emerald-500", icon: "check_circle" },
+  completed: { label: "Completed", color: "bg-emerald-500", icon: "check_circle" },
   paused: { label: "Paused", color: "bg-amber-500", icon: "pause_circle" },
   user_control: { label: "You have control", color: "bg-amber-500", icon: "person" },
   resuming: { label: "Resuming", color: "bg-primary", icon: "play_circle" },
   failed: { label: "Failed", color: "bg-destructive", icon: "error" },
   disconnected: { label: "Disconnected", color: "bg-muted-foreground/30", icon: "wifi_off" },
 };
+
+function resolveViewportStateConfig(rawState: string | undefined | null): StateDisplayConfig {
+  if (!rawState) return DEFAULT_STATE_CONFIG;
+  const key = String(rawState).toLowerCase().trim();
+  const found = stateConfig[key];
+  if (found) return found;
+
+  return {
+    label: key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, " "),
+    color: "bg-primary",
+    icon: "visibility",
+  };
+}
 
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -306,7 +346,7 @@ export function LiveViewport({
               !isConfirmedHuman(truthRef.current) &&
               truthRef.current.control !== "paused"
             ) {
-              setState(msg.state as ViewportState);
+              setState(String(msg.state).toLowerCase());
             }
             return;
           }
@@ -348,7 +388,7 @@ export function LiveViewport({
 
           if (msg.type === "state") {
             if (msg.checkpoint !== undefined) setCheckpoint(msg.checkpoint);
-            if (msg.state) setState(msg.state as ViewportState);
+            if (msg.state) setState(String(msg.state).toLowerCase());
             if (msg.url) setUrl(msg.url);
             if (msg.title) setTitle(msg.title);
             if (msg.cursor) setCursor(msg.cursor);
@@ -580,7 +620,7 @@ export function LiveViewport({
     };
   }, [isHumanControlled, sendInput]);
 
-  const config = stateConfig[state];
+  const config = resolveViewportStateConfig(state);
   const cursorPct = cursor
     ? {
         left: `${(cursor.x / BROWSER_VIEWPORT.width) * 100}%`,
@@ -593,8 +633,8 @@ export function LiveViewport({
       {/* Browser toolbar (hidden when embedded in an existing browser frame) */}
       {!hideHeader && (
         <div className="flex items-center gap-2 px-3 py-1.5 bg-background/95 border-b border-border">
-          <div className={cn("h-2 w-2 rounded-full", config.color, state === "observing" || state === "executing" ? "animate-pulse" : "")} />
-          <MaterialIcon name={config.icon} className="h-3.5 w-3.5 text-muted-foreground" />
+          <div className={cn("h-2 w-2 rounded-full", config?.color || "bg-primary", state === "observing" || state === "executing" || state === "loading" ? "animate-pulse" : "")} />
+          <MaterialIcon name={config?.icon || "visibility"} className="h-3.5 w-3.5 text-muted-foreground" />
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -770,8 +810,8 @@ export function LiveViewport({
 
         {/* State overlay */}
         <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded bg-background/80 backdrop-blur-sm border border-border/50">
-          <div className={cn("h-1.5 w-1.5 rounded-full", config.color, "animate-pulse")} />
-          <span className="text-caption font-medium">{config.label}</span>
+          <div className={cn("h-1.5 w-1.5 rounded-full", config?.color || "bg-primary", "animate-pulse")} />
+          <span className="text-caption font-medium">{config?.label || "Active"}</span>
         </div>
 
         {/* Measured pending requests or platform wake overlay */}
