@@ -174,8 +174,8 @@ export function AgentBrowserViewport({
         ) : (
           <div className="absolute inset-0 flex items-center justify-center p-6">
             {platformWakeMessage ? (
-              <div className="flex flex-col items-center text-center max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 backdrop-blur-xs text-amber-200">
-                <MaterialIcon name="bolt" size={32} className="text-amber-400 mb-2 animate-pulse" />
+              <div className="flex flex-col items-center text-center max-w-sm rounded-xl border border-amber-500/30 bg-amber-500/10 p-5 backdrop-blur-xs text-amber-900 dark:text-amber-200">
+                <MaterialIcon name="bolt" size={32} className="text-amber-600 dark:text-amber-400 mb-2 animate-pulse" />
                 <p className="text-body font-medium text-foreground mb-1">
                   {platformWakeMessage}
                 </p>

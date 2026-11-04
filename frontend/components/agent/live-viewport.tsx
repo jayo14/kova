@@ -809,22 +809,22 @@ export function LiveViewport({
         )}
 
         {/* State overlay */}
-        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded bg-background/80 backdrop-blur-sm border border-border/50">
+        <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-background/90 backdrop-blur-md border border-border/60 shadow-xs">
           <div className={cn("h-1.5 w-1.5 rounded-full", config?.color || "bg-primary", "animate-pulse")} />
-          <span className="text-caption font-medium">{config?.label || "Active"}</span>
+          <span className="text-caption font-medium text-foreground">{config?.label || "Active"}</span>
         </div>
 
         {/* Measured pending requests or platform wake overlay */}
         {hasReceivedFrame && activePendingMessage && (
-          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded bg-background/90 backdrop-blur-sm border border-blue-500/40 text-blue-300 text-caption font-mono shadow-sm">
-            <MaterialIcon name="hourglass_top" size={12} className="text-blue-400 animate-spin" />
-            <span>{activePendingMessage}</span>
+          <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-blue-500/10 dark:bg-blue-950/60 backdrop-blur-md border border-blue-500/30 text-blue-900 dark:text-blue-200 text-caption font-mono shadow-xs">
+            <MaterialIcon name="hourglass_top" size={13} className="text-blue-600 dark:text-blue-400 animate-spin shrink-0" />
+            <span className="font-medium">{activePendingMessage}</span>
           </div>
         )}
         {hasReceivedFrame && activePlatformWakeMessage && !activePendingMessage && (
-          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded bg-background/90 backdrop-blur-sm border border-amber-500/40 text-amber-300 text-caption shadow-sm">
-            <MaterialIcon name="bolt" size={12} className="text-amber-400 animate-pulse" />
-            <span>{activePlatformWakeMessage}</span>
+          <div className="absolute top-2.5 right-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500/10 dark:bg-amber-950/60 backdrop-blur-md border border-amber-500/30 text-amber-900 dark:text-amber-200 text-caption shadow-xs">
+            <MaterialIcon name="bolt" size={13} className="text-amber-600 dark:text-amber-400 animate-pulse shrink-0" />
+            <span className="font-medium">{activePlatformWakeMessage}</span>
           </div>
         )}
 
@@ -840,24 +840,26 @@ export function LiveViewport({
 
         {/* Checkpoint banner */}
         {checkpoint && (
-          <div className="absolute top-10 left-3 right-3 z-30 flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-950/90 border border-amber-500/50 text-amber-200 backdrop-blur-md shadow-xl animate-in fade-in slide-in-from-top-2 duration-200">
+          <div className="absolute top-10 left-3 right-3 z-30 flex items-center justify-between gap-3 p-3 rounded-lg bg-card/95 border border-amber-500/40 text-foreground backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-top-2 duration-200">
             <div className="flex items-center gap-2.5 min-w-0">
-              <MaterialIcon name="security" className="w-5 h-5 text-amber-400 shrink-0" />
-              <div className="text-xs">
-                <p className="font-semibold text-amber-100">Verification Barrier Encountered</p>
-                <p className="text-amber-200/80 truncate">{checkpoint.description || "Human intervention required"}</p>
+              <div className="w-8 h-8 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <MaterialIcon name="security" className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div className="text-xs min-w-0">
+                <p className="font-semibold text-amber-900 dark:text-amber-200">Verification Barrier Encountered</p>
+                <p className="text-muted-foreground truncate">{checkpoint.description || "Human intervention required"}</p>
               </div>
             </div>
             {!isHumanControlled ? (
               <button
                 type="button"
                 onClick={handleTakeoverAccept}
-                className="px-3 py-1 bg-amber-500 hover:bg-amber-600 text-neutral-950 font-medium text-xs rounded-md shrink-0 transition-colors cursor-pointer"
+                className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-md shrink-0 transition-colors shadow-xs cursor-pointer"
               >
                 Solve in Browser
               </button>
             ) : (
-              <span className="text-[11px] font-mono text-amber-300/80 px-2 py-0.5 rounded border border-amber-400/30">
+              <span className="text-[11px] font-mono text-amber-800 dark:text-amber-300 px-2.5 py-1 rounded-md border border-amber-500/30 bg-amber-500/10">
                 Solving Challenge...
               </span>
             )}
@@ -866,9 +868,9 @@ export function LiveViewport({
 
         {/* Server-confirmed handoff in progress (not yet human control) */}
         {handoffPending && !checkpoint && (
-          <div className="absolute top-10 left-3 right-3 z-30 flex items-center gap-2 p-2.5 rounded-lg bg-background/90 border border-border text-caption text-muted-foreground backdrop-blur-md shadow-lg">
-            <MaterialIcon name="sync" size={16} className="animate-spin text-primary shrink-0" />
-            <span>Waiting for the server to confirm the control handoff…</span>
+          <div className="absolute top-2.5 inset-x-0 mx-auto w-fit z-20 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-background/95 border border-border text-caption font-medium text-foreground backdrop-blur-md shadow-md animate-in fade-in duration-200">
+            <MaterialIcon name="sync" size={14} className="animate-spin text-primary shrink-0" />
+            <span>Confirming control handoff with server…</span>
           </div>
         )}
 
@@ -876,30 +878,42 @@ export function LiveViewport({
         {hasReceivedFrame && maskingInfo.tone !== "protected" && (
           <div
             className={cn(
-              "absolute bottom-2 left-2 z-30 flex items-center gap-1.5 px-2 py-1 rounded border text-caption backdrop-blur-sm",
+              "absolute bottom-2.5 left-2.5 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-caption font-medium backdrop-blur-md shadow-xs transition-all",
               maskingInfo.tone === "exposed"
-                ? "bg-destructive/85 border-destructive text-destructive-foreground"
-                : "bg-background/85 border-border text-amber-200"
+                ? "bg-destructive/15 border-destructive/40 text-destructive dark:text-red-300"
+                : "bg-amber-500/15 dark:bg-amber-950/70 border-amber-500/40 text-amber-900 dark:text-amber-200"
             )}
           >
-            <MaterialIcon name={maskingInfo.tone === "exposed" ? "visibility" : "help"} size={13} />
+            <MaterialIcon
+              name={maskingInfo.tone === "exposed" ? "visibility" : "help_outline"}
+              size={13}
+              className={maskingInfo.tone === "exposed" ? "text-destructive dark:text-red-300" : "text-amber-700 dark:text-amber-400"}
+            />
             <span>{maskingInfo.label}</span>
           </div>
         )}
 
         {/* Stale-frame overlay: the last painted frame is old */}
         {hasReceivedFrame && frameStale && state !== "disconnected" && state !== "failed" && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/30 pointer-events-none">
-            <div className="rounded-md bg-background/90 border border-amber-500/50 px-3 py-1.5 text-caption text-amber-200 shadow-lg">
-              Frame is {Math.round((frameAge ?? 0) / 1000)}s old — waiting for the browser
-            </div>
+          <div className="absolute top-2.5 inset-x-0 mx-auto w-fit z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 dark:bg-amber-950/80 border border-amber-500/40 text-amber-900 dark:text-amber-200 text-caption font-medium shadow-md backdrop-blur-md pointer-events-none animate-in fade-in duration-200">
+            <MaterialIcon name="sync" size={13} className="text-amber-600 dark:text-amber-400 animate-spin shrink-0" />
+            <span>Frame is {Math.round((frameAge ?? 0) / 1000)}s old — waiting for browser</span>
           </div>
         )}
 
         {/* Takeover error notification */}
         {takeoverError && (
-          <div className="absolute top-10 left-3 right-3 z-30 p-2.5 rounded-lg bg-destructive/90 border border-destructive text-destructive-foreground text-xs shadow-lg animate-in fade-in duration-200">
-            {takeoverError}
+          <div className="absolute top-2.5 right-2.5 z-30 flex items-center gap-2 max-w-sm px-3 py-1.5 rounded-md bg-destructive/15 dark:bg-destructive/25 border border-destructive/40 text-destructive dark:text-red-300 text-xs font-medium shadow-md backdrop-blur-md animate-in fade-in slide-in-from-top-1 duration-200">
+            <MaterialIcon name="error_outline" size={14} className="shrink-0 text-destructive dark:text-red-300" />
+            <span className="truncate flex-1">{takeoverError}</span>
+            <button
+              type="button"
+              onClick={() => setTruth((t) => ({ ...t, handoffError: null }))}
+              className="ml-1 text-destructive/70 hover:text-destructive dark:text-red-300/70 dark:hover:text-red-200 shrink-0 cursor-pointer"
+              aria-label="Dismiss notification"
+            >
+              <MaterialIcon name="close" size={12} />
+            </button>
           </div>
         )}
 
