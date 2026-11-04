@@ -133,7 +133,7 @@ class FakeProvider:
         self.proposals = proposals
         self.calls = 0
 
-    async def generate_structured(self, system: str, prompt: str, schema):
+    async def generate_structured(self, system: str, prompt: str, schema, *args, **kwargs):
         self.calls += 1
         if not self.proposals:
             return None
