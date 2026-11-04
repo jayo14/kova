@@ -17,6 +17,9 @@ class ExplorationAction(str, Enum):
     CLICK_CONTROL = "click_control"
     OPEN_MENU_OR_TAB = "open_menu_or_tab"
     EXPAND_ACCORDION = "expand_accordion"
+    FILL_INPUTS = "fill_inputs"
+    SUBMIT_FORM = "submit_form"
+    AUTHENTICATE = "authenticate"
     SCROLL_TO_LOAD_MORE = "scroll_to_load_more"
     GO_BACK = "go_back"
 
@@ -25,6 +28,12 @@ CLICK_ACTIONS = {
     ExplorationAction.CLICK_CONTROL,
     ExplorationAction.OPEN_MENU_OR_TAB,
     ExplorationAction.EXPAND_ACCORDION,
+}
+
+FORM_ACTIONS = {
+    ExplorationAction.FILL_INPUTS,
+    ExplorationAction.SUBMIT_FORM,
+    ExplorationAction.AUTHENTICATE,
 }
 
 

@@ -11,10 +11,11 @@ DANGEROUS_PATTERNS = [
     r"\b(pay|payment|checkout|purchase|buy|subscribe|charge)\b",
     r"\b(upgrade|downgrade)\s+(plan|subscription)\b",
     r"\b(add|update|change)\s+(payment|card)\b",
-    # Outbound communication and irreversible submission.
+    # Outbound communication and irreversible submissions.
     r"\b(send|compose|reply|forward|share)\b.*\b(message|email|sms|invite)\b",
     r"\b(message|email)\s+(us|them|him|her|support|team|seller)\b",
-    r"\b(submit|place\s+order)\b",
+    r"\bplace\s+order\b",
+    r"\b(confirm|complete)\s+(purchase|order|payment)\b",
     r"\bapply\s+(now|for\s+(this\s+)?(job|position|role))\b",
     # Session and subscription teardown.
     r"\b(log\s?out|sign\s?out|signout)\b",
@@ -40,12 +41,5 @@ def is_dangerous_control(text: str | None, attributes: dict | None = None) -> bo
 
 
 def is_safe_to_click(text: str | None, attributes: dict | None = None) -> bool:
-    # Exploration is read-only by default
-    if is_dangerous_control(text, attributes):
-        return False
-    # Also block explicit submit buttons in forms
-    if attributes:
-        t = str(attributes.get("type", "")).lower()
-        if t == "submit":
-            return False
-    return True
+    # Exploration blocks destructive, financial, and session-destroying actions
+    return not is_dangerous_control(text, attributes)
