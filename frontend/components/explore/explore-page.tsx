@@ -694,7 +694,17 @@ export function ExplorePage() {
               state.error.includes("Internal Server Error") ||
               state.error.includes("ProgrammingError") ||
               state.error.includes("Could not reach the server") ||
-              state.error.includes("Failed to fetch"))
+              state.error.includes("Failed to fetch") ||
+              state.error.includes("QUEUE_UNAVAILABLE") ||
+              state.error.includes("REDIS_UNAVAILABLE") ||
+              state.error.includes("DISPATCH_TIMEOUT") ||
+              state.error.includes("NO_WORKER") ||
+              state.error.includes("worker_lost") ||
+              state.error.includes("Celery") ||
+              state.error.includes("Redis") ||
+              state.error.includes("worker") ||
+              state.error.includes("queue") ||
+              state.error.includes("timeout"))
         );
 
         return (

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Bricolage_Grotesque, Instrument_Serif, DM_Sans, DM_Mono } from "next/font/google";
+import { DegradedBanner } from "@/components/shared/degraded-banner";
 import "./globals.css";
 
 const bricolage = Bricolage_Grotesque({
@@ -99,6 +100,7 @@ export default function RootLayout({
         />
       </head>
       <body suppressHydrationWarning className="min-h-full flex flex-col bg-background text-foreground font-sans">
+        <DegradedBanner />
         {children}
       </body>
     </html>

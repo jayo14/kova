@@ -639,7 +639,7 @@ export function mapExecutionEvents(events: ExecutionEvent[]): ActivityItem[] {
 
       return {
         ...item,
-        status: "completed",
+        status: "completed" as const,
         label: pastLabel,
         icon: item.icon === "progress_activity" || !item.icon ? "check_circle" : item.icon,
       };

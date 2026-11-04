@@ -4,16 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Badge } from "@/components/ui/badge";
-
-interface SystemHealth {
-  status: string;
-  service: string;
-  version: string;
-  environment: string;
-}
+import { checkBackendReadiness, type ReadyCheckResponse } from "@/lib/api/health";
 
 export default function StatusPage() {
-  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const [readyInfo, setReadyInfo] = useState<ReadyCheckResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastChecked, setLastChecked] = useState<Date>(new Date());
 
@@ -21,15 +15,10 @@ export default function StatusPage() {
     async function checkHealth() {
       setLoading(true);
       try {
-        const res = await fetch("http://localhost:8000/api/v1/health");
-        if (res.ok) {
-          const data = await res.json();
-          setHealth(data);
-        } else {
-          setHealth(null);
-        }
+        const data = await checkBackendReadiness(5000);
+        setReadyInfo(data);
       } catch {
-        setHealth(null);
+        setReadyInfo(null);
       } finally {
         setLoading(false);
         setLastChecked(new Date());
@@ -41,15 +30,45 @@ export default function StatusPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const isHealthy = health?.status === "ok";
+  const isHealthy = readyInfo?.status === "ok";
+
+  const workerStatus = readyInfo?.worker?.status === "WORKER_ALIVE"
+    ? `Operational (${readyInfo.worker.count} active)`
+    : readyInfo?.worker?.status === "NO_WORKER"
+    ? "No Workers Running"
+    : readyInfo?.worker?.status === "UNKNOWN"
+    ? "Unknown (Redis Unreachable)"
+    : "Degraded";
+
+  const workerOperational = readyInfo?.worker?.status === "WORKER_ALIVE";
+  const redisOperational = readyInfo?.redis?.status === "ok";
+  const postgresOperational = readyInfo?.postgres?.status === "ok";
 
   const components = [
-    { name: "Continuous Validation API", status: isHealthy ? "Operational" : "Degraded", latency: "42ms" },
-    { name: "Autonomous Execution Workers", status: isHealthy ? "Operational" : "Operational", latency: "115ms" },
-    { name: "PostgreSQL Database Cluster", status: "Operational", latency: "2ms" },
-    { name: "Redis Distributed Rate Limiter", status: "Operational", latency: "1ms" },
-    { name: "Evidence Storage (S3 / MinIO)", status: "Operational", latency: "65ms" },
-    { name: "Stripe Webhooks & Billing Engine", status: "Operational", latency: "88ms" },
+    {
+      name: "Autonomous Execution Workers",
+      status: workerStatus,
+      operational: workerOperational,
+      latency: "115ms",
+      details: readyInfo?.worker?.message,
+    },
+    {
+      name: "Redis Distributed Broker & Lock Store",
+      status: redisOperational ? `Operational (TLS: ${readyInfo?.redis?.tls_mode || "default"})` : "Unreachable",
+      operational: redisOperational,
+      latency: "1ms",
+      details: readyInfo?.redis?.error,
+    },
+    {
+      name: "PostgreSQL Database Cluster",
+      status: postgresOperational ? "Operational" : "Unreachable",
+      operational: postgresOperational,
+      latency: "2ms",
+      details: readyInfo?.postgres?.error,
+    },
+    { name: "Continuous Validation API", status: isHealthy ? "Operational" : "Degraded", operational: isHealthy, latency: "42ms" },
+    { name: "Evidence Storage (S3 / MinIO)", status: "Operational", operational: true, latency: "65ms" },
+    { name: "Stripe Webhooks & Billing Engine", status: "Operational", operational: true, latency: "88ms" },
   ];
 
   return (
@@ -87,7 +106,7 @@ export default function StatusPage() {
             />
             <div>
               <div className="text-lg font-bold">
-                {isHealthy ? "All Systems Operational" : "Service Disruption Detected"}
+                {isHealthy ? "All Systems Operational" : "Service Degraded"}
               </div>
               <div className="text-xs text-muted-foreground">
                 Last checked: {lastChecked.toLocaleTimeString()} (auto-refreshes every 30s)
@@ -105,11 +124,26 @@ export default function StatusPage() {
           <div className="divide-y divide-border/40">
             {components.map((comp) => (
               <div key={comp.name} className="py-3 flex items-center justify-between text-sm">
-                <span className="font-medium text-foreground">{comp.name}</span>
+                <div>
+                  <span className="font-medium text-foreground">{comp.name}</span>
+                  {comp.details && !comp.operational && (
+                    <p className="text-xs text-destructive mt-0.5">{comp.details}</p>
+                  )}
+                </div>
                 <div className="flex items-center gap-4">
                   <span className="text-xs font-mono text-muted-foreground">{comp.latency}</span>
-                  <span className="inline-flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-xs font-medium ${
+                      comp.operational
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-amber-600 dark:text-amber-400"
+                    }`}
+                  >
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        comp.operational ? "bg-emerald-500" : "bg-amber-500"
+                      }`}
+                    />
                     {comp.status}
                   </span>
                 </div>

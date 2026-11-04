@@ -189,13 +189,24 @@ async def cors_exception_middleware(request: Request, call_next):
                 content={"detail": exc.detail},
                 headers=headers,
             )
-        # Never log raw sensitive exception details in production
         exc_msg = "[hidden in production]" if settings.is_production else redact(str(exc))
         logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc_msg)
         headers = _cors_headers_for_request(request)
+        error_code = "INTERNAL_SERVER_ERROR"
+        detail = "An internal server error occurred."
+        retry_hint = "Please retry your request."
+        exc_str = str(exc).lower()
+        if "redis" in exc_str or "connection closed by peer" in exc_str:
+            error_code = "REDIS_UNAVAILABLE"
+            detail = "Redis service is currently unreachable."
+            retry_hint = "Retry after a few seconds or verify Redis connectivity."
+        elif "celery" in exc_str or "broker" in exc_str or "queue" in exc_str:
+            error_code = "QUEUE_UNAVAILABLE"
+            detail = "Task queue is currently unavailable."
+            retry_hint = "Wait a moment while the queue reconnects and retry."
         return JSONResponse(
             status_code=500,
-            content={"detail": "Internal server error" if settings.is_production else str(exc)},
+            content={"error_code": error_code, "detail": detail, "retry_hint": retry_hint},
             headers=headers,
         )
 
@@ -203,9 +214,24 @@ async def cors_exception_middleware(request: Request, call_next):
 @app.exception_handler(500)
 async def server_error_handler(request: Request, exc: Exception):
     headers = _cors_headers_for_request(request)
+    error_code = "INTERNAL_SERVER_ERROR"
+    detail = "An internal server error occurred."
+    retry_hint = "Please retry your request."
+
+    exc_str = str(exc).lower()
+    from app.engine.execution.control import RedisUnavailableError
+    if isinstance(exc, RedisUnavailableError) or "redis" in exc_str or "connection closed by peer" in exc_str:
+        error_code = "REDIS_UNAVAILABLE"
+        detail = "Redis service is currently unreachable."
+        retry_hint = "Retry after a few seconds or verify Redis connectivity."
+    elif "celery" in exc_str or "broker" in exc_str or "queue" in exc_str:
+        error_code = "QUEUE_UNAVAILABLE"
+        detail = "Task queue is currently unavailable."
+        retry_hint = "Wait a moment while the queue reconnects and retry."
+
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error" if settings.is_production else str(exc)},
+        content={"error_code": error_code, "detail": detail, "retry_hint": retry_hint},
         headers=headers,
     )
 
@@ -235,7 +261,7 @@ async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
     if (
         path.startswith("/health")
-        or path in ("/api/v1/health", "/api/v1/health/ready", "/", "/docs", "/openapi.json", "/redoc", "/metrics")
+        or path in ("/ready", "/api/v1/health", "/api/v1/health/ready", "/", "/docs", "/openapi.json", "/redoc", "/metrics")
         or path.startswith("/api/v1/ci")
     ):
         return await call_next(request)
@@ -313,63 +339,62 @@ async def liveness():
     }
 
 
+@app.get("/ready")
 @app.get("/health/ready")
 @app.get("/api/v1/health/ready")
 async def readiness():
-    """Report readiness only when dependencies are reachable, reporting live integration status."""
+    """Report readiness telemetry: Postgres, Redis with TLS mode, and worker status."""
+    pg_ok = True
+    pg_error = None
     try:
         async with engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
-        redis = Redis.from_url(
-            settings.REDIS_URL,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-            ssl_cert_reqs="none" if str(settings.REDIS_URL).startswith("rediss://") else None,
-        )
-        try:
-            await redis.ping()
-        finally:
-            await redis.aclose()
-        from app.workers.celery_app import celery_app
-
-        inspector = celery_app.control.inspect(timeout=1)
-        workers = await asyncio.to_thread(inspector.ping) if inspector else None
-        if not workers:
-            raise RuntimeError("No execution workers are available")
     except Exception as e:
-        raise HTTPException(status_code=503, detail="Service dependencies unavailable")
+        pg_ok = False
+        pg_error = str(e)
 
-    from app.modules.billing.stripe_client import StripeClient
-    from app.modules.email.service import EmailService
+    redis_ok = True
+    redis_error = None
+    from app.core.redis_tls import redispy_ssl_kwargs, _mode
+    tls_mode = _mode()
+    try:
+        from redis.asyncio import Redis as AsyncRedis
+        r_kwargs: dict[str, object] = {"socket_connect_timeout": 2.0, "socket_timeout": 2.0}
+        if str(settings.REDIS_URL).startswith("rediss://"):
+            r_kwargs.update(redispy_ssl_kwargs())
+        r = AsyncRedis.from_url(settings.REDIS_URL, **r_kwargs)
+        try:
+            await r.ping()
+        finally:
+            await r.aclose()
+    except Exception as e:
+        redis_ok = False
+        redis_error = str(e)
 
-    stripe_live = StripeClient().is_configured()
-    stripe_webhook_live = bool(settings.STRIPE_WEBHOOK_SECRET and settings.STRIPE_WEBHOOK_SECRET != "mock_secret")
-    ses_live = EmailService().is_configured
+    from app.engine.worker_liveness import get_queued_status_payload, WorkerStatus
+    worker_info = await get_queued_status_payload()
+    worker_status_val = worker_info["status"]
+    worker_count = worker_info["worker_count"] or 0
+    worker_alive = worker_info["worker_alive"] is True
 
-    integrations = {
-        "database": True,
-        "redis": True,
-        "celery": True,
-        "stripe": stripe_live,
-        "stripe_webhook": stripe_webhook_live,
-        "ses": ses_live,
-    }
-
-    if settings.is_production:
-        missing = []
-        if not stripe_live:
-            missing.append("stripe")
-        if not stripe_webhook_live:
-            missing.append("stripe_webhook")
-        if not ses_live:
-            missing.append("ses")
-        if missing:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Production readiness failed: missing required integrations ({', '.join(missing)})",
-            )
+    is_healthy = pg_ok and redis_ok and worker_status_val == WorkerStatus.WORKER_ALIVE.value
+    overall_status = "ok" if is_healthy else "degraded"
 
     return {
-        "status": "ready",
-        "integrations": integrations,
+        "status": overall_status,
+        "postgres": {
+            "status": "ok" if pg_ok else "unreachable",
+            "error": pg_error,
+        },
+        "redis": {
+            "status": "ok" if redis_ok else "unreachable",
+            "tls_mode": tls_mode,
+            "error": redis_error,
+        },
+        "worker": {
+            "status": worker_status_val,
+            "count": worker_count,
+            "message": worker_info["message"],
+            "queue_backlog": worker_info.get("queue_backlog"),
+        },
     }
