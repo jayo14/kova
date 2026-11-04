@@ -20,21 +20,13 @@ logger = logging.getLogger(__name__)
 
 # Kova stores all task progress, states, events, and discoveries directly in
 # PostgreSQL and streams them via Redis pub/sub. Celery's result backend is
-# entirely unneeded and its async pub/sub consumer permanently crashes the
-# Celery application with "Retry limit exceeded while trying to reconnect to
-# the Celery result store backend" if Redis drops connections for > 20s.
-# We disable the result backend by default (backend=None).
-result_backend = None
-if settings.ENABLE_CELERY_RESULT_BACKEND and settings.CELERY_RESULT_BACKEND:
-    result_backend = str(settings.CELERY_RESULT_BACKEND).strip() or None
-
+# entirely unneeded and removed from the Celery configuration.
 celery_app = Celery(
     "kova",
     broker=settings.CELERY_BROKER_URL,
-    backend=result_backend,
+    backend=None,
 )
-if not result_backend:
-    celery_app.backend_cls = "disabled"
+celery_app.backend_cls = "disabled"
 
 
 def _get_ssl_config(url: str | None) -> dict | None:
@@ -47,6 +39,7 @@ q_prefix = settings.CELERY_QUEUE_PREFIX
 default_queue = f"{q_prefix}kova-free"
 
 celery_app.conf.update(
+    result_backend=None,
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
@@ -57,14 +50,6 @@ celery_app.conf.update(
     task_ignore_result=True,
     task_store_errors_even_if_ignored=False,
     worker_prefetch_multiplier=1,
-    result_backend_transport_options={
-        "retry_on_timeout": True,
-        "socket_timeout": 30.0,
-        "socket_connect_timeout": 30.0,
-        "socket_keepalive": True,
-        "health_check_interval": 30,
-        "max_retries": None,
-    },
     broker_transport_options={
         "retry_on_timeout": True,
         "socket_timeout": 30.0,
@@ -87,7 +72,6 @@ celery_app.conf.update(
         Queue(f"{q_prefix}kova-enterprise", Exchange(f"{q_prefix}kova-enterprise", type="direct"), routing_key=f"{q_prefix}kova-enterprise"),
     ],
     broker_use_ssl=_get_ssl_config(str(settings.CELERY_BROKER_URL)),
-    redis_backend_use_ssl=_get_ssl_config(str(settings.CELERY_RESULT_BACKEND)),
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])
