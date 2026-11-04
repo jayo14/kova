@@ -40,9 +40,18 @@ cleanup() {
 trap cleanup INT TERM EXIT
 
 # Start Celery worker in its own process group with concurrency 1
-setsid .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 &
+WORKER_LOG="/tmp/worker.log"
+> "$WORKER_LOG"
+setsid .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --concurrency=1 > "$WORKER_LOG" 2>&1 &
 CELERY_PID=$!
-echo "Celery worker started (PID $CELERY_PID, concurrency 1)"
+echo "Celery worker started (PID $CELERY_PID, concurrency 1, logs: $WORKER_LOG)"
+
+# Verify worker process is alive
+sleep 2
+if ! kill -0 "$CELERY_PID" 2>/dev/null; then
+    echo "ERROR: Celery worker failed to start. Last logs from $WORKER_LOG:" >&2
+    tail -n 25 "$WORKER_LOG" >&2 || true
+fi
 
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 > /tmp/api.log 2>&1 &
 UVICORN_PID=$!
