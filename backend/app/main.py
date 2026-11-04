@@ -356,11 +356,12 @@ async def readiness():
     redis_ok = True
     redis_error = None
     from app.core.redis_tls import redispy_ssl_kwargs, _mode
-    tls_mode = _mode()
+    is_tls = str(settings.REDIS_URL).startswith("rediss://")
+    tls_mode = _mode() if is_tls else "disabled (internal private network)"
     try:
         from redis.asyncio import Redis as AsyncRedis
         r_kwargs: dict[str, object] = {"socket_connect_timeout": 2.0, "socket_timeout": 2.0}
-        if str(settings.REDIS_URL).startswith("rediss://"):
+        if is_tls:
             r_kwargs.update(redispy_ssl_kwargs())
         r = AsyncRedis.from_url(settings.REDIS_URL, **r_kwargs)
         try:

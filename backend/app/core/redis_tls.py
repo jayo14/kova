@@ -33,6 +33,10 @@ def _ca_certs_path() -> str | None:
     candidate = os.path.join(base_dir, ca_path.lstrip("./"))
     if os.path.exists(candidate):
         return candidate
+    repo_root = os.path.dirname(base_dir)
+    root_candidate = os.path.join(repo_root, ca_path.lstrip("./"))
+    if os.path.exists(root_candidate):
+        return root_candidate
     return ca_path
 
 
