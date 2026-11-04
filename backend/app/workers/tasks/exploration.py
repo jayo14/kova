@@ -132,6 +132,29 @@ async def _run_exploration_async(
                     selected_role = item.get("selected_role") or selected_role
                 elif kind in ("continue_anyway", "allow_invalid_target") or item.get("allow_invalid_target"):
                     allow_invalid_target = True
+
+            # If no pending user-submitted credentials, auto-load stored project credentials
+            credential_id = None
+            if credential is None and session.project_id:
+                try:
+                    from app.modules.credentials.repository import CredentialRepository
+                    from app.modules.credentials.crypto import decrypt_credential, is_encrypted_credential
+                    cred_repo = CredentialRepository(db)
+                    proj_creds = await cred_repo.list_by_project(session.project_id)
+                    if proj_creds:
+                        chosen_cred = proj_creds[0]
+                        credential_id = chosen_cred.id
+                        raw_pwd = chosen_cred.password
+                        pwd = decrypt_credential(raw_pwd) if is_encrypted_credential(raw_pwd) else raw_pwd
+                        credential = {
+                            "email": chosen_cred.email,
+                            "password": pwd,
+                            "name": chosen_cred.name or "Kova Tester",
+                        }
+                        create_account = False
+                        logger.info("Auto-loaded stored credential for project %s (%s)", session.project_id, chosen_cred.email)
+                except Exception as cred_err:
+                    logger.warning("Failed to auto-load project credentials for %s: %s", session.project_id, cred_err)
     
             event_count = 0
             emit_lock = asyncio.Lock()
@@ -246,7 +269,7 @@ async def _run_exploration_async(
                 url=session.url,
                 goal=session.goal,
                 event_emitter=event_emitter,
-                credential_id=None,
+                credential_id=credential_id,
                 project_id=session.project_id,
                 db_session=db,
                 allow_invalid_target=allow_invalid_target,
