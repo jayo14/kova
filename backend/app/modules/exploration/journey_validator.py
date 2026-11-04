@@ -225,6 +225,34 @@ def validate_missions_against_site_map(
     return kept
 
 
+FLIMSY_ELEMENT_PATTERNS = [
+    r"\b\d+\s+pages\b",
+    r"\bcheck_circle\b",
+    r"\b(article|table_chart|engineering)\s+(cover|weekly|chapter)",
+    r"\b[A-Z][a-z]+\s+[A-Z]\.\s*·",
+    r"\b\d+(\.\d+)?/\d+\s+stars?\b",
+    r"\b(trusted by|reviews? from|stars from)\b",
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
+    r"\b(privacy policy|terms of (service|use))\b",
+]
+
+
+def is_flimsy_landing_element(name: str | None) -> bool:
+    """Detect whether an element is a static marketing card, testimonial, or review."""
+    if not name:
+        return True
+    text = str(name).strip()
+    if len(text) < 3:
+        return True
+    if any(re.search(pat, text, re.I) for pat in FLIMSY_ELEMENT_PATTERNS):
+        return True
+    if text.startswith("Explore ") and any(w in text.lower() for w in ["·", "pages", "cover page", "weekly log", "chapter 3"]):
+        return True
+    if re.search(r"\b[A-Z][a-z]+\s+[A-Z][a-z]+,\s+[A-Z][a-zA-Z\s]+(at|@)\s+[A-Z]", text):
+        return True
+    return False
+
+
 def validate_journey(
     mission: DiscoveredMission,
     capabilities: list[DiscoveredCapability] | None = None,
@@ -264,17 +292,7 @@ def validate_journey(
         ))
 
     # Reject flimsy landing page showcase mockups and testimonials
-    showcase_patterns = [
-        r"\b\d+\s+pages\b",
-        r"\bcheck_circle\b",
-        r"\b(article|table_chart|engineering)\s+(cover|weekly|chapter)",
-        r"\b[A-Z][a-z]+\s+[A-Z]\.\s*·",
-    ]
-    if any(re.search(pat, mission.name or "", re.I) for pat in showcase_patterns) or (
-        mission.name and mission.name.startswith("Explore ") and (
-            any(w in mission.name.lower() for w in ["·", "pages", "cover page", "weekly log", "chapter 3"])
-        )
-    ):
+    if is_flimsy_landing_element(mission.name):
         defects.append(QualityDefect(
             code="FLIMSY_MOCKUP_OR_TESTIMONIAL",
             message="Static landing page showcase mockups or testimonials must not be treated as user journeys",

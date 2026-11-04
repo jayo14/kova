@@ -186,6 +186,13 @@ class ApplicationUnderstanding(BaseModel):
                 if cap.name.lower() == name_or_id.lower():
                     target = cap
                     break
+        if not target:
+            target = self.record_capability(
+                name=name_or_id,
+                user_goal=f"Execute {name_or_id}",
+                state=EpistemicState.CONFIRMED,
+                expected_outcome=outcome,
+            )
         if target:
             target.state = EpistemicState.CONFIRMED
             target.confidence = 0.95

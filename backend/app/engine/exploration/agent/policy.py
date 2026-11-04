@@ -10,10 +10,12 @@ DANGEROUS_PATTERNS = [
     # Money movement.
     r"\b(pay|payment|checkout|purchase|buy|subscribe|charge)\b",
     r"\b(upgrade|downgrade)\s+(plan|subscription)\b",
-    r"\b(add|update|change)\s+(payment|card)\b",
+    r"\b(add|update|change)\s+(payment|credit\s*card|card|billing)\b",
+    r"\bcredit\s*card\b",
     # Outbound communication and irreversible submissions.
     r"\b(send|compose|reply|forward|share)\b.*\b(message|email|sms|invite)\b",
     r"\b(message|email)\s+(us|them|him|her|support|team|seller)\b",
+    r"\binvite\b",
     r"\bplace\s+order\b",
     r"\b(confirm|complete)\s+(purchase|order|payment)\b",
     r"\bapply\s+(now|for\s+(this\s+)?(job|position|role))\b",
