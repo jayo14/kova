@@ -47,6 +47,41 @@ class ControlState(str, enum.Enum):
     UNVERIFIED = "UNVERIFIED"
 
 
+class RedisUnavailableError(RuntimeError):
+    """Raised when Redis is required for multi-process coordination but unavailable."""
+
+    pass
+
+
+_service_degraded: bool = False
+
+
+def is_service_degraded() -> bool:
+    return _service_degraded
+
+
+def mark_service_degraded(degraded: bool = True) -> None:
+    global _service_degraded
+    _service_degraded = degraded
+
+
+def _is_multi_process() -> bool:
+    import os
+
+    if os.getenv("ALLOW_IN_MEMORY_CONTROL", "").lower() in ("true", "1"):
+        return False
+    if os.getenv("KOVA_ROLE") in ("api", "worker", "all"):
+        return True
+    if getattr(settings, "is_production", False):
+        return True
+    if os.getenv("MULTI_PROCESS", "").lower() in ("true", "1"):
+        return True
+    redis_url = str(getattr(settings, "REDIS_URL", ""))
+    if "rediss://" in redis_url or "rumpty" in redis_url:
+        return True
+    return False
+
+
 # Normalize aliases
 CONTROL_ALIASES: dict[str, ControlState] = {
     "agent": ControlState.RUNNING,
@@ -201,10 +236,24 @@ async def _get_redis() -> aioredis.Redis | None:
         _redis_available = True
         return _redis
     except Exception as exc:
-        logger.debug("Redis unavailable for control channel; using in-memory store: %s", exc)
+        if _is_multi_process():
+            mark_service_degraded(True)
+            logger.error("Redis connection failed in multi-process deployment: %s", exc)
+        else:
+            logger.debug("Redis unavailable for control channel; using in-memory store: %s", exc)
         _redis_checked = True
         _redis_available = False
         return None
+
+
+async def _require_redis() -> aioredis.Redis | None:
+    r = await _get_redis()
+    if r is None and _is_multi_process():
+        mark_service_degraded(True)
+        raise RedisUnavailableError(
+            "Redis is unreachable: execution control requires a functional Redis connection in multi-process deployments."
+        )
+    return r
 
 
 _pubsub_redis: aioredis.Redis | None = None
@@ -299,7 +348,7 @@ def _fail_on_healed_key(execution_id: str) -> str:
 
 async def get_control_record(execution_id: str) -> ControlRecord:
     """Retrieve current authoritative control record for execution."""
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             raw = await r.get(_state_key(execution_id))
@@ -307,6 +356,9 @@ async def get_control_record(execution_id: str) -> ControlRecord:
                 data = json.loads(raw)
                 return ControlRecord.from_dict(data)
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis get_control_record failed in multi-process deployment: {e}") from e
             logger.debug("Redis get_control_record failed: %s", e)
 
     # Fallback to memory
@@ -324,12 +376,14 @@ async def save_control_record(record: ControlRecord) -> None:
 
     _memory_records[record.execution_id] = ControlRecord.from_dict(record.to_dict())
 
-
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             await r.set(_state_key(record.execution_id), payload, ex=1800)
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis save_control_record failed in multi-process deployment: {e}") from e
             logger.debug("Redis save_control_record failed: %s", e)
 
 
@@ -754,39 +808,48 @@ async def resolve_human_checkpoint(execution_id: str) -> ControlRecord:
 async def set_cancel_flag(session_id: str, ttl: int = 3600) -> None:
     """Set Redis flag explore:cancel:{id} with TTL 1h (and in-memory fallback)."""
     _memory_cancelled.add(session_id)
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             await r.set(f"explore:cancel:{session_id}", "1", ex=ttl)
             await r.set(_cancelled_key(session_id), "1", ex=ttl)
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis set_cancel_flag failed in multi-process deployment: {e}") from e
             logger.debug("Redis set_cancel_flag failed: %s", e)
 
 
 async def check_cancel_flag(session_id: str) -> bool:
     """Check whether cancellation has been requested via explore:cancel:{id} or control flag."""
-    if session_id in _memory_cancelled:
-        return True
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             val = await r.get(f"explore:cancel:{session_id}")
             if val:
                 return True
             return bool(await r.get(_cancelled_key(session_id)))
-        except Exception:
+        except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis check_cancel_flag failed in multi-process deployment: {e}") from e
             pass
+    if session_id in _memory_cancelled:
+        return True
     return False
 
 
 async def set_project_deleted(project_id: str, ttl: int = 3600) -> None:
     """Set Redis flag project:deleted:{id} with TTL 1h."""
     _memory_project_deleted.add(project_id)
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             await r.set(f"{CONTROL_PREFIX}project:deleted:{project_id}", "1", ex=ttl)
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis set_project_deleted failed in multi-process deployment: {e}") from e
             logger.debug("Redis set_project_deleted failed: %s", e)
 
 
@@ -794,14 +857,17 @@ async def is_project_deleted(project_id: str | None) -> bool:
     """Check whether a project has been marked deleted in Redis or memory."""
     if not project_id:
         return False
-    if project_id in _memory_project_deleted:
-        return True
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             return bool(await r.get(f"{CONTROL_PREFIX}project:deleted:{project_id}"))
-        except Exception:
+        except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis is_project_deleted failed in multi-process deployment: {e}") from e
             pass
+    if project_id in _memory_project_deleted:
+        return True
     return False
 
 
@@ -880,13 +946,16 @@ async def validate_human_interaction(
 
 async def queue_user_input(execution_id: str, input_msg: dict[str, Any]) -> None:
     """Queue human interaction message for the runner to execute."""
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             await r.rpush(_input_key(execution_id), json.dumps(input_msg))
             await r.expire(_input_key(execution_id), 600)
             return
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis queue_user_input failed in multi-process deployment: {e}") from e
             logger.debug("Redis queue_user_input failed: %s", e)
 
     if execution_id not in _memory_inputs:
@@ -896,7 +965,7 @@ async def queue_user_input(execution_id: str, input_msg: dict[str, Any]) -> None
 
 async def queue_worker_input(execution_id: str, input_msg: dict[str, Any]) -> None:
     """Queue a durable worker signal; fail closed if shared Redis is unavailable."""
-    r = await _get_redis()
+    r = await _require_redis()
     if r is None:
         raise RuntimeError("Shared worker control channel is unavailable")
     key = _input_key(execution_id)
@@ -908,7 +977,7 @@ async def get_pending_input(execution_id: str) -> list[dict[str, Any]]:
     """Pop and return all queued human interaction messages."""
     items: list[dict[str, Any]] = []
 
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             key = _input_key(execution_id)
@@ -923,6 +992,9 @@ async def get_pending_input(execution_id: str) -> list[dict[str, Any]]:
             if items:
                 return items
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis get_pending_input failed in multi-process deployment: {e}") from e
             logger.debug("Redis get_pending_input failed: %s", e)
 
     mem_items = _memory_inputs.pop(execution_id, [])
@@ -994,11 +1066,14 @@ async def publish_command(execution_id: str, command: str, **data: Any) -> None:
             except Exception:
                 pass
 
-    r = await _get_redis()
+    r = await _require_redis()
     if r is not None:
         try:
             await r.publish(f"{COMMAND_CHANNEL}:{execution_id}", payload_str)
         except Exception as e:
+            if _is_multi_process():
+                mark_service_degraded(True)
+                raise RedisUnavailableError(f"Redis publish_command failed in multi-process deployment: {e}") from e
             logger.debug("Redis publish_command failed: %s", e)
 
 
