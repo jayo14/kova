@@ -13,6 +13,7 @@ import {
 import { ScreenshotGallery } from "@/components/agent/screenshot-gallery";
 import { KovaInput, type KovaIntent } from "@/components/shared/kova-input";
 import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import { Logo } from "@/components/shared/logo";
 import {
@@ -861,13 +862,15 @@ export function ExplorePage() {
             />
           </div>
 
-          <aside className="w-full lg:w-84 border-t lg:border-t-0 lg:border-l border-border bg-card/50 p-4 lg:p-5 overflow-auto flex flex-col justify-between">
-            <div>
-              <AgentStatus state={state.state} url={state.url} className="mb-6" />
-              <AgentActivity activities={state.activities} />
+          <aside className="w-full lg:w-84 h-[480px] lg:h-full max-h-[calc(100vh-140px)] border-t lg:border-t-0 lg:border-l border-border bg-card/50 p-4 lg:p-5 flex flex-col justify-between overflow-hidden shrink-0">
+            <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
+              <AgentStatus state={state.state} url={state.url} className="mb-4 shrink-0" />
+              <ScrollArea className="flex-1 min-h-0 pr-2">
+                <AgentActivity activities={state.activities} />
+              </ScrollArea>
             </div>
 
-            <div className="pt-4 border-t border-border/60 mt-4 text-center">
+            <div className="pt-3 border-t border-border/60 mt-3 text-center shrink-0">
               <p className="text-[11px] text-muted-foreground/60 font-mono">
                 Isolated sandbox • No local secrets retained
               </p>

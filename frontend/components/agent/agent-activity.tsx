@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { MaterialIcon } from "@/components/shared/material-icon";
 import type { AgentActivityItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,12 @@ export function AgentActivity({
   const completedCount = activities.filter(
     (a, idx) => a.status === "completed" || (a.status === "active" && idx !== lastActiveIndex)
   ).length;
+
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activities.length, lastActiveIndex]);
 
   return (
     <div className={cn("flex flex-col space-y-2", className)}>
@@ -123,6 +130,7 @@ export function AgentActivity({
             </div>
           );
         })}
+        <div ref={bottomRef} />
       </div>
     </div>
   );
