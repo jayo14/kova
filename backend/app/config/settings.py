@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     ENABLE_CELERY_RESULT_BACKEND: bool = False
     CELERY_QUEUE_PREFIX: str = ""
     REDIS_KEY_PREFIX: str = ""
-    REDIS_SSL_CERT_REQS: str = "none"
+    REDIS_SSL_CERT_REQS: str = "required"
     REDIS_SSL_CA_CERTS: str | None = None
     QUEUED_NO_WORKER_TIMEOUT_SECONDS: int = 120
 
