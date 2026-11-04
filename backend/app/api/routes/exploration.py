@@ -104,7 +104,7 @@ async def get_exploration(
             now = datetime.now(timezone.utc)
             if (now - created).total_seconds() > settings.QUEUED_NO_WORKER_TIMEOUT_SECONDS:
                 live_workers = await get_live_workers()
-                if not live_workers:
+                if live_workers is not None and not live_workers:
                     repo = ExplorationRepository(db)
                     event_repo = ExplorationEventRepository(db)
                     session = await repo.update_status(
@@ -477,7 +477,7 @@ async def stream_exploration_events(
                                 now = datetime.now(timezone.utc)
                                 if (now - created).total_seconds() > settings.QUEUED_NO_WORKER_TIMEOUT_SECONDS:
                                     live_workers = await get_live_workers()
-                                    if not live_workers:
+                                    if live_workers is not None and not live_workers:
                                         await session_repo.update_status(
                                             parsed_id,
                                             status=ExplorationStatus.FAILED,
