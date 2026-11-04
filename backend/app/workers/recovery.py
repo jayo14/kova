@@ -9,6 +9,7 @@ import redis.asyncio as aioredis
 from sqlalchemy import select
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 from app.infrastructure.database.session import async_session_factory
 from app.modules.executions.models import Execution, ExecutionStatus
 from app.modules.executions.repository import ExecutionRepository
@@ -91,7 +92,7 @@ def _get_dispatch_redis() -> aioredis.Redis | None:
         "retry_on_timeout": True,
     }
     if str(settings.REDIS_URL).startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = "none"
+        kwargs.update(redispy_ssl_kwargs())
     try:
         _dispatch_redis = aioredis.from_url(settings.REDIS_URL, **kwargs)
     except Exception:
