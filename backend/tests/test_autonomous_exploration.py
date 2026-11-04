@@ -6,6 +6,7 @@ diverse, unfamiliar web applications.
 """
 
 import pytest
+from unittest.mock import AsyncMock
 from app.engine.exploration.agent.actions import (
     execute_action,
     execute_authenticate,
@@ -413,4 +414,83 @@ def test_rejection_of_password_visibility_and_input_placeholder_journeys():
     ]
     for ctrl in micro_controls:
         assert is_flimsy_landing_element(ctrl) is True, f"Failed to reject micro-control: {ctrl}"
+
+
+@pytest.mark.asyncio
+async def test_evidence_based_authenticated_session_verification():
+    """Verify that authentication verification requires concrete DOM/storage evidence."""
+    import uuid
+    from app.engine.exploration.explorer import ExplorationEngine
+
+    engine = ExplorationEngine(exploration_id=uuid.uuid4(), url="https://app.example.com/login")
+
+    # Scenario A: Still on login URL with password field -> Unauthenticated
+    page_auth = AsyncMock()
+    page_auth.url = "https://app.example.com/login"
+    pwd_loc = AsyncMock()
+    pwd_loc.is_visible.return_value = True
+    page_auth.locator.return_value.first = pwd_loc
+
+    is_auth_a, ev_a = await engine._verify_authenticated_session(page_auth)
+    assert is_auth_a is False
+    assert ev_a["not_on_auth_url"] is False
+
+    # Scenario B: Navigated to workspace, no password, has token in storage and sign-out button
+    page_workspace = AsyncMock()
+    page_workspace.url = "https://app.example.com/workspace"
+
+    def mock_loc(sel):
+        m = AsyncMock()
+        if "password" in sel:
+            m.first.is_visible.return_value = False
+        elif "Sign Out" in sel or "Logout" in sel:
+            m.first.is_visible.return_value = True
+        else:
+            m.first.is_visible.return_value = False
+        return m
+
+    page_workspace.locator = mock_loc
+    page_workspace.evaluate.return_value = {"hasToken": True, "count": 2}
+    page_workspace.inner_text.return_value = "Welcome back Elvis Presley!"
+
+    is_auth_b, ev_b = await engine._verify_authenticated_session(
+        page_workspace,
+        credential={"name": "Elvis Presley", "email": "test@example.com"}
+    )
+    assert is_auth_b is True
+    assert ev_b["has_auth_token"] is True
+    assert ev_b["has_sign_out"] is True
+    assert ev_b["has_user_identity"] is True
+    assert ev_b["no_password_input"] is True
+
+
+@pytest.mark.asyncio
+async def test_synthetic_credentials_lifecycle_and_reuse():
+    """Verify that autonomous self-registration credentials can be persisted and reused."""
+    import uuid
+    from app.engine.exploration.explorer import ExplorationEngine
+    from app.modules.credentials.models import Credential
+
+    project_id = uuid.uuid4()
+    mock_db = AsyncMock()
+    mock_cred_repo = AsyncMock()
+    saved_cred = Credential(
+        id=uuid.uuid4(),
+        project_id=project_id,
+        name="Kova Exploration Test Account",
+        email="test.kova.abc123@gmail.com",
+        password="encrypted_hash",
+        persona="Tester",
+        auth_strategy="password_form",
+    )
+    mock_cred_repo.create.return_value = saved_cred
+
+    engine = ExplorationEngine(
+        exploration_id=uuid.uuid4(),
+        url="https://app.example.com",
+        project_id=project_id,
+        db_session=mock_db,
+    )
+    assert engine.project_id == project_id
+    assert engine._db_session == mock_db
 

@@ -233,12 +233,14 @@ FLIMSY_ELEMENT_PATTERNS = [
     r"\b\d+(\.\d+)?/\d+\s+stars?\b",
     r"\b(trusted by|reviews? from|stars from)\b",
     r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b",
-    r"\b(privacy policy|terms of (service|use))\b",
+    r"\b(privacy policy|terms of (service|use)|terms and conditions)\b",
     r"\btoggle password\b",
     r"\b(show|hide)\s+password\b",
     r"\bpassword visibility\b",
     r"\bexplore\s+[^\s]+@[^\s]+\b",
     r"\b(explore|interact with)\s+(password|email|input|checkbox)\b",
+    r"^(or|and)$",
+    r"^forgot\s+password\??$",
 ]
 
 

@@ -448,13 +448,32 @@ class EpistemicExplorationAgent:
         )
         is_auth_area = is_auth_path or has_password_input
 
+        # Check for affirmative authenticated evidence
+        controls = obs.get("controls") or []
+        links = obs.get("links") or []
+        all_interactive = controls + links
+        has_signout_control = any(
+            any(kw in ((c.get("name") or c.get("text") or c.get("label") or "").lower()) for kw in ("sign out", "signout", "log out", "logout"))
+            for c in all_interactive
+        )
         is_workspace = any(k in path for k in ("/app", "/dashboard", "/workspace", "/project", "/reports", "/console", "/home"))
-        is_authenticated = is_workspace or (not is_auth_area and path not in ("", "/"))
+        is_authenticated = (
+            has_signout_control
+            or (self.understanding.is_currently_authenticated and not is_auth_area)
+            or (is_workspace and not is_auth_area)
+        )
 
         if is_authenticated and not self.understanding.is_currently_authenticated:
             self.understanding.is_currently_authenticated = True
 
-        area_name = "Authentication" if is_auth_area else ("User Workspace" if is_workspace else ("Landing" if path in ("", "/") else f"Section {path}"))
+        if is_auth_area:
+            area_name = "Authentication"
+        elif is_authenticated:
+            area_name = "User Workspace" if path in ("", "/") else f"Workspace: {path}"
+        elif path in ("", "/"):
+            area_name = "Landing"
+        else:
+            area_name = f"Section {path}"
         self.understanding.record_area(area_name, path, is_authenticated=is_authenticated, url=url)
 
         if is_auth_area:
@@ -626,6 +645,17 @@ class EpistemicExplorationAgent:
                 "selector": evidence.get("selector") if isinstance(evidence, dict) else None,
                 "seen_count": 1,
             },
+        )
+        # Feed into ApplicationUnderstanding so journey synthesizers have full workspace capability context
+        is_auth = self.understanding.is_currently_authenticated
+        preconditions = ["authenticated_session"] if is_auth else []
+        self.understanding.record_capability(
+            name=text[:200],
+            user_goal=f"Use {text[:200]}",
+            state=EpistemicState.OBSERVED,
+            is_core=is_auth or confidence >= 0.8,
+            entry_url=node.url_norm,
+            preconditions=preconditions,
         )
 
     def _record_dangerous(self, observation: dict[str, Any], node: Any) -> None:

@@ -1622,6 +1622,7 @@ class ExplorationEngine:
                 # 3. Check for authentication requirement
                 from app.engine.browser.auth import classify_auth_page, observe_auth_signals
                 auth_bundle = await observe_auth_signals(page, page.url)
+                already_authenticated = False
                 auth_classification = classify_auth_page(auth_bundle)
                 await self._emit("auth_classified", {
                     "kind": auth_classification.kind,
@@ -1677,7 +1678,27 @@ class ExplorationEngine:
                             if reg_success:
                                 credential = synthetic_cred
                                 self.credential = synthetic_cred
+                                already_authenticated = True
                                 create_account = False
+
+                                # Persist synthetic credentials into repository if session and project exist
+                                if getattr(self, "project_id", None) and getattr(self, "_db_session", None):
+                                    try:
+                                        from app.modules.credentials.repository import CredentialRepository
+                                        cred_repo = CredentialRepository(self._db_session)
+                                        created_cred = await cred_repo.create(
+                                            project_id=self.project_id,
+                                            name=synthetic_cred.get("name", "Kova Exploration Test Account"),
+                                            email=synthetic_cred["email"],
+                                            password=synthetic_cred["password"],
+                                            persona="Tester",
+                                            auth_strategy="password_form",
+                                        )
+                                        self.credential_id = created_cred.id
+                                        logger.info("Persisted synthetic exploration credentials %s for project %s", created_cred.id, self.project_id)
+                                    except Exception as persist_err:
+                                        logger.warning("Could not persist synthetic exploration credential: %s", persist_err)
+
                                 await self._emit("authenticated", {})
                                 await self._emit("progress", {
                                     "id": "exp-auth-selfreg",
@@ -1715,7 +1736,7 @@ class ExplorationEngine:
                             })
 
             # 4. Handle authentication if credentials provided
-            if credential:
+            if credential and not already_authenticated:
                 auth_mode_label = "Creating account" if create_account else "Authenticating"
                 await self._emit("progress", {
                     "id": "exp-auth-nav",
@@ -1832,6 +1853,7 @@ class ExplorationEngine:
                             "candidate_missions": [m.model_dump() for m in missions],
                         }
 
+                already_authenticated = True
                 await self._emit("authenticated", {})
                 await self._emit("progress", {
                     "id": "exp-auth-progress",
@@ -2165,6 +2187,163 @@ class ExplorationEngine:
         except Exception as e:
             logger.debug("Error checking auth alert elements: %s", e)
         return None
+
+    async def _verify_authenticated_session(self, page, credential: dict | None = None) -> tuple[bool, dict[str, Any]]:
+        """Verify whether the browser has reached an authenticated application session.
+
+        Uses application-agnostic, evidence-based verification:
+        1. Checks that the page is no longer on an auth URL and has no visible password input.
+        2. Detects authentication tokens/keys in localStorage or sessionStorage.
+        3. Detects session termination controls (Sign Out / Log Out / etc.).
+        4. Detects user identity signals (avatar, user name, email, or greeting).
+        5. Detects authenticated workspace navigation controls.
+        """
+        evidence: dict[str, Any] = {
+            "no_password_input": False,
+            "not_on_auth_url": False,
+            "has_auth_token": False,
+            "has_sign_out": False,
+            "has_user_identity": False,
+            "has_workspace_nav": False,
+        }
+
+        # 1. URL check
+        current_url = getattr(page, "url", "").lower()
+        auth_url_indicators = [
+            "/login", "/signin", "/sign-in", "/auth/login", "/log-in", "/session/new",
+            "/signup", "/sign-up", "/register", "/auth/signup", "/registration"
+        ]
+        evidence["not_on_auth_url"] = not any(kw in current_url for kw in auth_url_indicators)
+
+        # 2. Absence of password input
+        try:
+            loc = page.locator('input[type="password"]')
+            if inspect.isawaitable(loc):
+                loc = await loc
+            pwd_loc = getattr(loc, "first", loc)
+            if inspect.isawaitable(pwd_loc):
+                pwd_loc = await pwd_loc
+            is_pwd_vis = False
+            if hasattr(pwd_loc, "is_visible"):
+                res = pwd_loc.is_visible(timeout=300)
+                is_pwd_vis = await res if inspect.isawaitable(res) else res
+            evidence["no_password_input"] = not is_pwd_vis
+        except Exception:
+            evidence["no_password_input"] = True
+
+        # If still on auth URL or password input is still visible, definitely not authenticated
+        if not evidence["no_password_input"] or not evidence["not_on_auth_url"]:
+            return False, evidence
+
+        # 3. Storage check for tokens or session state
+        try:
+            if hasattr(page, "evaluate"):
+                storage_data = await page.evaluate('''() => {
+                    try {
+                        const localKeys = Object.keys(localStorage);
+                        const sessionKeys = Object.keys(sessionStorage);
+                        const allKeys = [...localKeys, ...sessionKeys].map(k => k.toLowerCase());
+                        const tokenIndicators = ["token", "auth", "session", "jwt", "user", "access", "refresh", "id_token"];
+                        const hasToken = allKeys.some(k => tokenIndicators.some(ind => k.includes(ind)));
+                        return { hasToken, count: allKeys.length };
+                    } catch (e) {
+                        return { hasToken: false, count: 0 };
+                    }
+                }''')
+                if storage_data and storage_data.get("hasToken"):
+                    evidence["has_auth_token"] = True
+        except Exception:
+            pass
+
+        # 4. Sign-out / Log-out controls
+        try:
+            sign_out_selectors = [
+                'a:has-text("Sign Out")', 'button:has-text("Sign Out")',
+                'a:has-text("Log Out")', 'button:has-text("Log Out")',
+                'a:has-text("Logout")', 'button:has-text("Logout")',
+                'a:has-text("Sign out")', 'button:has-text("Sign out")',
+                'a:has-text("Log out")', 'button:has-text("Log out")',
+                '[aria-label*="sign out" i]', '[aria-label*="log out" i]', '[aria-label*="logout" i]',
+            ]
+            for sel in sign_out_selectors:
+                el = page.locator(sel).first
+                if hasattr(el, "is_visible"):
+                    vis = el.is_visible(timeout=150)
+                    if inspect.isawaitable(vis):
+                        vis = await vis
+                    if vis:
+                        evidence["has_sign_out"] = True
+                        break
+        except Exception:
+            pass
+
+        # 5. User identity signals (avatar, registered name/email)
+        try:
+            user_selectors = [
+                '[aria-label*="avatar" i]', '[aria-label*="profile" i]',
+                '[aria-label*="user menu" i]', '[aria-label*="account" i]',
+                '[data-testid*="user" i]', '[data-testid*="avatar" i]',
+                '[data-testid*="profile" i]', 'img[alt*="avatar" i]',
+                'img[alt*="profile" i]',
+            ]
+            for sel in user_selectors:
+                el = page.locator(sel).first
+                if hasattr(el, "is_visible"):
+                    vis = el.is_visible(timeout=150)
+                    if inspect.isawaitable(vis):
+                        vis = await vis
+                    if vis:
+                        evidence["has_user_identity"] = True
+                        break
+        except Exception:
+            pass
+
+        if not evidence["has_user_identity"] and credential:
+            try:
+                body_text = ""
+                if hasattr(page, "inner_text"):
+                    txt = page.inner_text("body", timeout=500)
+                    body_text = await txt if inspect.isawaitable(txt) else txt
+                email = credential.get("email", "")
+                name = credential.get("name", "")
+                if email and email.lower() in body_text.lower():
+                    evidence["has_user_identity"] = True
+                elif name and name.lower() in body_text.lower():
+                    evidence["has_user_identity"] = True
+            except Exception:
+                pass
+
+        # 6. Workspace controls
+        try:
+            workspace_selectors = [
+                'nav', 'aside', '[role="navigation"]',
+                'header a, header button',
+                '.sidebar', '[class*="sidebar" i]',
+                '[class*="dashboard" i]', '[class*="workspace" i]',
+            ]
+            for sel in workspace_selectors:
+                el = page.locator(sel).first
+                if hasattr(el, "is_visible"):
+                    vis = el.is_visible(timeout=150)
+                    if inspect.isawaitable(vis):
+                        vis = await vis
+                    if vis:
+                        evidence["has_workspace_nav"] = True
+                        break
+        except Exception:
+            pass
+
+        is_authenticated = (
+            evidence["no_password_input"]
+            and evidence["not_on_auth_url"]
+            and (
+                evidence["has_auth_token"]
+                or evidence["has_sign_out"]
+                or evidence["has_user_identity"]
+                or evidence["has_workspace_nav"]
+            )
+        )
+        return is_authenticated, evidence
 
     async def _find_submit_button(self, page, password_input):
         """Finds genuine submit button for credentials form, excluding OAuth."""
@@ -2542,12 +2721,12 @@ class ExplorationEngine:
             except Exception:
                 pass
 
-            # Poll for authentication resolution (URL change, password detachment, or explicit error alert)
+            # Poll for authentication resolution with evidence-based verification
             auth_url_indicators = [
                 "/login", "/signin", "/sign-in", "/auth/login", "/log-in", "/session/new",
                 "/signup", "/sign-up", "/register", "/auth/signup", "/registration"
             ]
-            max_wait_seconds = 8.0
+            max_wait_seconds = 15.0
             poll_interval = 0.5
             elapsed = 0.0
 
@@ -2561,26 +2740,35 @@ class ExplorationEngine:
                     logger.info("Auth submission failed — explicit error banner detected: %s", auth_error)
                     return False, auth_error
 
-                # 2. Check if navigated away from auth URL
-                current_url = page.url.lower()
-                stayed_on_auth = any(kw in current_url for kw in auth_url_indicators)
-
-                # 3. Check if password field is still visible
-                is_still_password = False
-                try:
-                    is_still_password = await page.locator('input[type="password"]').first.is_visible(timeout=300)
-                except Exception as e:
-                    logger.debug("Password field check failed (likely navigated): %s", e)
-                    is_still_password = False
-
-                # If URL changed away from login/signup, or password field detached/hidden
-                if not stayed_on_auth or not is_still_password:
-                    logger.info("Auth succeeded — navigated away or password field detached (elapsed: %.1fs)", elapsed)
+                # 2. Check for evidence-backed session verification
+                is_auth, evidence = await self._verify_authenticated_session(page, credential)
+                if is_auth:
+                    logger.info("Auth succeeded with concrete evidence: %s (elapsed: %.1fs)", evidence, elapsed)
                     try:
                         await page.wait_for_load_state("domcontentloaded", timeout=3000)
                     except Exception:
                         pass
                     return True, ""
+
+                # 3. Fallback: Check if URL changed away from auth and password field detached
+                current_url = getattr(page, "url", "").lower()
+                stayed_on_auth = any(kw in current_url for kw in auth_url_indicators)
+                is_still_password = False
+                try:
+                    pwd_loc = page.locator('input[type="password"]').first
+                    if hasattr(pwd_loc, "is_visible"):
+                        vis = pwd_loc.is_visible(timeout=200)
+                        is_still_password = await vis if inspect.isawaitable(vis) else vis
+                except Exception:
+                    is_still_password = False
+
+                if not stayed_on_auth and not is_still_password:
+                    # Give modern SPAs a brief moment to hydrate session tokens or render workspace
+                    await asyncio.sleep(1.0)
+                    is_auth_hydrated, _ = await self._verify_authenticated_session(page, credential)
+                    if is_auth_hydrated:
+                        logger.info("Auth succeeded after SPA hydration (elapsed: %.1fs)", elapsed + 1.0)
+                        return True, ""
 
             # Check if still stuck on auth page after polling timeout
             auth_error = await self._extract_visible_auth_error(page)

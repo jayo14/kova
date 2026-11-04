@@ -146,7 +146,7 @@ class ApplicationUnderstanding(BaseModel):
     def record_capability(
         self,
         name: str,
-        user_goal: str,
+        user_goal: str = "",
         state: EpistemicState = EpistemicState.HYPOTHESIS,
         is_core: bool = False,
         expected_outcome: str = "",
