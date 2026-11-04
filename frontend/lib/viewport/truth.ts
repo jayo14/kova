@@ -193,7 +193,24 @@ export function applyServerMessage(state: ViewportTruth, msg: ServerMessage): Vi
         handoffError: null,
       };
     }
+    case "takeover_declined": {
+      return {
+        ...state,
+        control: "agent",
+        handoff: "idle",
+        handoffError: null,
+      };
+    }
     case "takeover_rejected": {
+      const isDecline = typeof msg.reason === "string" && /decline/i.test(msg.reason);
+      if (isDecline) {
+        return {
+          ...state,
+          control: "agent",
+          handoff: "idle",
+          handoffError: null,
+        };
+      }
       return {
         ...state,
         control: "agent",
@@ -203,6 +220,15 @@ export function applyServerMessage(state: ViewportTruth, msg: ServerMessage): Vi
     }
     case "control_error":
     case "interaction_rejected": {
+      const isDecline = typeof msg.reason === "string" && /decline/i.test(msg.reason);
+      if (isDecline) {
+        return {
+          ...state,
+          control: "agent",
+          handoff: "idle",
+          handoffError: null,
+        };
+      }
       return {
         ...state,
         handoff: "failed",

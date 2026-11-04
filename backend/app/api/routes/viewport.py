@@ -555,7 +555,7 @@ async def viewport_stream(
                     logger.warning("User takeover rejected for %s: %s", execution_id, lease_or_err)
 
             elif msg_type == "takeover_reject":
-                await websocket.send_json({"type": "control_error", "reason": "Client declined takeover"})
+                await websocket.send_json({"type": "takeover_declined", "reason": "User chose to keep observing"})
                 logger.info("User takeover rejected by client for %s", execution_id)
 
             elif msg_type in ("takeover_heartbeat", "lease_heartbeat", "heartbeat"):
