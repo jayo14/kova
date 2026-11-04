@@ -32,6 +32,8 @@ celery_app = Celery(
     broker=settings.CELERY_BROKER_URL,
     backend=result_backend,
 )
+if not result_backend:
+    celery_app.backend_cls = "disabled"
 
 
 def _get_ssl_config(url: str | None) -> dict | None:
@@ -84,7 +86,7 @@ celery_app.conf.update(
         Queue(f"{q_prefix}kova-enterprise", Exchange(f"{q_prefix}kova-enterprise", type="direct"), routing_key=f"{q_prefix}kova-enterprise"),
     ],
     broker_use_ssl=_get_ssl_config(str(settings.CELERY_BROKER_URL)),
-    redis_backend_use_ssl=_get_ssl_config(str(settings.CELERY_RESULT_BACKEND)) if result_backend else None,
+    redis_backend_use_ssl=_get_ssl_config(str(settings.CELERY_RESULT_BACKEND)),
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])

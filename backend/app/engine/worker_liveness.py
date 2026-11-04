@@ -15,6 +15,7 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 from app.workers.celery_app import get_queue_for_plan
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,7 @@ def _get_redis_kwargs() -> dict[str, Any]:
         "retry_on_timeout": True,
     }
     if "rediss://" in str(settings.REDIS_URL):
-        reqs_map = {"required": ssl.CERT_REQUIRED, "optional": ssl.CERT_OPTIONAL, "none": ssl.CERT_NONE}
-        kwargs["ssl_cert_reqs"] = reqs_map.get((settings.REDIS_SSL_CERT_REQS or "none").lower(), ssl.CERT_NONE)
-        if settings.REDIS_SSL_CA_CERTS:
-            kwargs["ssl_ca_certs"] = settings.REDIS_SSL_CA_CERTS
+        kwargs.update(redispy_ssl_kwargs())
     return kwargs
 
 
