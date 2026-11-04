@@ -48,6 +48,12 @@ The Celery worker (`kova-worker`) is not running or cannot connect to the Redis 
 
 ### Remedy
 - Ensure `REDIS_URL` and `CELERY_BROKER_URL` are configured consistently between `kova-api` and `kova-worker`.
+- For remote TLS-enabled Redis (`rediss://`), ensure the CA certificate and verification mode are configured in `backend/.env`:
+  ```bash
+  REDIS_SSL_CERT_REQS=required
+  REDIS_SSL_CA_CERTS=kova-redis-ca.crt
+  ```
+- For local runs using `./start.sh`, inspect worker startup and runtime logs at `/tmp/worker.log`.
 - Restart the worker:
   ```bash
   docker compose restart kova-worker
