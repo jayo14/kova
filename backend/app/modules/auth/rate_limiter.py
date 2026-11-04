@@ -10,6 +10,7 @@ from fastapi import Depends, HTTPException, Request, Response, status
 import redis.asyncio as aioredis
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,7 @@ class RateLimiter:
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
-                kwargs["ssl_check_hostname"] = False
+                kwargs.update(redispy_ssl_kwargs())
             self._shared_client = aioredis.from_url(
                 settings.REDIS_URL,
                 socket_connect_timeout=2.0,

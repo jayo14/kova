@@ -13,6 +13,7 @@ import redis.asyncio as aioredis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 from app.modules.auth.rate_limiter import rate_limiter
 from app.modules.organizations.models import Organization, OrganizationQuota
 from app.modules.organizations.repository import OrganizationRepository
@@ -36,7 +37,7 @@ class OrganizationService:
         try:
             kwargs = {}
             if settings.REDIS_URL.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
+                kwargs.update(redispy_ssl_kwargs())
             client = aioredis.from_url(
                 settings.REDIS_URL,
                 socket_connect_timeout=0.2,

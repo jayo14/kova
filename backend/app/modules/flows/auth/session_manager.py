@@ -22,6 +22,7 @@ import redis.asyncio as aioredis
 from redis.asyncio import Redis
 
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 from app.engine.browser.session import BrowserSession, SessionState
 from app.modules.credentials.crypto import decrypt_credential, encrypt_credential
 from app.modules.flows.auth.authenticator import Authenticator
@@ -115,7 +116,7 @@ class SessionManager:
                 "socket_timeout": 0.2,
             }
             if redis_url.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = "none"
+                kwargs.update(redispy_ssl_kwargs())
             client = aioredis.from_url(redis_url, **kwargs)
             await asyncio.wait_for(client.ping(), timeout=0.2)
             self._redis = client
