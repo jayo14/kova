@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI):
     from app.workers.recovery import recovery_loop
     from app.infrastructure.database.migrations import verify_database_schema
     from app.infrastructure.database.session import async_session_factory
+    from app.core.redis_tls import verify_redis_tls_connectivity
+
+    verify_redis_tls_connectivity()
 
     try:
         async with async_session_factory() as session:

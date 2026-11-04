@@ -119,7 +119,7 @@ def _get_broker_redis() -> aioredis.Redis | None:
         "retry_on_timeout": True,
     }
     if str(settings.CELERY_BROKER_URL).startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = "none"
+        kwargs.update(redispy_ssl_kwargs())
     try:
         _broker_redis = aioredis.from_url(settings.CELERY_BROKER_URL, **kwargs)
     except Exception:

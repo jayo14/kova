@@ -16,6 +16,7 @@ import redis.asyncio as aioredis
 from app.infrastructure.database.session import get_session
 from app.modules.users.models import User
 from app.config.settings import settings
+from app.core.redis_tls import redispy_ssl_kwargs
 from app.modules.auth.dependencies import get_current_user, _get_jwt_secret
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ async def _get_redis() -> aioredis.Redis | None:
     try:
         kwargs: dict[str, Any] = {"decode_responses": True}
         if settings.REDIS_URL.startswith("rediss://"):
-            kwargs["ssl_cert_reqs"] = "none"
+            kwargs.update(redispy_ssl_kwargs())
         return aioredis.from_url(settings.REDIS_URL, **kwargs)
     except Exception as e:
         logger.debug("Failed to connect to redis: %s", e)

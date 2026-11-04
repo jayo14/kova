@@ -150,6 +150,9 @@ def _run_worker_heartbeat(hostname: str) -> None:
 @worker_ready.connect
 def on_worker_ready(sender=None, **kwargs):
     global _heartbeat_thread
+    from app.core.redis_tls import verify_redis_tls_connectivity
+
+    verify_redis_tls_connectivity()
     hostname = getattr(sender, "hostname", None) or socket.gethostname()
     _heartbeat_stop.clear()
     _heartbeat_thread = threading.Thread(target=_run_worker_heartbeat, args=(hostname,), daemon=True)

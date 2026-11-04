@@ -1,5 +1,8 @@
+import logging
 import os
 import ssl
+
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import find_dotenv, load_dotenv
@@ -50,3 +53,39 @@ def celery_ssl_options() -> dict:
     if ca:
         opts["ssl_ca_certs"] = ca
     return opts
+
+
+def verify_redis_tls_connectivity(url: str | None = None) -> bool:
+    """Startup self-test that connects to Redis, PINGs, and logs the TLS mode.
+
+    Logs a loud security warning if mode is 'none'.
+    """
+    mode = _mode()
+    if mode == "none":
+        logger.warning(
+            "⚠️  SECURITY WARNING: REDIS_SSL_CERT_REQS is set to 'none'! "
+            "TLS encryption is active, but certificate verification is DISABLED. "
+            "Connections are vulnerable to man-in-the-middle attacks. "
+            "Provide REDIS_SSL_CA_CERTS and set REDIS_SSL_CERT_REQS=required for production."
+        )
+    else:
+        logger.info("Redis TLS verification mode configured: %s", mode)
+
+    test_url = url or os.getenv("REDIS_URL")
+    if not test_url:
+        return True
+
+    try:
+        import redis
+
+        kwargs: dict = {}
+        if "rediss://" in test_url:
+            kwargs = redispy_ssl_kwargs()
+        client = redis.from_url(test_url, socket_connect_timeout=3.0, socket_timeout=3.0, **kwargs)
+        client.ping()
+        client.close()
+        logger.info("Redis TLS startup self-test PING succeeded (mode=%s)", mode)
+        return True
+    except Exception as exc:
+        logger.error("Redis TLS startup self-test failed (mode=%s): %s", mode, exc)
+        return False
