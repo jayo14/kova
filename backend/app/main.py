@@ -142,7 +142,7 @@ if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
-        allow_origin_regex=r"https://.*(kova\.app|vercel\.app|rumptycloud\.app).*",
+        allow_origin_regex=r"https://.*(kova\.app|vercel\.app|rumptycloud\.app|rumptycloud\.com).*",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
