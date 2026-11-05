@@ -11,6 +11,16 @@
 
 ---
 
+<p align="center">
+  <a href="brag-output/brag.mp4">
+    <img src="brag-output/brag.jpg" alt="Kova Launch Video — Autonomous Product-Flow Testing" width="100%" />
+  </a>
+  <br />
+  <em>▶ <b><a href="brag-output/brag.mp4">Watch Kova in Action (18s)</a></b> — Autonomous exploration, modal & obstruction handling, and cryptographic verification.</em>
+</p>
+
+---
+
 ## What is Kova?
 
 Manual QA and brittle end-to-end scripts break on every UI tweak. Teams waste days maintaining flaky selectors or manually clicking through signup, checkout, and settings flows before every deploy.
