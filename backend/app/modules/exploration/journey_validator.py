@@ -240,7 +240,6 @@ FLIMSY_ELEMENT_PATTERNS = [
     r"\bexplore\s+[^\s]+@[^\s]+\b",
     r"\b(explore|interact with)\s+(password|email|input|checkbox)\b",
     r"^(or|and)$",
-    r"^forgot\s+password\??$",
 ]
 
 
@@ -299,7 +298,7 @@ def validate_journey(
         ))
 
     # Reject flimsy landing page showcase mockups and testimonials
-    if is_flimsy_landing_element(mission.name):
+    if getattr(mission, "kind", None) not in ("control_exploration", "navigation_test") and is_flimsy_landing_element(mission.name):
         defects.append(QualityDefect(
             code="FLIMSY_MOCKUP_OR_TESTIMONIAL",
             message="Static landing page showcase mockups or testimonials must not be treated as user journeys",
@@ -917,6 +916,8 @@ def deduplicate_and_rank_journeys(
             + "|"
             + "|".join(sorted(m.control_hints or []))
         )
+        if cap_key == "|":
+            cap_key = f"|{m.name.strip().casefold()}"
         key = f"{m.classification}:{m.category}:{cap_key}"
         if key in seen_keys:
             continue
