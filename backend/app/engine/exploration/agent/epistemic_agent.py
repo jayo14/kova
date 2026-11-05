@@ -493,6 +493,13 @@ class EpistemicExplorationAgent:
                         pass
 
                 target_dict = proposal.target or {}
+                if target_dict.get("is_signup") and not self.understanding.registration_submitted:
+                    self.understanding.mark_registration_submitted()
+                    self.understanding.set_exploration_identity(
+                        (target_dict.get("credentials") or {}).get("email"),
+                        (target_dict.get("credentials") or {}).get("password"),
+                        (target_dict.get("credentials") or {}).get("name"),
+                    )
                 provider = target_dict.get("provider")
                 if provider or any(p in str(target_dict.get("text") or "").lower() for p in ("google", "apple", "github", "microsoft")):
                     strategy_type = "oauth"
@@ -507,6 +514,8 @@ class EpistemicExplorationAgent:
                 if is_now_auth:
                     self.understanding.is_currently_authenticated = True
                     self.understanding.update_session_auth(SessionAuthState.AUTHENTICATED_SESSION_MAINTAINED)
+                    if (proposal.target or {}).get("is_signup"):
+                        self.understanding.mark_registration_succeeded()
                     self.understanding.record_auth_attempt(
                         strategy_type,
                         provider,
@@ -727,7 +736,7 @@ class EpistemicExplorationAgent:
                     await self._emit_progress(f"Selected {strategy.label}: {justification}")
                     self.understanding.selected_auth_strategy = strategy.label
 
-                    auth_proposal = AuthStrategyEvaluator.propose_action_for_strategy(strategy, self.credentials, node.node_id)
+                    auth_proposal = AuthStrategyEvaluator.propose_action_for_strategy(strategy, self.credentials, node.node_id, self.understanding)
                     if auth_proposal is not None:
                         identity = _action_identity(node.node_id, auth_proposal)
                         if identity not in self._attempted:

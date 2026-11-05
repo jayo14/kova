@@ -166,6 +166,11 @@ class ApplicationUnderstanding(BaseModel):
     selected_auth_strategy: str | None = None
     attempted_auth_strategies: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Single-identity lifecycle: one exploration account per application per mission
+    exploration_identity: dict[str, Any] | None = None  # {"email": ..., "password": ..., "name": ...}
+    registration_submitted: bool = False  # True once native registration form has been submitted
+    registration_outcome: str = "not_attempted"  # "not_attempted", "submitted_pending", "succeeded", "failed_validation", "failed_duplicate"
+
     # Infrastructure & dependency tracking
     dependencies: dict[str, DependencyState] = Field(default_factory=dict)
 
@@ -337,6 +342,41 @@ class ApplicationUnderstanding(BaseModel):
                     m["viable"] = False
                 return
 
+    def set_exploration_identity(self, email: str, password: str, name: str = "Kova Tester") -> None:
+        """Set the single exploration identity for this mission. Called once during first registration."""
+        if self.exploration_identity is None:
+            self.exploration_identity = {"email": email, "password": password, "name": name}
+
+    def get_exploration_credentials(self) -> dict[str, Any] | None:
+        """Return the exploration identity credentials if one has been established."""
+        return self.exploration_identity
+
+    def mark_registration_submitted(self) -> None:
+        """Mark that native registration has been submitted for the exploration identity."""
+        self.registration_submitted = True
+        self.registration_outcome = "submitted_pending"
+
+    def mark_registration_succeeded(self) -> None:
+        """Mark that the registration was confirmed successful (session granted)."""
+        self.registration_outcome = "succeeded"
+
+    def mark_registration_failed(self, reason: str = "failed_validation") -> None:
+        """Mark registration as failed with a specific reason."""
+        self.registration_outcome = reason
+
+    def has_active_identity(self) -> bool:
+        """Return True if an exploration identity has been created (regardless of auth success)."""
+        return self.exploration_identity is not None
+
+    def should_attempt_login_instead(self) -> bool:
+        """Return True if registration was already attempted and we should try login with existing credentials."""
+        return (
+            self.registration_submitted
+            and self.exploration_identity is not None
+            and not self.is_currently_authenticated
+            and self.registration_outcome in ("submitted_pending", "succeeded", "failed_duplicate")
+        )
+
     def update_session_auth(self, new_state: SessionAuthState, reason: str = "") -> None:
         self.session_state = new_state
         if new_state in (SessionAuthState.AUTHENTICATION_SUCCESSFUL, SessionAuthState.AUTHENTICATED_SESSION_MAINTAINED):
@@ -434,6 +474,9 @@ class ApplicationUnderstanding(BaseModel):
             "open_questions": [q.question for q in self.open_questions if q.status == "open"],
             "blockers": self.auth_blockers,
             "session_state": self.session_state.value if hasattr(self.session_state, "value") else str(self.session_state),
+            "has_exploration_identity": self.has_active_identity(),
+            "registration_submitted": self.registration_submitted,
+            "registration_outcome": self.registration_outcome,
             "dependencies": {
                 h: {"ready": d.is_ready, "status": d.last_status, "pending_s": d.pending_duration_s}
                 for h, d in self.dependencies.items()

@@ -494,20 +494,13 @@ async def execute_dismiss_interruption(
         except Exception:
             pass
 
-    # 2. Try common close buttons
-    close_candidates = [
-        "button:has-text('Got it')",
-        "button:has-text('Close')",
-        "button:has-text('Dismiss')",
-        "button:has-text('Not now')",
-        "button:has-text('Maybe later')",
-        "button:has-text('Skip')",
-        "button[aria-label*='close' i]",
-        "button[aria-label*='dismiss' i]",
-        "[aria-label*='Close' i]",
-        ".close",
-        "[class*='close']",
-    ]
+    # 2. Try common close buttons. Only use generic selectors when a concrete
+    # dismiss control was identified; otherwise fall through to Escape to avoid
+    # activating unrelated controls.
+    if target.get("selector"):
+        close_candidates = [target["selector"]]
+    else:
+        close_candidates = []
     for cs in close_candidates:
         try:
             loc = page.locator(cs)

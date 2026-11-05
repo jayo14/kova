@@ -261,7 +261,14 @@ class AuthStrategyEvaluator:
         credentials: dict[str, Any] | None,
         understanding: ApplicationUnderstanding,
     ) -> tuple[AuthOption | None, str]:
-        """Selects the justified authentication strategy based on available options and sandbox constraints."""
+        """Selects the justified authentication strategy based on available options and sandbox constraints.
+
+        Enforces single-identity lifecycle:
+        - If registration was already submitted for this mission, never re-register or cycle to OAuth.
+        - If an exploration identity exists, attempt login with those credentials instead.
+        - External OAuth is never selected as a silent fallback; it requires human-interactive
+          delegation and is blocked unless explicitly configured.
+        """
         if not analysis.options:
             return None, "No viable authentication options discovered."
 
@@ -270,6 +277,26 @@ class AuthStrategyEvaluator:
             for att in understanding.attempted_auth_strategies
             if not att.get("success")
         }
+
+        # Single-identity guard: if registration was already submitted, do NOT register again
+        # or cycle to OAuth. Instead, attempt login with the existing exploration identity.
+        if understanding.should_attempt_login_instead():
+            # Find a login option (form on current page or link to login)
+            native_login_opt = next((o for o in analysis.options if o.method_type == "native_login"), None)
+            if native_login_opt and "native_login:native:retry" not in attempted_keys:
+                return (
+                    native_login_opt,
+                    "Registration already submitted for this identity; attempting login with existing exploration credentials.",
+                )
+            # If we're on the register page but have a login link, navigate to login
+            if analysis.is_on_register_path:
+                login_link = next((o for o in analysis.options if o.method_type == "native_login" and o.target_url), None)
+                if login_link:
+                    return (
+                        login_link,
+                        "Registration already submitted; navigating to sign-in to authenticate with existing exploration credentials.",
+                    )
+            return None, "Registration already submitted for this identity; waiting for session settlement or login surface."
 
         # 1. Configured Project Credentials -> Native Sign-in
         if credentials and credentials.get("email") and credentials.get("password"):
@@ -280,23 +307,25 @@ class AuthStrategyEvaluator:
                     "Configured project credentials available; attempting direct first-party sign in.",
                 )
 
-        # 2. If on Registration form -> Complete native registration
+        # 2. If on Registration form -> Complete native registration (first time only)
         if analysis.is_on_register_path or analysis.has_registration_form:
-            reg_form_opt = next((o for o in analysis.options if o.method_type == "self_registration"), None)
-            if reg_form_opt and "self_registration:native" not in attempted_keys:
-                return (
-                    reg_form_opt,
-                    "On native registration form; proceeding to create an authorized exploration account.",
-                )
+            if not understanding.registration_submitted:
+                reg_form_opt = next((o for o in analysis.options if o.method_type == "self_registration"), None)
+                if reg_form_opt and "self_registration:native" not in attempted_keys:
+                    return (
+                        reg_form_opt,
+                        "On native registration form; proceeding to create an authorized exploration account.",
+                    )
 
-        # 3. If on Login view with Registration link -> Navigate to self-registration
+        # 3. If on Login view with Registration link -> Navigate to self-registration (first time only)
         if analysis.has_registration_link:
-            reg_link_opt = next((o for o in analysis.options if o.method_type == "self_registration"), None)
-            if reg_link_opt and "self_registration:native" not in attempted_keys:
-                return (
-                    reg_link_opt,
-                    "No existing credentials provided; native self-registration discovered and selected as primary access path.",
-                )
+            if not understanding.registration_submitted:
+                reg_link_opt = next((o for o in analysis.options if o.method_type == "self_registration"), None)
+                if reg_link_opt and "self_registration:native" not in attempted_keys:
+                    return (
+                        reg_link_opt,
+                        "No existing credentials provided; native self-registration discovered and selected as primary access path.",
+                    )
 
         # 4. If credentials exist but we are on registration page -> Navigate to sign in
         if credentials and analysis.is_on_register_path:
@@ -307,18 +336,25 @@ class AuthStrategyEvaluator:
                     "Project credentials available; transitioning to sign-in view.",
                 )
 
-        # 5. External OAuth (evaluate only when no first-party method is operable)
+        # 5. External OAuth: BLOCKED for automated exploration
+        # OAuth requires human-interactive delegation with pre-existing third-party accounts.
+        # In an isolated sandbox without configured OAuth tokens, clicking OAuth buttons
+        # redirects to external providers that cannot be completed autonomously.
+        # This is NOT a viable fallback when native registration did not immediately redirect.
         oauth_opts = [
             o for o in analysis.options
             if o.method_type == "oauth" and f"oauth:{o.provider}" not in attempted_keys
         ]
         if oauth_opts:
-            # Note: External OAuth in headless sandbox requires human interaction or external tokens
-            chosen_oauth = oauth_opts[0]
-            return (
-                chosen_oauth,
-                f"External {chosen_oauth.provider.capitalize()} OAuth discovered; evaluating external authentication flow.",
-            )
+            # Mark OAuth as blocked, not as a strategy to attempt
+            for oauth_opt in oauth_opts:
+                understanding.record_auth_method(
+                    method_type="oauth",
+                    provider=oauth_opt.provider,
+                    label=oauth_opt.label,
+                    viable=False,
+                )
+            return None, "External OAuth requires human-interactive delegation; blocked in automated exploration sandbox."
 
         return None, "All discovered authentication options have been attempted without granting access."
 
@@ -327,6 +363,7 @@ class AuthStrategyEvaluator:
         strategy: AuthOption,
         credentials: dict[str, Any] | None,
         node_id: str,
+        understanding: Any = None,
     ) -> AgentActionProposal | None:
         """Converts the selected authentication strategy into a targeted epistemic action."""
         if strategy.method_type == "self_registration":
@@ -345,13 +382,23 @@ class AuthStrategyEvaluator:
             else:
                 # Currently on registration form: execute registration
                 import uuid
-                synthetic_email = f"test.kova.{uuid.uuid4().hex[:6]}@gmail.com"
-                synthetic_pwd = f"SecurePassword123!{uuid.uuid4().hex[:4]}"
-                creds = {
-                    "name": "Kova Tester",
-                    "email": synthetic_email,
-                    "password": synthetic_pwd,
-                }
+                existing = getattr(understanding, "exploration_identity", None) if understanding is not None else None
+                if existing and existing.get("email") and existing.get("password"):
+                    creds = {
+                        "name": existing.get("name") or "Kova Tester",
+                        "email": existing["email"],
+                        "password": existing["password"],
+                    }
+                else:
+                    synthetic_email = f"test.kova.{uuid.uuid4().hex[:6]}@gmail.com"
+                    synthetic_pwd = f"SecurePassword123!{uuid.uuid4().hex[:4]}"
+                    creds = {
+                        "name": "Kova Tester",
+                        "email": synthetic_email,
+                        "password": synthetic_pwd,
+                    }
+                    if understanding is not None and hasattr(understanding, "set_exploration_identity"):
+                        understanding.set_exploration_identity(creds["email"], creds["password"], creds["name"])
                 return AgentActionProposal(
                     action=ExplorationAction.AUTHENTICATE,
                     target={"credentials": creds, "is_signup": True, "selector": strategy.selector},

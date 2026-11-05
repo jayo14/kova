@@ -927,6 +927,11 @@ def deduplicate_and_rank_journeys(
     if not validated:
         return blocked_missions[:max_results]
 
+    # Prefer meaningful workflows over navigation-only journeys when available.
+    functional = [m for m in validated if not is_navigation_only_workflow(m)]
+    if functional:
+        validated = functional
+
     # Score each validated journey
     scored: list[tuple[float, DiscoveredMission]] = []
     goal_norm = goal.strip().lower() if goal else ""
