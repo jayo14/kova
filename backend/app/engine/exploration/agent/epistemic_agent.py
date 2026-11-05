@@ -20,6 +20,7 @@ from urllib.parse import urljoin, urlparse
 
 from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
 from app.engine.ai.provider import get_ai_provider, TaskType
+from app.engine.exploration.agent.budget import ResourceBudget
 from app.engine.exploration.agent.actions import execute_action
 from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
 from app.engine.exploration.agent.interruption import (
@@ -57,7 +58,6 @@ _DEFAULT_BUDGET = {
     "max_actions": 200,
     "max_model_calls": 100,
 }
-
 _NO_PROGRESS_LIMIT = 3
 
 _EPISTEMIC_SYSTEM_PROMPT = (
@@ -102,6 +102,36 @@ def _match_control(target: dict[str, Any], observation: dict[str, Any]) -> dict[
         if text and _control_name(control).lower() == text:
             return control
     return None
+
+
+def _action_category(proposal: AgentActionProposal) -> str:
+    """Categorize an exploration action for budget tracking."""
+    action = proposal.action
+    if action == ExplorationAction.AUTHENTICATE:
+        return "auth"
+    if action in (ExplorationAction.DISMISS_INTERRUPTION, ExplorationAction.COMPLETE_INTERRUPTION):
+        return "obstacle"
+    if action == ExplorationAction.OPEN_LINK:
+        target = proposal.target or {}
+        url = str(target.get("url") or target.get("href") or "").lower()
+        if any(k in url for k in ("/login", "/signin", "/sign-in", "/register", "/signup", "/sign-up", "/auth")):
+            return "auth"
+        return "discovery"
+    if action in (ExplorationAction.CLICK_CONTROL, ExplorationAction.OPEN_MENU_OR_TAB, ExplorationAction.EXPAND_ACCORDION):
+        return "discovery"
+    if action in (ExplorationAction.FILL_INPUTS, ExplorationAction.SUBMIT_FORM):
+        target = proposal.target or {}
+        if target.get("is_signup") or any(
+            k in str(target.get("url") or target.get("href") or "").lower()
+            for k in ("/login", "/signin", "/sign-in", "/register", "/signup", "/sign-up", "/auth")
+        ):
+            return "auth"
+        return "discovery"
+    if action == ExplorationAction.SCROLL_TO_LOAD_MORE:
+        return "discovery"
+    if action == ExplorationAction.GO_BACK:
+        return "discovery"
+    return "discovery"
 
 
 def _action_identity(node_id: str, proposal: AgentActionProposal) -> str:
@@ -185,7 +215,14 @@ class EpistemicExplorationAgent:
         self._provider_resolved = provider is not None
         self.credentials = credentials or {}
         self.sitemap = SiteMap()
-        self.budget = {**_DEFAULT_BUDGET, **(budget or {})}
+        # Backward-compatible budget: accept dict with max_actions or ResourceBudget fields
+        _budget = budget or {}
+        total_effort = float(_budget.get("total_effort", _budget.get("max_actions", 100)))
+        self.budget = ResourceBudget(
+            total_effort=total_effort,
+            max_wall_clock=float(_budget.get("max_wall_clock", 600)),
+            max_pages=int(_budget.get("max_pages", 50)),
+        )
         self._clock = clock
         self._started_at = clock()
         self._actions_taken = 0
@@ -231,12 +268,7 @@ class EpistemicExplorationAgent:
         return self.provider
 
     def _budget_exhausted(self) -> bool:
-        elapsed = self._clock() - self._started_at
-        return (
-            elapsed >= self.budget["max_wall_clock"]
-            or len(self.sitemap.nodes) >= self.budget["max_pages"]
-            or self._actions_taken >= self.budget["max_actions"]
-        )
+        return self.budget.termination_reason is not None
 
     async def observe_current(self) -> dict[str, Any]:
         fallback_url = getattr(self.page, "url", "") or ""
@@ -296,7 +328,7 @@ class EpistemicExplorationAgent:
 
     async def run(self, max_steps: int | None = None) -> dict[str, Any]:
         """Execute the epistemic investigation loop until goals are met or budget exhausted."""
-        step_limit = max_steps if max_steps is not None else self.budget["max_actions"]
+        step_limit = max_steps if max_steps is not None else int(self.budget.total_effort)
         steps = 0
         no_progress = 0
         termination = "frontier_empty"
@@ -397,13 +429,25 @@ class EpistemicExplorationAgent:
                 await self._emit_progress("Verifying application access...", status="active")
 
             success, detail = await execute_action(self.page, proposal, self.credentials, history=self._history)
-            self._actions_taken += 1
 
-            # 5. Post-action observation
+            # 5. Post-action observation (needed for budget evidence assessment)
             after_obs = await self.observe_current()
             self._pending_obs = after_obs
             after_url = after_obs["url"]
             after_node = self.sitemap.get_or_create_node(after_url, after_obs)
+
+            # Categorize the action for budget tracking
+            action_category = _action_category(proposal)
+            # Determine if this action produced new evidence
+            evidence_gained = (
+                after_node.url_norm != node.url_norm
+                or len(after_obs.get("controls") or []) != len(observation.get("controls") or [])
+                or len(after_obs.get("links") or []) != len(observation.get("links") or [])
+                or self.understanding.is_currently_authenticated
+            )
+            if not self.budget.spend(action_category, evidence_gained=evidence_gained, step=steps):
+                termination = self.budget.termination_reason or "budget_exhausted"
+                break
 
             if success:
                 self.sitemap.add_edge(node.node_id, after_node.node_id, proposal.model_dump(mode="json"))
@@ -539,6 +583,12 @@ class EpistemicExplorationAgent:
                         outcome=f"Did not grant application access (remained at {after_url})",
                     )
                     await self._emit_progress(f"Application access not established: Remained at {after_url}")
+                    failed_same = sum(
+                        1 for a in self.understanding.attempted_auth_strategies
+                        if a.get("type") == strategy_type and not a.get("success")
+                    )
+                    if failed_same >= 2:
+                        self.understanding.mark_auth_blocked("Repeated authentication attempts did not establish a session")
             elif proposal.action == ExplorationAction.OPEN_LINK:
                 after_path = urlparse(after_url).path.lower()
                 is_after_auth_area = any(p in after_path for p in ("/login", "/register", "/signup", "/signin", "/sign-in", "/auth"))
@@ -577,10 +627,11 @@ class EpistemicExplorationAgent:
             "understanding": self.understanding.summarize_understanding(),
             "stats": {
                 "steps": steps,
-                "actions": self._actions_taken,
+                "actions": self.budget.actions_taken,
                 "model_calls": self._model_calls,
                 "pages": len(self.sitemap.nodes),
                 "elapsed_seconds": round(self._clock() - self._started_at, 3),
+                "budget": self.budget.summary(),
             },
         }
 
@@ -726,7 +777,7 @@ class EpistemicExplorationAgent:
         analysis = AuthStrategyEvaluator.analyze_surface(observation, curr_url)
 
         # Evaluate authentication doors before doing blind BFS/crawling
-        if not self.understanding.is_currently_authenticated:
+        if not self.understanding.is_currently_authenticated and not self.understanding.auth_blocked:
             if analysis.is_auth_surface or analysis.has_registration_link or analysis.has_native_login or analysis.has_registration_form:
                 strategy, justification = AuthStrategyEvaluator.select_strategy(analysis, self.credentials, self.understanding)
                 if strategy is not None:
@@ -744,7 +795,7 @@ class EpistemicExplorationAgent:
                             return auth_proposal.with_source("auth_strategy_evaluator")
 
         provider = self._resolve_provider()
-        if provider is not None and self._model_calls < self.budget["max_model_calls"]:
+        if provider is not None and self._model_calls < int(self.budget.total_effort):
             proposal = await self._propose_ai(provider, observation, node)
             if proposal is not None:
                 return proposal.with_source("ai")

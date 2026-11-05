@@ -162,6 +162,8 @@ class ApplicationUnderstanding(BaseModel):
     is_currently_authenticated: bool = False
     session_state: SessionAuthState = SessionAuthState.AUTHENTICATION_STATE_UNCERTAIN
     auth_blockers: list[str] = Field(default_factory=list)       # e.g. ["EMAIL_VERIFICATION", "CAPTCHA"]
+    auth_blocked: bool = False
+    auth_blocker_reason: str = ""
     discovered_auth_methods: list[dict[str, Any]] = Field(default_factory=list)
     selected_auth_strategy: str | None = None
     attempted_auth_strategies: list[dict[str, Any]] = Field(default_factory=list)
@@ -363,6 +365,12 @@ class ApplicationUnderstanding(BaseModel):
     def mark_registration_failed(self, reason: str = "failed_validation") -> None:
         """Mark registration as failed with a specific reason."""
         self.registration_outcome = reason
+
+    def mark_auth_blocked(self, reason: str) -> None:
+        self.auth_blocked = True
+        self.auth_blocker_reason = reason
+        if reason not in self.auth_blockers:
+            self.auth_blockers.append(reason)
 
     def has_active_identity(self) -> bool:
         """Return True if an exploration identity has been created (regardless of auth success)."""
