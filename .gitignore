@@ -35,3 +35,5 @@ chunks/
 
 # Certificate
 kova-redis-ca.crt
+
+brag-output/
