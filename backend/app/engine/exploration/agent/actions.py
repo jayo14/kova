@@ -50,6 +50,10 @@ async def execute_action(
             return await execute_scroll(page)
         if action == ExplorationAction.GO_BACK:
             return await execute_go_back(page, history=history)
+        if action == ExplorationAction.DISMISS_INTERRUPTION:
+            return await execute_dismiss_interruption(page, target)
+        if action == ExplorationAction.COMPLETE_INTERRUPTION:
+            return await execute_complete_interruption(page, target)
 
         return False, f"Unsupported action type: {action}"
     except Exception as exc:
@@ -453,3 +457,136 @@ async def execute_go_back(
         return False, "Browser could not go back"
     except Exception as exc:
         return False, f"Go back failed: {exc}"
+
+
+async def execute_dismiss_interruption(
+    page: Any,
+    target: dict[str, Any],
+) -> tuple[bool, str]:
+    """Dismiss an interface interruption using available controls, backdrop, or Escape."""
+    title = target.get("dialog_title") or "dialog"
+    selector = target.get("selector")
+    text = target.get("text") or target.get("name")
+
+    # 1. Click explicit control if identified
+    if selector:
+        try:
+            loc = page.locator(selector)
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=1000):
+                await loc.click(timeout=3000)
+                await asyncio.sleep(0.4)
+                return True, f"Dismissed interruption '{title}' via control {selector}"
+        except Exception:
+            pass
+
+    if text:
+        try:
+            clean = str(text).replace("'", "\\'")
+            loc = page.locator(f"button:has-text('{clean}'), a:has-text('{clean}'), [role='button']:has-text('{clean}')")
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=800):
+                await loc.click(timeout=3000)
+                await asyncio.sleep(0.4)
+                return True, f"Dismissed interruption '{title}' via '{text}' button"
+        except Exception:
+            pass
+
+    # 2. Try common close buttons
+    close_candidates = [
+        "button:has-text('Got it')",
+        "button:has-text('Close')",
+        "button:has-text('Dismiss')",
+        "button:has-text('Not now')",
+        "button:has-text('Maybe later')",
+        "button:has-text('Skip')",
+        "button[aria-label*='close' i]",
+        "button[aria-label*='dismiss' i]",
+        "[aria-label*='Close' i]",
+        ".close",
+        "[class*='close']",
+    ]
+    for cs in close_candidates:
+        try:
+            loc = page.locator(cs)
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=300):
+                await loc.click(timeout=2000)
+                await asyncio.sleep(0.4)
+                return True, f"Dismissed interruption '{title}' via {cs}"
+        except Exception:
+            pass
+
+    # 3. Try Escape key
+    try:
+        if hasattr(page, "keyboard") and hasattr(page.keyboard, "press"):
+            await page.keyboard.press("Escape")
+            await asyncio.sleep(0.4)
+            return True, f"Dismissed interruption '{title}' via Escape key"
+    except Exception:
+        pass
+
+    return False, f"Could not dismiss interruption '{title}'"
+
+
+async def execute_complete_interruption(
+    page: Any,
+    target: dict[str, Any],
+) -> tuple[bool, str]:
+    """Complete a required setup interaction by filling synthetic inputs and submitting."""
+    title = target.get("dialog_title") or "setup"
+    fields = target.get("fields") or {}
+
+    for sel, val in fields.items():
+        try:
+            loc = page.locator(sel)
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=500):
+                if isinstance(val, bool):
+                    if val and hasattr(loc, "check"):
+                        await loc.check()
+                else:
+                    if hasattr(loc, "fill"):
+                        await loc.fill(str(val))
+        except Exception:
+            continue
+
+    # Click submit or action button
+    selector = target.get("selector")
+    if selector:
+        try:
+            loc = page.locator(selector)
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=1000):
+                await loc.click(timeout=3000)
+                await asyncio.sleep(0.5)
+                return True, f"Completed required interaction for '{title}'"
+        except Exception:
+            pass
+
+    submit_candidates = [
+        "button[type='submit']",
+        "button:has-text('Continue')",
+        "button:has-text('Next')",
+        "button:has-text('Save')",
+        "button:has-text('Done')",
+        "button:has-text('Create')",
+    ]
+    for cs in submit_candidates:
+        try:
+            loc = page.locator(cs)
+            if hasattr(loc, "first"):
+                loc = loc.first
+            if await loc.is_visible(timeout=500):
+                await loc.click(timeout=2000)
+                await asyncio.sleep(0.5)
+                return True, f"Submitted required setup '{title}' via {cs}"
+        except Exception:
+            pass
+
+    return True, f"Completed input entry for '{title}'"
