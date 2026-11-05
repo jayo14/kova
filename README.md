@@ -12,11 +12,14 @@
 ---
 
 <p align="center">
-  <a href="brag-output/brag.mp4">
-    <img src="brag-output/brag.jpg" alt="Kova Launch Video — Autonomous Product-Flow Testing" width="100%" />
-  </a>
+  <video src="brag-output/brag.mp4" poster="brag-output/brag.jpg" controls width="100%">
+    <source src="brag-output/brag.mp4" type="video/mp4">
+    <a href="brag-output/brag.mp4">
+      <img src="brag-output/brag.jpg" alt="Kova Launch Video — Autonomous Product-Flow Testing" width="100%" />
+    </a>
+  </video>
   <br />
-  <em>▶ <b><a href="brag-output/brag.mp4">Watch Kova in Action (18s)</a></b> — Autonomous exploration, modal & obstruction handling, and cryptographic verification.</em>
+  <em>▶ <b>Autonomous exploration, modal &amp; obstruction handling, and cryptographic verification (18s).</b></em>
 </p>
 
 ---
