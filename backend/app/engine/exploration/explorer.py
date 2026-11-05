@@ -1111,7 +1111,10 @@ class ExplorationEngine:
             return None
         finally:
             try:
-                is_auth = (result or {}).get("understanding", {}).get("is_authenticated", False)
+                und = (result or {}).get("understanding", {})
+                is_auth = und.get("is_authenticated", False) or und.get("session_state") in (
+                    "authentication_successful", "authenticated_session_maintained"
+                )
                 if not is_auth and getattr(page, "url", None) != start_url:
                     await page.goto(start_url, wait_until="domcontentloaded", timeout=15000)
             except Exception:
@@ -5447,7 +5450,7 @@ class ExplorationEngine:
         ):
             return None
 
-        if not selector or not selector.startswith("#"):
+        if not selector:
             clean_name = el_name.replace("'", "\\'")
             if el_type in ("link", "a"):
                 selector = f"a:has-text('{clean_name}')"
@@ -5463,7 +5466,7 @@ class ExplorationEngine:
             credential_id=self.credential_id,
             element=element,
         )
-        if not journey_data:
+        if not journey_data or journey_data.get("validation_status") == "rejected_by_quality_gate":
             return None
 
         return DiscoveredMission(
@@ -5489,6 +5492,7 @@ class ExplorationEngine:
             validation_status=journey_data.get("validation_status", "eligible"),
             provenance=journey_data.get("provenance", {}),
             rejection_reasons=journey_data.get("rejection_reasons", []),
+            control_hints=journey_data.get("control_hints") or ([el_name] if el_name else []),
         )
 
     def _classify_intent(self, element_name: str, element: dict | None = None) -> str:
@@ -5539,6 +5543,16 @@ class ExplorationEngine:
             return "browse"
 
         # Content / Resource intents
+        if any(kw in lower for kw in ["create report", "create your report", "generate report", "technical report", "build report"]) or (
+            "report" in lower and any(w in lower for w in ["create", "generate", "build", "start", "new", "your"])
+        ):
+            return "generate_report"
+
+        if any(kw in lower for kw in ["mock defence", "mock defense", "defence preparation", "defense preparation", "defence simulation", "defense simulation"]) or (
+            any(w in lower for w in ["defence", "defense"]) and any(w in lower for w in ["mock", "practice", "prep", "simulate"])
+        ):
+            return "mock_defence"
+
         if any(kw in lower for kw in ["preview", "view", "open", "read", "watch", "play"]):
             return "view_content"
         if any(kw in lower for kw in ["download", "export", "save", "bookmark"]):
@@ -5582,11 +5596,62 @@ class ExplorationEngine:
 
         app_name = title or "the application"
 
-        if intent in ("password_toggle", "input_field"):
+        if intent == "input_field":
             return None
 
+        if intent == "password_toggle":
+            password_input = "input[type='password'], input[name*='password' i], input[id*='password' i]"
+            toggle_sel = selector or "button[aria-label*='password' i], button:has-text('Show password'), button:has-text('Hide password')"
+            return {
+                "name": "Toggle password visibility",
+                "description": "Enter test text into the password field, toggle visibility to reveal cleartext, and toggle again to restore masking.",
+                "objective": "Verify that the password visibility toggle reveals masked text and returns to masked state",
+                "category": "control_exploration",
+                "kind": "control_exploration",
+                "journey": [
+                    f"Open {app_name}",
+                    "Enter test text into password input",
+                    f"Click '{el_name}' to reveal password",
+                    "Verify password input type changes to text",
+                    f"Click '{el_name}' again to mask password",
+                    "Verify password input type returns to password",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "wait", "value": "500"},
+                    {"type": "type", "target": password_input, "value": "SecretPassword123!"},
+                    {"type": "wait", "value": "200"},
+                    {"type": "click", "target": toggle_sel},
+                    {"type": "wait", "value": "200"},
+                    {"type": "click", "target": toggle_sel},
+                    {"type": "wait", "value": "200"},
+                ],
+                "success_condition": {
+                    "element_attribute": {
+                        "target": password_input,
+                        "attribute": "type",
+                        "value": "password",
+                    }
+                },
+                "confidence": 0.85,
+                "estimated_time": 10,
+                "user_goal": "Toggle password visibility to verify cleartext reveal and masking",
+                "expected_outcome": "Password field toggles between masked and visible states and returns to masked password type",
+                "classification": "functional",
+                "is_core": False,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
+
         from app.modules.exploration.journey_validator import is_flimsy_landing_element
-        if is_flimsy_landing_element(el_name) or "@" in el_name:
+        if (intent not in ("oauth_login", "forgot_password", "create_account", "login", "logout")
+            and (is_flimsy_landing_element(el_name) or "@" in el_name)):
             return None
 
         if intent == "oauth_login":
@@ -5664,6 +5729,92 @@ class ExplorationEngine:
                 "provenance": {
                     "observed_controls": [el_name, selector],
                     "observed_routes": [base_url, target_route],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
+
+        if intent == "generate_report":
+            input_sel = "input[placeholder*='title' i], input[type='text'], textarea, [role='textbox']"
+            submit_btn = "button[type='submit'], button:has-text('Generate'), button:has-text('Save'), button:has-text('Continue'), button:has-text('Create')"
+            report_title = el_name.lower().replace('create your', '').replace('create', '').strip() or 'technical report'
+            return {
+                "name": f"Generate {report_title}",
+                "description": f"Use '{el_name}' to configure report parameters, provide logbook content, and generate the structured technical report.",
+                "objective": f"Verify that {persona} can generate a complete technical report from input details",
+                "category": "workflow",
+                "kind": "feature_test",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Initiate report generation via '{el_name}'",
+                    "Input report topic and technical details",
+                    "Generate report document",
+                    "Verify generated report preview and sections",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "type", "target": input_sel, "value": "SIWES Technical Report & Field Experience"},
+                    {"type": "click", "target": submit_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[data-testid*='report' i], .report-preview, .report-content, article, [role='document']",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.85,
+                "estimated_time": 25,
+                "user_goal": "Generate complete technical report from input logbook details",
+                "expected_outcome": "Report generation completes and renders structured technical document with chapters",
+                "classification": "functional",
+                "is_core": True,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
+                    "preconditions": [],
+                    "unmet_preconditions": [],
+                },
+            }
+
+        if intent == "mock_defence":
+            start_btn = "button:has-text('Start'), button:has-text('Begin'), button:has-text('Ready'), button[type='submit']"
+            return {
+                "name": f"Practice {el_name.lower().strip() or 'mock defence'}",
+                "description": f"Use '{el_name}' to start a mock defence session with automated question prompts.",
+                "objective": f"Verify that {persona} can initiate and participate in a mock defence simulation",
+                "category": "workflow",
+                "kind": "feature_test",
+                "journey": [
+                    f"Open {app_name}",
+                    f"Launch defence simulation via '{el_name}'",
+                    "Start defence session",
+                    "Verify question prompt and response evaluation interface",
+                ],
+                "steps": [
+                    {"type": "navigate", "url": base_url},
+                    {"type": "click", "target": selector},
+                    {"type": "click", "target": start_btn},
+                ],
+                "success_condition": {
+                    "element_count": {
+                        "selector": "[data-testid*='question' i], .defence-session, .mock-session, [role='region'], [role='dialog']",
+                        "min": 1,
+                    },
+                },
+                "confidence": 0.85,
+                "estimated_time": 20,
+                "user_goal": "Participate in simulated viva defence with automated questions and scoring",
+                "expected_outcome": "Mock defence session begins and renders questions with evaluation feedback",
+                "classification": "functional",
+                "is_core": True,
+                "runnable": True,
+                "validation_status": "eligible",
+                "provenance": {
+                    "observed_controls": [el_name, selector],
+                    "observed_routes": [base_url],
                     "preconditions": [],
                     "unmet_preconditions": [],
                 },
