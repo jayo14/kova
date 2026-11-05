@@ -24,6 +24,16 @@ class EpistemicState(str, Enum):
     REFUTED = "refuted"                  # Hypothesis disproved by interaction outcome
 
 
+class SessionAuthState(str, Enum):
+    """Reliable session authentication state model."""
+    AUTHENTICATION_PENDING = "authentication_pending"
+    AUTHENTICATION_IN_PROGRESS = "authentication_in_progress"
+    AUTHENTICATION_SUCCESSFUL = "authentication_successful"
+    AUTHENTICATED_SESSION_MAINTAINED = "authenticated_session_maintained"
+    AUTHENTICATION_GENUINELY_LOST = "authentication_genuinely_lost"
+    AUTHENTICATION_STATE_UNCERTAIN = "authentication_state_uncertain"
+
+
 class ProvenanceSource(str, Enum):
     """Source of an observation or belief."""
     INITIAL_SCAN = "initial_scan"
@@ -94,6 +104,34 @@ class InvestigationQuestion(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
 
+class DependencyState(BaseModel):
+    """Tracks infrastructure and backend service readiness across time."""
+    host: str
+    kind: str = "backend"                # "backend", "auth_provider", "database"
+    is_ready: bool = True
+    last_status: str = "ready"           # "ready", "warming_up", "pending_request", "failed"
+    pending_since: float | None = None
+    pending_duration_s: float = 0.0
+    failure_count: int = 0
+    last_observed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class InterruptionRecord(BaseModel):
+    """Tracks an encountered and investigated interface obstruction."""
+    id: str = Field(default_factory=lambda: f"int-{uuid.uuid4().hex[:8]}")
+    title: str = ""
+    interruption_type: str = ""          # "optional_prompt", "required_setup", "permission_request", etc.
+    decision: str = ""                   # "dismiss", "complete_required", "make_informed_choice", etc.
+    resolution_action: str = ""
+    resolved: bool = False
+    underlying_workspace_accessible: bool = False
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    model_config = ConfigDict(extra="ignore")
+
+
 class ApplicationUnderstanding(BaseModel):
     """Living, evolving epistemic model of the target web application.
 
@@ -122,10 +160,17 @@ class ApplicationUnderstanding(BaseModel):
     self_registration_available: bool | None = None
     auth_credentials_available: bool = False
     is_currently_authenticated: bool = False
+    session_state: SessionAuthState = SessionAuthState.AUTHENTICATION_STATE_UNCERTAIN
     auth_blockers: list[str] = Field(default_factory=list)       # e.g. ["EMAIL_VERIFICATION", "CAPTCHA"]
     discovered_auth_methods: list[dict[str, Any]] = Field(default_factory=list)
     selected_auth_strategy: str | None = None
     attempted_auth_strategies: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Infrastructure & dependency tracking
+    dependencies: dict[str, DependencyState] = Field(default_factory=dict)
+
+    # Interface interruptions handled
+    interruptions: list[InterruptionRecord] = Field(default_factory=list)
 
     # Epistemic frontier
     open_questions: list[InvestigationQuestion] = Field(default_factory=list)
@@ -292,6 +337,66 @@ class ApplicationUnderstanding(BaseModel):
                     m["viable"] = False
                 return
 
+    def update_session_auth(self, new_state: SessionAuthState, reason: str = "") -> None:
+        self.session_state = new_state
+        if new_state in (SessionAuthState.AUTHENTICATION_SUCCESSFUL, SessionAuthState.AUTHENTICATED_SESSION_MAINTAINED):
+            self.is_currently_authenticated = True
+        elif new_state == SessionAuthState.AUTHENTICATION_GENUINELY_LOST:
+            self.is_currently_authenticated = False
+
+    def update_dependency(
+        self,
+        host: str,
+        is_ready: bool,
+        status: str = "ready",
+        pending_duration: float = 0.0,
+        kind: str = "backend",
+    ) -> DependencyState:
+        dep = self.dependencies.get(host)
+        if not dep:
+            dep = DependencyState(
+                host=host,
+                kind=kind,
+                is_ready=is_ready,
+                last_status=status,
+                pending_duration_s=pending_duration,
+            )
+            self.dependencies[host] = dep
+        else:
+            dep.is_ready = is_ready
+            dep.last_status = status
+            dep.pending_duration_s = pending_duration
+            dep.last_observed_at = datetime.now(timezone.utc).isoformat()
+            if not is_ready:
+                dep.failure_count += 1
+        return dep
+
+    def is_dependency_ready(self, host: str | None = None) -> bool:
+        if host:
+            dep = self.dependencies.get(host)
+            return dep.is_ready if dep else True
+        return all(d.is_ready for d in self.dependencies.values())
+
+    def record_interruption(
+        self,
+        title: str,
+        interruption_type: str,
+        decision: str,
+        resolution_action: str = "",
+        resolved: bool = True,
+        underlying_accessible: bool = True,
+    ) -> InterruptionRecord:
+        record = InterruptionRecord(
+            title=title,
+            interruption_type=interruption_type,
+            decision=decision,
+            resolution_action=resolution_action,
+            resolved=resolved,
+            underlying_workspace_accessible=underlying_accessible,
+        )
+        self.interruptions.append(record)
+        return record
+
     def get_confirmed_capabilities(self) -> list[InvestigatedCapability]:
         return [c for c in self.capabilities.values() if c.state == EpistemicState.CONFIRMED]
 
@@ -328,4 +433,13 @@ class ApplicationUnderstanding(BaseModel):
             "transitions_count": len(self.state_transitions),
             "open_questions": [q.question for q in self.open_questions if q.status == "open"],
             "blockers": self.auth_blockers,
+            "session_state": self.session_state.value if hasattr(self.session_state, "value") else str(self.session_state),
+            "dependencies": {
+                h: {"ready": d.is_ready, "status": d.last_status, "pending_s": d.pending_duration_s}
+                for h, d in self.dependencies.items()
+            },
+            "interruptions_handled": [
+                {"title": r.title, "type": r.interruption_type, "decision": r.decision, "resolved": r.resolved}
+                for r in self.interruptions
+            ],
         }
