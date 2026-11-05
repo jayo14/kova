@@ -22,18 +22,21 @@ from __future__ import annotations
 
 import pytest
 
-from app.engine.exploration.agent.agent import ExplorationAgent
+from app.engine.exploration.agent.actions import (
+    execute_action,
+    execute_authenticate,
+    execute_fill_inputs,
+    execute_open_link,
+)
+from app.engine.exploration.agent.epistemic_agent import EpistemicExplorationAgent
 from app.engine.exploration.agent.auth_evaluator import (
     AuthOption,
     AuthStrategyEvaluator,
     AuthSurfaceAnalysis,
 )
 from app.engine.exploration.agent.budget import ResourceBudget
-from app.engine.exploration.agent.schemas import (
-    AgentActionProposal,
-    ExplorationAction,
-)
 from app.engine.exploration.agent.understanding import ApplicationUnderstanding
+from app.engine.exploration.agent.sitemap import SitemapNode
 from app.modules.exploration.journey_validator import (
     deduplicate_and_rank_journeys,
     is_navigation_only_workflow,
@@ -167,14 +170,14 @@ class FakeEngine:
         return self.site.observation(page.url)
 
 
-def _agent(site: FakeSite, **kwargs) -> tuple[ExplorationAgent, list[tuple[str, dict]]]:
+def _agent(site: FakeSite, **kwargs) -> tuple[EpistemicExplorationAgent, list[tuple[str, dict]]]:
     events: list[tuple[str, dict]] = []
 
     async def emit(event_type: str, payload: dict) -> None:
         events.append((event_type, payload))
 
     provider = kwargs.pop("provider", None)
-    agent = ExplorationAgent(
+    agent = EpistemicExplorationAgent(
         FakeEngine(site),
         FakePage(site),
         emit,
