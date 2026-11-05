@@ -22,6 +22,11 @@ from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_pag
 from app.engine.ai.provider import get_ai_provider, TaskType
 from app.engine.exploration.agent.actions import execute_action
 from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
+from app.engine.exploration.agent.interruption import (
+    InterruptionDecision,
+    InterruptionEvaluator,
+    InterruptionType,
+)
 from app.engine.exploration.agent.policy import is_dangerous_control, is_safe_to_click
 from app.engine.exploration.agent.schemas import (
     CLICK_ACTIONS,
@@ -31,12 +36,17 @@ from app.engine.exploration.agent.schemas import (
     ExplorationAction,
 )
 from app.engine.exploration.agent.sitemap import SiteMap, normalize_url
+from app.engine.exploration.agent.temporal import (
+    OperationOutcomeStatus,
+    TemporalEvaluator,
+)
 from app.engine.exploration.agent.understanding import (
     ApplicationArea,
     ApplicationUnderstanding,
     EpistemicState,
     InvestigatedCapability,
     InvestigationQuestion,
+    SessionAuthState,
 )
 
 logger = logging.getLogger(__name__)
@@ -370,17 +380,24 @@ class EpistemicExplorationAgent:
             self._last_obs = observation
             self._last_proposal = proposal
 
-            is_auth_investigation = (
-                proposal.source == "auth_strategy_evaluator"
-                or proposal.action == ExplorationAction.AUTHENTICATE
-                or any(k in before_url.lower() for k in ("/login", "/register", "/signup", "/signin"))
+            is_interruption_action = (
+                proposal.action in (
+                    ExplorationAction.DISMISS_INTERRUPTION,
+                    ExplorationAction.COMPLETE_INTERRUPTION,
+                )
+                or proposal.source == "interruption_handler"
             )
+
+            is_auth_submission = (
+                proposal.action == ExplorationAction.AUTHENTICATE
+                or (proposal.source == "auth_strategy_evaluator" and proposal.action != ExplorationAction.OPEN_LINK)
+            )
+
+            if is_auth_submission:
+                await self._emit_progress("Verifying application access...", status="active")
 
             success, detail = await execute_action(self.page, proposal, self.credentials, history=self._history)
             self._actions_taken += 1
-
-            if is_auth_investigation:
-                await self._emit_progress("Verifying application access...", status="active")
 
             # 5. Post-action observation
             after_obs = await self.observe_current()
@@ -397,8 +414,62 @@ class EpistemicExplorationAgent:
                     effect=detail,
                 )
 
-            # Evaluate authentication verification outcomes
-            if is_auth_investigation:
+            # Evaluate interruption resolution outcomes
+            if is_interruption_action:
+                dialogs_before = observation.get("dialogs") or []
+                dialogs_after = after_obs.get("dialogs") or []
+                diag_title = proposal.target.get("dialog_title") or "Dialog"
+                is_closed = len(dialogs_after) < len(dialogs_before) or not any(
+                    str(d.get("title") or d.get("accessible_name") or "") == diag_title
+                    for d in dialogs_after
+                )
+                if is_closed or success:
+                    self.understanding.record_interruption(
+                        title=diag_title,
+                        interruption_type="optional_prompt" if proposal.action == ExplorationAction.DISMISS_INTERRUPTION else "required_setup",
+                        decision="dismiss" if proposal.action == ExplorationAction.DISMISS_INTERRUPTION else "complete_required",
+                        resolution_action=proposal.action.value,
+                        resolved=True,
+                        underlying_accessible=True,
+                    )
+                    await self._emit_progress("Dialog dismissed; underlying workspace accessible")
+                    await self._emit_progress("Resuming application investigation")
+
+            # Evaluate authentication verification outcomes with temporal awareness
+            if is_auth_submission:
+                pending_host = None
+                if hasattr(self.engine, "_browser") and self.engine._browser:
+                    pending_host = self.engine._browser.get_slowest_pending_host()
+
+                eval_res = TemporalEvaluator.evaluate_operation(
+                    proposal, observation, after_obs, self.understanding, pending_host=pending_host
+                )
+
+                if eval_res.status == OperationOutcomeStatus.TRANSIENTLY_BLOCKED:
+                    await self._emit_progress(eval_res.event_description, status="active")
+                    # Adaptively wait for pending dependency to resolve
+                    settle_data = await TemporalEvaluator.adaptively_wait_for_settlement(
+                        self.page,
+                        pending_checker=lambda: self.engine._browser.get_slowest_pending_host() if getattr(self.engine, "_browser", None) else None,
+                        max_wait_s=eval_res.suggested_wait_s,
+                    )
+                    after_obs = await self.observe_current()
+                    self._pending_obs = after_obs
+                    after_url = after_obs["url"]
+                    after_node = self.sitemap.get_or_create_node(after_url, after_obs)
+                    if eval_res.affected_dependency:
+                        self.understanding.update_dependency(eval_res.affected_dependency, is_ready=True, status="ready")
+                        await self._emit_progress(f"Backend availability confirmed: {eval_res.affected_dependency} responded")
+
+                elif eval_res.status == OperationOutcomeStatus.PENDING:
+                    await self._emit_progress(eval_res.event_description, status="active")
+                    # Wait for redirect in flight
+                    await asyncio.sleep(2.0)
+                    after_obs = await self.observe_current()
+                    self._pending_obs = after_obs
+                    after_url = after_obs["url"]
+                    after_node = self.sitemap.get_or_create_node(after_url, after_obs)
+
                 self._update_understanding_from_obs(after_obs, after_node)
                 after_path = urlparse(after_url).path.lower()
                 is_after_auth_area = any(p in after_path for p in ("/login", "/register", "/signup", "/signin", "/sign-in", "/auth"))
@@ -433,26 +504,36 @@ class EpistemicExplorationAgent:
                     strategy_type = "native_login"
                     provider = None
 
-                # Only evaluate credential/auth verification on authentication submissions or OAuth clicks
-                if proposal.action == ExplorationAction.AUTHENTICATE or strategy_type == "oauth":
-                    if is_now_auth:
-                        self.understanding.is_currently_authenticated = True
-                        self.understanding.record_auth_attempt(
-                            strategy_type,
-                            provider,
-                            success=True,
-                            outcome=f"Access granted: Reached {after_url}",
-                        )
-                        await self._emit_progress(f"Application access verified: Successfully entered application workspace at {after_url}")
-                    else:
-                        self.understanding.record_auth_attempt(
-                            strategy_type,
-                            provider,
-                            success=False,
-                            outcome=f"Did not grant application access (remained at {after_url})",
-                        )
-                        await self._emit_progress(f"Application access not established: Remained at {after_url}")
-                elif proposal.action == ExplorationAction.OPEN_LINK and is_after_auth_area:
+                if is_now_auth:
+                    self.understanding.is_currently_authenticated = True
+                    self.understanding.update_session_auth(SessionAuthState.AUTHENTICATED_SESSION_MAINTAINED)
+                    self.understanding.record_auth_attempt(
+                        strategy_type,
+                        provider,
+                        success=True,
+                        outcome=f"Access granted: Reached {after_url}",
+                    )
+                    await self._emit_progress(f"Application access verified: Successfully entered application workspace at {after_url}")
+                elif eval_res.status == OperationOutcomeStatus.INCONCLUSIVE:
+                    self.understanding.record_auth_attempt(
+                        strategy_type,
+                        provider,
+                        success=False,
+                        outcome=f"Inconclusive (remained at {after_url})",
+                    )
+                    await self._emit_progress(f"Registration outcome remains inconclusive at {after_url}; checking session state")
+                else:
+                    self.understanding.record_auth_attempt(
+                        strategy_type,
+                        provider,
+                        success=False,
+                        outcome=f"Did not grant application access (remained at {after_url})",
+                    )
+                    await self._emit_progress(f"Application access not established: Remained at {after_url}")
+            elif proposal.action == ExplorationAction.OPEN_LINK:
+                after_path = urlparse(after_url).path.lower()
+                is_after_auth_area = any(p in after_path for p in ("/login", "/register", "/signup", "/signin", "/sign-in", "/auth"))
+                if is_after_auth_area and not self.understanding.is_currently_authenticated:
                     await self._emit_progress(f"Navigated to authentication surface: {after_url}")
 
             await self._emit(
@@ -495,6 +576,11 @@ class EpistemicExplorationAgent:
         }
 
     def _validated(self, proposal: AgentActionProposal, observation: dict[str, Any]) -> bool:
+        if proposal.action in (
+            ExplorationAction.DISMISS_INTERRUPTION,
+            ExplorationAction.COMPLETE_INTERRUPTION,
+        ):
+            return True
         if proposal.action == ExplorationAction.SCROLL_TO_LOAD_MORE:
             return True
         if proposal.action == ExplorationAction.GO_BACK:
@@ -548,6 +634,7 @@ class EpistemicExplorationAgent:
 
         if is_authenticated and not self.understanding.is_currently_authenticated:
             self.understanding.is_currently_authenticated = True
+            self.understanding.update_session_auth(SessionAuthState.AUTHENTICATED_SESSION_MAINTAINED)
 
         if is_auth_area:
             area_name = "Authentication"
@@ -609,6 +696,24 @@ class EpistemicExplorationAgent:
         self, observation: dict[str, Any], node: Any
     ) -> AgentActionProposal | None:
         curr_url = observation.get("url") or getattr(self.page, "url", "") or ""
+
+        # 1. Investigate and handle interface obstructions (modals, dialogs, popovers, onboarding)
+        for dialog in observation.get("dialogs") or []:
+            analysis = InterruptionEvaluator.evaluate(dialog, observation, self.understanding)
+            if analysis.decision != InterruptionDecision.PRESERVE_AND_DEFER:
+                interruption_prop = InterruptionEvaluator.propose_action_for_interruption(analysis, dialog, node.node_id)
+                if interruption_prop is not None:
+                    identity = _action_identity(node.node_id, interruption_prop)
+                    if identity not in self._attempted:
+                        await self._emit_progress(f"Detected interface interruption: {analysis.title or 'Dialog'}")
+                        await self._emit_progress(f"Investigating dialog requirements: {analysis.interruption_type.value.replace('_', ' ')}")
+                        if analysis.decision == InterruptionDecision.DISMISS:
+                            await self._emit_progress(f"Determined that the prompt is optional: {analysis.reason}")
+                        elif analysis.decision == InterruptionDecision.COMPLETE_REQUIRED:
+                            await self._emit_progress(f"Required setup discovered: {analysis.title}")
+                        await self._emit_progress(analysis.event_description, status="active")
+                        return interruption_prop.with_source("interruption_handler")
+
         analysis = AuthStrategyEvaluator.analyze_surface(observation, curr_url)
 
         # Evaluate authentication doors before doing blind BFS/crawling
@@ -669,14 +774,21 @@ class EpistemicExplorationAgent:
 
     def _propose_bfs(self, observation: dict[str, Any], node: Any) -> AgentActionProposal | None:
         seen_urls = {n.url_norm for n in self.sitemap.nodes.values()}
+        is_authenticated = self.understanding.is_currently_authenticated
 
         def _link_priority(link: dict[str, Any]) -> int:
             href = str(link.get("href") or "").lower()
             name = str(link.get("name") or "").lower()
-            if any(k in href for k in ("/register", "/signup", "/sign-up", "/join", "/login", "/signin", "/sign-in", "/app", "/dashboard", "/workspace")):
+            if is_authenticated:
+                if any(k in href for k in ("/login", "/signin", "/sign-in", "/register", "/signup", "/sign-up", "/auth/login")):
+                    return -100
+            else:
+                if any(k in href for k in ("/register", "/signup", "/sign-up", "/join", "/login", "/signin", "/sign-in")):
+                    return 100
+            if any(k in href for k in ("/app", "/dashboard", "/workspace")):
                 return 100
             if any(k in name for k in ("get started", "create account", "sign up", "sign in", "log in", "try free", "start free", "try now", "start now", "launch app")):
-                return 90
+                return 90 if not is_authenticated else 10
             parsed = urlparse(href)
             if parsed.path and parsed.path not in ("/", "") and not parsed.fragment:
                 return 50
@@ -687,7 +799,13 @@ class EpistemicExplorationAgent:
             return 20
 
         # 1. Links (prioritizing functional entrances and app paths over static hash fragments)
-        candidate_links = sorted(observation.get("links") or [], key=_link_priority, reverse=True)
+        candidate_links = observation.get("links") or []
+        if is_authenticated:
+            candidate_links = [
+                l for l in candidate_links
+                if not any(k in str(l.get("href") or "").lower() for k in ("/login", "/signin", "/sign-in", "/register", "/signup", "/sign-up", "/auth"))
+            ]
+        candidate_links = sorted(candidate_links, key=_link_priority, reverse=True)
         for link in candidate_links:
             href = link.get("href")
             if not href:
