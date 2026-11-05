@@ -22,18 +22,22 @@ class ExplorationAction(str, Enum):
     AUTHENTICATE = "authenticate"
     SCROLL_TO_LOAD_MORE = "scroll_to_load_more"
     GO_BACK = "go_back"
+    DISMISS_INTERRUPTION = "dismiss_interruption"
+    COMPLETE_INTERRUPTION = "complete_interruption"
 
 
 CLICK_ACTIONS = {
     ExplorationAction.CLICK_CONTROL,
     ExplorationAction.OPEN_MENU_OR_TAB,
     ExplorationAction.EXPAND_ACCORDION,
+    ExplorationAction.DISMISS_INTERRUPTION,
 }
 
 FORM_ACTIONS = {
     ExplorationAction.FILL_INPUTS,
     ExplorationAction.SUBMIT_FORM,
     ExplorationAction.AUTHENTICATE,
+    ExplorationAction.COMPLETE_INTERRUPTION,
 }
 
 
