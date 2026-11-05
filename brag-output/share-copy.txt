@@ -1,0 +1,1 @@
+Built Kova: give it a URL and a goal, and an autonomous agent explores your app, handles auth & modals, and tests every flow like a real human. "AI Proposes. Code Disposes." kova.dev
