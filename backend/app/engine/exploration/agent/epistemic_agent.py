@@ -21,6 +21,7 @@ from urllib.parse import urljoin, urlparse
 from app.engine.ai.prompt_sanitizer import build_system_prompt_clause, taint_page_content
 from app.engine.ai.provider import get_ai_provider, TaskType
 from app.engine.exploration.agent.actions import execute_action
+from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
 from app.engine.exploration.agent.policy import is_dangerous_control, is_safe_to_click
 from app.engine.exploration.agent.schemas import (
     CLICK_ACTIONS,
@@ -95,7 +96,15 @@ def _match_control(target: dict[str, Any], observation: dict[str, Any]) -> dict[
 
 def _action_identity(node_id: str, proposal: AgentActionProposal) -> str:
     target = proposal.target or {}
-    key = target.get("url") or target.get("href") or target.get("selector") or target.get("text") or target.get("name") or ""
+    key = (
+        target.get("url")
+        or target.get("href")
+        or target.get("selector")
+        or target.get("text")
+        or target.get("name")
+        or ("signup" if target.get("is_signup") else "")
+        or str((target.get("credentials") or {}).get("email") or "")
+    )
     return f"{node_id}:{proposal.action.value}:{str(key).strip().lower()}"
 
 
@@ -193,6 +202,13 @@ class EpistemicExplorationAgent:
             await self.event_emitter(event_type, payload)
         except Exception:
             logger.debug("Event emitter failed: %s", event_type, exc_info=True)
+
+    async def _emit_progress(self, message: str, status: str = "completed") -> None:
+        await self._emit("progress", {
+            "id": f"exp-agent-{int(time.time()*1000)}",
+            "message": message,
+            "status": status,
+        })
 
     def _resolve_provider(self) -> Any | None:
         if self._provider_resolved:
@@ -354,8 +370,17 @@ class EpistemicExplorationAgent:
             self._last_obs = observation
             self._last_proposal = proposal
 
+            is_auth_investigation = (
+                proposal.source == "auth_strategy_evaluator"
+                or proposal.action == ExplorationAction.AUTHENTICATE
+                or any(k in before_url.lower() for k in ("/login", "/register", "/signup", "/signin"))
+            )
+
             success, detail = await execute_action(self.page, proposal, self.credentials, history=self._history)
             self._actions_taken += 1
+
+            if is_auth_investigation:
+                await self._emit_progress("Verifying application access...", status="active")
 
             # 5. Post-action observation
             after_obs = await self.observe_current()
@@ -371,6 +396,53 @@ class EpistemicExplorationAgent:
                     to_url=after_url,
                     effect=detail,
                 )
+
+            # Evaluate authentication verification outcomes
+            if is_auth_investigation:
+                self._update_understanding_from_obs(after_obs, after_node)
+                is_now_auth = self.understanding.is_currently_authenticated or any(
+                    k in after_url.lower() for k in ("/dashboard", "/workspace", "/app", "/console", "/account", "/home")
+                )
+                if not is_now_auth and hasattr(self.page, "evaluate"):
+                    try:
+                        storage_auth = await self.page.evaluate("""() => {
+                            return Object.keys(localStorage).some(k => k.includes('token') || k.includes('user') || k.includes('auth')) ||
+                                   document.cookie.includes('token') || document.cookie.includes('auth');
+                        }""")
+                        if storage_auth:
+                            is_now_auth = True
+                    except Exception:
+                        pass
+
+                target_dict = proposal.target or {}
+                provider = target_dict.get("provider")
+                if provider or any(p in str(target_dict.get("text") or "").lower() for p in ("google", "apple", "github", "microsoft")):
+                    strategy_type = "oauth"
+                    provider = provider or "google"
+                elif target_dict.get("is_signup") or any(k in before_url.lower() for k in ("register", "signup")):
+                    strategy_type = "self_registration"
+                    provider = None
+                else:
+                    strategy_type = "native_login"
+                    provider = None
+
+                if is_now_auth:
+                    self.understanding.is_currently_authenticated = True
+                    self.understanding.record_auth_attempt(
+                        strategy_type,
+                        provider,
+                        success=True,
+                        outcome=f"Access granted: Reached {after_url}",
+                    )
+                    await self._emit_progress(f"Application access verified: Successfully entered application workspace at {after_url}")
+                else:
+                    self.understanding.record_auth_attempt(
+                        strategy_type,
+                        provider,
+                        success=False,
+                        outcome=f"Did not grant application access (remained at {after_url})",
+                    )
+                    await self._emit_progress(f"Application access not established: Remained at {after_url}")
 
             await self._emit(
                 "exploration.agent.act",
@@ -480,6 +552,24 @@ class EpistemicExplorationAgent:
             self.understanding.auth_required = True
             self.understanding.auth_type = "password_form"
 
+        # Register discovered authentication options
+        analysis = AuthStrategyEvaluator.analyze_surface(obs, url)
+        for opt in analysis.options:
+            self.understanding.record_auth_method(
+                method_type=opt.method_type,
+                provider=opt.provider,
+                label=opt.label,
+                entry_selector=opt.selector,
+                entry_url=opt.target_url,
+                viable=True,
+            )
+        if analysis.is_auth_surface:
+            self.understanding.auth_required = True
+            if analysis.has_native_login:
+                self.understanding.auth_type = "credentials"
+            elif analysis.has_registration_form:
+                self.understanding.auth_type = "registration"
+
     def _evaluate_action_outcome(
         self,
         prev_obs: dict[str, Any],
@@ -504,6 +594,27 @@ class EpistemicExplorationAgent:
     async def _propose(
         self, observation: dict[str, Any], node: Any
     ) -> AgentActionProposal | None:
+        curr_url = observation.get("url") or getattr(self.page, "url", "") or ""
+        analysis = AuthStrategyEvaluator.analyze_surface(observation, curr_url)
+
+        # Evaluate authentication doors before doing blind BFS/crawling
+        if not self.understanding.is_currently_authenticated:
+            if analysis.is_auth_surface or analysis.has_registration_link or analysis.has_native_login or analysis.has_registration_form:
+                strategy, justification = AuthStrategyEvaluator.select_strategy(analysis, self.credentials, self.understanding)
+                if strategy is not None:
+                    summary = analysis.options_summary()
+                    await self._emit_progress(f"Discovered authentication options: {summary}")
+                    await self._emit_progress("Evaluating available access: Checking configured credentials and registration requirements")
+                    await self._emit_progress(f"Selected {strategy.label}: {justification}")
+                    self.understanding.selected_auth_strategy = strategy.label
+
+                    auth_proposal = AuthStrategyEvaluator.propose_action_for_strategy(strategy, self.credentials, node.node_id)
+                    if auth_proposal is not None:
+                        identity = _action_identity(node.node_id, auth_proposal)
+                        if identity not in self._attempted:
+                            await self._emit_progress(f"Executing selected strategy: {auth_proposal.reason}", status="active")
+                            return auth_proposal.with_source("auth_strategy_evaluator")
+
         provider = self._resolve_provider()
         if provider is not None and self._model_calls < self.budget["max_model_calls"]:
             proposal = await self._propose_ai(provider, observation, node)
@@ -545,8 +656,25 @@ class EpistemicExplorationAgent:
     def _propose_bfs(self, observation: dict[str, Any], node: Any) -> AgentActionProposal | None:
         seen_urls = {n.url_norm for n in self.sitemap.nodes.values()}
 
-        # 1. Links
-        for link in observation.get("links") or []:
+        def _link_priority(link: dict[str, Any]) -> int:
+            href = str(link.get("href") or "").lower()
+            name = str(link.get("name") or "").lower()
+            if any(k in href for k in ("/register", "/signup", "/sign-up", "/join", "/login", "/signin", "/sign-in", "/app", "/dashboard", "/workspace")):
+                return 100
+            if any(k in name for k in ("get started", "create account", "sign up", "sign in", "log in", "try free", "start free", "try now", "start now", "launch app")):
+                return 90
+            parsed = urlparse(href)
+            if parsed.path and parsed.path not in ("/", "") and not parsed.fragment:
+                return 50
+            if parsed.path and parsed.path not in ("/", ""):
+                return 30
+            if parsed.fragment:
+                return 10
+            return 20
+
+        # 1. Links (prioritizing functional entrances and app paths over static hash fragments)
+        candidate_links = sorted(observation.get("links") or [], key=_link_priority, reverse=True)
+        for link in candidate_links:
             href = link.get("href")
             if not href:
                 continue
@@ -564,8 +692,17 @@ class EpistemicExplorationAgent:
                     return proposal
 
         # 2. Controls
+        attempted_failed_oauth = {
+            att.get("provider") or "oauth"
+            for att in self.understanding.attempted_auth_strategies
+            if att.get("type") == "oauth" and not att.get("success")
+        }
         for control in observation.get("controls") or []:
             name = _control_name(control)
+            lower_name = name.lower()
+            if any(p in lower_name for p in ("google", "apple", "github", "microsoft", "sso")) and (attempted_failed_oauth or not self.credentials):
+                # Do not repeat failed OAuth or blindly click OAuth controls through BFS
+                continue
             if not is_safe_to_click(name, control):
                 continue
             proposal = AgentActionProposal(

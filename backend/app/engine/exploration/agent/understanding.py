@@ -123,6 +123,9 @@ class ApplicationUnderstanding(BaseModel):
     auth_credentials_available: bool = False
     is_currently_authenticated: bool = False
     auth_blockers: list[str] = Field(default_factory=list)       # e.g. ["EMAIL_VERIFICATION", "CAPTCHA"]
+    discovered_auth_methods: list[dict[str, Any]] = Field(default_factory=list)
+    selected_auth_strategy: str | None = None
+    attempted_auth_strategies: list[dict[str, Any]] = Field(default_factory=list)
 
     # Epistemic frontier
     open_questions: list[InvestigationQuestion] = Field(default_factory=list)
@@ -237,6 +240,58 @@ class ApplicationUnderstanding(BaseModel):
                 q.answer = answer
                 break
 
+    def record_auth_method(
+        self,
+        method_type: str,
+        provider: str | None = None,
+        label: str = "",
+        entry_selector: str | None = None,
+        entry_url: str | None = None,
+        viable: bool = True,
+    ) -> None:
+        key = f"{method_type}:{provider or 'native'}"
+        for m in self.discovered_auth_methods:
+            if f"{m.get('type')}:{m.get('provider') or 'native'}" == key:
+                if entry_selector and not m.get("entry_selector"):
+                    m["entry_selector"] = entry_selector
+                if entry_url and not m.get("entry_url"):
+                    m["entry_url"] = entry_url
+                if label and not m.get("label"):
+                    m["label"] = label
+                return
+        self.discovered_auth_methods.append({
+            "type": method_type,
+            "provider": provider,
+            "label": label or (f"{provider} OAuth" if provider else method_type),
+            "viable": viable,
+            "attempted": False,
+            "outcome": None,
+            "entry_selector": entry_selector,
+            "entry_url": entry_url,
+        })
+
+    def record_auth_attempt(
+        self,
+        method_type: str,
+        provider: str | None = None,
+        success: bool = False,
+        outcome: str = "",
+    ) -> None:
+        key = f"{method_type}:{provider or 'native'}"
+        self.attempted_auth_strategies.append({
+            "type": method_type,
+            "provider": provider,
+            "success": success,
+            "outcome": outcome,
+        })
+        for m in self.discovered_auth_methods:
+            if f"{m.get('type')}:{m.get('provider') or 'native'}" == key:
+                m["attempted"] = True
+                m["outcome"] = outcome
+                if not success:
+                    m["viable"] = False
+                return
+
     def get_confirmed_capabilities(self) -> list[InvestigatedCapability]:
         return [c for c in self.capabilities.values() if c.state == EpistemicState.CONFIRMED]
 
@@ -247,6 +302,11 @@ class ApplicationUnderstanding(BaseModel):
             "purpose": self.identity_and_purpose,
             "personas": self.likely_personas,
             "is_authenticated": self.is_currently_authenticated,
+            "auth_strategy": self.selected_auth_strategy,
+            "discovered_auth_methods": [
+                {"type": m.get("type"), "provider": m.get("provider"), "viable": m.get("viable"), "attempted": m.get("attempted")}
+                for m in self.discovered_auth_methods
+            ],
             "areas_count": len(self.areas),
             "areas": [{"name": a.name, "authenticated": a.is_authenticated, "path": a.path_pattern} for a in self.areas.values()],
             "confirmed_capabilities": [

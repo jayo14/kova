@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
+from urllib.parse import urljoin
 
 from app.engine.exploration.agent.policy import is_dangerous_control, is_safe_to_click
 from app.engine.exploration.agent.schemas import AgentActionProposal, ExplorationAction
@@ -67,6 +68,8 @@ async def execute_open_link(
 
     try:
         current = getattr(page, "url", None)
+        if url.startswith("/") and current:
+            url = urljoin(current, url)
         if current and history is not None:
             history.append(str(current))
 
@@ -231,9 +234,36 @@ async def execute_authenticate(
     if not email or not password:
         return False, "Missing username/email or password for authentication"
 
+    # Identify and fill full name if present on registration forms
+    name = creds.get("name") or "Kova Tester"
+    name_selectors = [
+        'input[autocomplete="name" i]',
+        'input[placeholder*="name" i]',
+        'input[placeholder*="logbook" i]',
+        '#su-n',
+        'input[id*="name" i]',
+        'input[name*="name" i]',
+    ]
+    for s in name_selectors:
+        try:
+            nl = page.locator(s)
+            if hasattr(nl, "first"):
+                nl = nl.first
+            if hasattr(nl, "is_visible") and await nl.is_visible(timeout=200):
+                if hasattr(nl, "focus"):
+                    await nl.focus()
+                await nl.fill(name)
+                if hasattr(nl, "evaluate"):
+                    await nl.evaluate("el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }")
+                break
+        except Exception:
+            pass
+
     # Identify email/user input
     email_selectors = [
         'input[type="email"]',
+        '#su-e',
+        '#email',
         'input[name*="email" i]',
         'input[name*="user" i]',
         'input[autocomplete="email"]',
@@ -246,7 +276,7 @@ async def execute_authenticate(
             l = page.locator(s)
             if hasattr(l, "first"):
                 l = l.first
-            if await l.is_visible(timeout=500):
+            if hasattr(l, "is_visible") and await l.is_visible(timeout=500):
                 email_loc = l
                 break
         except Exception:
@@ -269,6 +299,8 @@ async def execute_authenticate(
     # Identify password input
     password_selectors = [
         'input[type="password"]',
+        '#su-p',
+        '#password',
         'input[name*="password" i]',
         'input[autocomplete*="password"]',
         'input[placeholder*="password" i]',
@@ -279,7 +311,7 @@ async def execute_authenticate(
             l = page.locator(s)
             if hasattr(l, "first"):
                 l = l.first
-            if await l.is_visible(timeout=500):
+            if hasattr(l, "is_visible") and await l.is_visible(timeout=500):
                 pwd_loc = l
                 break
         except Exception:
@@ -299,8 +331,78 @@ async def execute_authenticate(
     except Exception as exc:
         return False, f"Failed filling password: {exc}"
 
-    # Submit login
-    submit_success, msg = await execute_submit_form(page, target)
+    # Fill confirm password if present on registration forms
+    confirm_pwd_selectors = [
+        'input[name*="confirm" i]',
+        'input[id*="confirm" i]',
+        'input[placeholder*="confirm" i]',
+        'input[autocomplete="new-password"] + input',
+    ]
+    for cs in confirm_pwd_selectors:
+        try:
+            cloc = page.locator(cs)
+            if hasattr(cloc, "first"):
+                cloc = cloc.first
+            if hasattr(cloc, "is_visible") and await cloc.is_visible(timeout=200):
+                if hasattr(cloc, "focus"):
+                    await cloc.focus()
+                await cloc.fill(password)
+                if hasattr(cloc, "evaluate"):
+                    await cloc.evaluate(
+                        "el => { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }"
+                    )
+                break
+        except Exception:
+            pass
+
+    # Agree to terms checkbox if required
+    terms_selectors = [
+        '#su-t',
+        'input[type="checkbox"][name*="term" i]',
+        'input[type="checkbox"][name*="agree" i]',
+        'input[type="checkbox"][id*="term" i]',
+        'input[type="checkbox"]',
+    ]
+    for ts in terms_selectors:
+        try:
+            tc = page.locator(ts)
+            if hasattr(tc, "first"):
+                tc = tc.first
+            if hasattr(tc, "is_visible") and await tc.is_visible(timeout=200):
+                if hasattr(tc, "is_checked") and not await tc.is_checked():
+                    await tc.check()
+                break
+        except Exception:
+            pass
+
+    # Submit login or registration (explicitly avoiding OAuth buttons)
+    submit_success = False
+    candidate_submits = [
+        'button[type="submit"]',
+        'button:has-text("Create account")',
+        'button:has-text("Sign in")',
+        'button:has-text("Log in")',
+        'input[type="submit"]',
+    ]
+    for cs in candidate_submits:
+        try:
+            btn = page.locator(cs)
+            if hasattr(btn, "first"):
+                btn = btn.first
+            if hasattr(btn, "is_visible") and await btn.is_visible(timeout=300):
+                # Verify it does not say Google / GitHub / etc.
+                txt = (await btn.inner_text() if hasattr(btn, "inner_text") else "").lower()
+                if not any(oa in txt for oa in ["google", "github", "apple", "microsoft", "sso"]):
+                    if hasattr(btn, "click"):
+                        await btn.click(timeout=5000)
+                        submit_success = True
+                        break
+        except Exception:
+            pass
+
+    if not submit_success:
+        submit_success, msg = await execute_submit_form(page, target)
+
     if not submit_success and hasattr(pwd_loc, "press"):
         try:
             await pwd_loc.press("Enter")
@@ -310,6 +412,14 @@ async def execute_authenticate(
 
     if not submit_success:
         return False, "Failed submitting authentication form"
+
+    # Allow brief settling for navigation or SPA redirection
+    try:
+        if hasattr(page, "wait_for_load_state"):
+            await page.wait_for_load_state("networkidle", timeout=3000)
+    except Exception:
+        pass
+    await asyncio.sleep(1.0)
 
     return True, "Submitted credentials for authentication"
 

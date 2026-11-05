@@ -494,3 +494,158 @@ async def test_synthetic_credentials_lifecycle_and_reuse():
     assert engine.project_id == project_id
     assert engine._db_session == mock_db
 
+
+# ---------------------------------------------------------------------------
+# 6. Intelligent Authentication Strategy Evaluator Tests
+# ---------------------------------------------------------------------------
+
+def test_auth_evaluator_discovers_all_doors_on_login_surface():
+    """Verify that all doors (OAuth, email/pwd, registration, recovery) are identified on login surfaces."""
+    from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
+
+    observation = {
+        "url": "https://app.test/login",
+        "controls": [
+            {"type": "button", "text": "Continue with Google", "name": "Continue with Google", "selector": "#btn-google"},
+            {"type": "submit", "text": "Sign in", "name": "Sign in", "selector": "#btn-signin"},
+        ],
+        "links": [
+            {"name": "Forgot password?", "href": "https://app.test/login#forgot", "selector": "a#forgot"},
+            {"name": "Create an account", "href": "https://app.test/register", "selector": "a#register"},
+        ],
+        "elements": [
+            {"type": "email", "name": "email", "placeholder": "Email", "selector": "#email"},
+            {"type": "password", "name": "password", "placeholder": "Password", "selector": "#password"},
+        ],
+    }
+
+    analysis = AuthStrategyEvaluator.analyze_surface(observation, "https://app.test/login")
+    assert analysis.is_auth_surface is True
+    assert analysis.has_native_login is True
+    assert analysis.has_registration_link is True
+    assert analysis.has_oauth is True
+    assert len(analysis.options) >= 3
+
+    types = {o.method_type for o in analysis.options}
+    assert "native_login" in types
+    assert "self_registration" in types
+    assert "oauth" in types
+    assert "recovery" in types
+
+
+def test_auth_strategy_selection_prioritizes_credentials_then_registration_over_oauth():
+    """Verify strategy selection prefers credentials, then self-registration over blind OAuth."""
+    from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
+
+    observation = {
+        "url": "https://app.test/login",
+        "controls": [
+            {"type": "button", "text": "Continue with Google", "selector": "#google"},
+            {"type": "submit", "text": "Sign in", "selector": "#signin"},
+        ],
+        "links": [
+            {"name": "Create an account", "href": "https://app.test/register", "selector": "#create-act"},
+        ],
+        "elements": [
+            {"type": "email", "name": "email"},
+            {"type": "password", "name": "password"},
+        ],
+    }
+    analysis = AuthStrategyEvaluator.analyze_surface(observation, "https://app.test/login")
+
+    # Scenario A: Project credentials provided -> Native Login selected
+    und_a = ApplicationUnderstanding(target_url="https://app.test/login")
+    creds = {"email": "user@example.com", "password": "SecretPassword123!"}
+    strat_a, just_a = AuthStrategyEvaluator.select_strategy(analysis, creds, und_a)
+    assert strat_a is not None
+    assert strat_a.method_type == "native_login"
+    assert "credentials available" in just_a.lower()
+
+    # Scenario B: No credentials provided -> Native self-registration link selected over OAuth
+    und_b = ApplicationUnderstanding(target_url="https://app.test/login")
+    strat_b, just_b = AuthStrategyEvaluator.select_strategy(analysis, None, und_b)
+    assert strat_b is not None
+    assert strat_b.method_type == "self_registration"
+    assert strat_b.target_url == "https://app.test/register"
+    assert "registration discovered and selected" in just_b.lower()
+
+
+def test_repetitive_failed_oauth_prevention():
+    """Verify that once an OAuth attempt fails, it is marked unviable and never repeated."""
+    from app.engine.exploration.agent.auth_evaluator import AuthStrategyEvaluator
+
+    observation = {
+        "url": "https://app.test/login",
+        "controls": [
+            {"type": "button", "text": "Continue with Google", "selector": "#google"},
+        ],
+        "links": [
+            {"name": "Sign up with email", "href": "https://app.test/signup", "selector": "#signup"},
+        ],
+        "elements": [],
+    }
+    analysis = AuthStrategyEvaluator.analyze_surface(observation, "https://app.test/login")
+
+    und = ApplicationUnderstanding(target_url="https://app.test/login")
+    # Simulate a prior failed Google OAuth attempt
+    und.record_auth_attempt("oauth", "google", success=False, outcome="OAuth popup closed without authentication")
+
+    # When evaluating, google OAuth should NOT be selected
+    strat, just = AuthStrategyEvaluator.select_strategy(analysis, None, und)
+    assert strat is not None
+    assert strat.method_type == "self_registration"
+    assert strat.target_url == "https://app.test/signup"
+
+
+@pytest.mark.asyncio
+async def test_epistemic_agent_emits_structured_auth_progress_and_prioritizes_entrance_links():
+    """Verify structured activity progress events and landing page link prioritization."""
+    emitted_events: list[tuple[str, dict]] = []
+
+    async def mock_emitter(event_type: str, payload: dict):
+        emitted_events.append((event_type, payload))
+
+    page = MockPage("https://app.test/login")
+    page.locators["#google"] = MockLocator("#google")
+    page.locators["#register-btn"] = MockLocator("#register-btn")
+
+    engine = AsyncMock()
+    obs_login = {
+        "url": "https://app.test/login",
+        "controls": [
+            {"type": "button", "text": "Continue with Google", "name": "Continue with Google", "selector": "#google"},
+            {"type": "submit", "text": "Sign in", "name": "Sign in", "selector": "#signin"},
+        ],
+        "links": [
+            {"name": "Create an account", "href": "https://app.test/register", "selector": "#register-btn"},
+            {"name": "Features", "href": "https://app.test/#features", "selector": "#feat"},
+        ],
+        "elements": [
+            {"type": "email", "name": "email", "selector": "#email"},
+            {"type": "password", "name": "password", "selector": "#password"},
+        ],
+    }
+    engine._observe_current_page.return_value = obs_login
+
+    agent = EpistemicExplorationAgent(
+        engine=engine,
+        page=page,
+        event_emitter=mock_emitter,
+        budget={"max_actions": 1, "max_wall_clock": 10},
+    )
+
+    # Propose action on login page
+    proposal = await agent._propose(obs_login, agent.sitemap.get_or_create_node(obs_login["url"], obs_login))
+    assert proposal is not None
+    assert proposal.source == "auth_strategy_evaluator"
+    assert proposal.action == ExplorationAction.OPEN_LINK
+    assert proposal.target.get("url") == "https://app.test/register"
+
+    # Verify structured progress messages were emitted
+    progress_messages = [p.get("message") for et, p in emitted_events if et == "progress"]
+    assert any("Discovered authentication options" in m for m in progress_messages)
+    assert any("Evaluating available access" in m for m in progress_messages)
+    assert any("Selected Account Registration Link" in m for m in progress_messages)
+    assert any("Executing selected strategy" in m for m in progress_messages)
+
+
