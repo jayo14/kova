@@ -109,7 +109,7 @@ class ResourceBudget:
             self.termination_reason = "no_evidence_acquired"
             return
 
-        attempted = [c for c in self.categories.values() if c.actions_taken > 0]
+        attempted = [c for c in self.categories.values() if c.actions_taken >= 3]
         if attempted and all(
             c.productivity <= self.diminishing_returns_threshold for c in attempted
         ):

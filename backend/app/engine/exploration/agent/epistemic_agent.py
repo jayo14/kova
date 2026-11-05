@@ -443,6 +443,7 @@ class EpistemicExplorationAgent:
                 after_node.url_norm != node.url_norm
                 or len(after_obs.get("controls") or []) != len(observation.get("controls") or [])
                 or len(after_obs.get("links") or []) != len(observation.get("links") or [])
+                or len(after_obs.get("dialogs") or []) != len(observation.get("dialogs") or [])
                 or self.understanding.is_currently_authenticated
             )
             if not self.budget.spend(action_category, evidence_gained=evidence_gained, step=steps):
