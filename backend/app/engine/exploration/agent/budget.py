@@ -109,6 +109,15 @@ class ResourceBudget:
             self.termination_reason = "no_evidence_acquired"
             return
 
+        # Don't declare diminishing returns if there are categories that haven't
+        # been tried yet -- they may still yield useful evidence.
+        untried = [c for c in self.categories.values() if c.actions_taken == 0]
+        if untried:
+            return
+
+        # Only consider diminishing returns after each attempted category has had
+        # enough actions to establish a pattern. A single unproductive action
+        # does not mean a category is exhausted.
         attempted = [c for c in self.categories.values() if c.actions_taken >= 3]
         if attempted and all(
             c.productivity <= self.diminishing_returns_threshold for c in attempted
@@ -129,7 +138,7 @@ class ResourceBudget:
         if self.is_category_blocked(category):
             return False
         cat = self.categories.get(category)
-        if cat is None:
+        if cat is None or cat.actions_taken == 0:
             return True
         return cat.productivity > self.diminishing_returns_threshold
 

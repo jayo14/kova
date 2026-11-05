@@ -871,6 +871,12 @@ def deduplicate_and_rank_journeys(
     goal: str | None = None,
 ) -> list[DiscoveredMission]:
     """Validate, repair, deduplicate, score, and rank candidate journeys.
+
+    Guarantees:
+    - Never recommends shallow navigation or auth as the primary journey when real features exist
+    - Rejects invalid or unrepaired journeys
+    - Recommends the highest-value functional workflow with an explicit rationale
+    """
     # Consolidate journeys that achieve the same user goal through different entry points.
     consolidated: list[DiscoveredMission] = []
     seen_goals: dict[str, DiscoveredMission] = {}
@@ -889,12 +895,7 @@ def deduplicate_and_rank_journeys(
         seen_goals[goal_key] = m
         consolidated.append(m)
     missions = consolidated
-    
-    Guarantees:
-    - Never recommends shallow navigation or auth as the primary journey when real features exist
-    - Rejects invalid or unrepaired journeys
-    - Recommends the highest-value functional workflow with an explicit rationale
-    """
+
     validated: list[DiscoveredMission] = []
     blocked_missions: list[DiscoveredMission] = []
     seen_keys: set[str] = set()

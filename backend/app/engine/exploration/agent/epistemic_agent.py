@@ -576,6 +576,12 @@ class EpistemicExplorationAgent:
                         outcome=f"Inconclusive (remained at {after_url})",
                     )
                     await self._emit_progress(f"Registration outcome remains inconclusive at {after_url}; checking session state")
+                    failed_same = sum(
+                        1 for a in self.understanding.attempted_auth_strategies
+                        if a.get("type") == strategy_type and not a.get("success")
+                    )
+                    if failed_same >= 1:
+                        self.understanding.mark_auth_blocked("Repeated authentication attempts did not establish a session")
                 else:
                     self.understanding.record_auth_attempt(
                         strategy_type,
@@ -588,7 +594,7 @@ class EpistemicExplorationAgent:
                         1 for a in self.understanding.attempted_auth_strategies
                         if a.get("type") == strategy_type and not a.get("success")
                     )
-                    if failed_same >= 2:
+                    if failed_same >= 1:
                         self.understanding.mark_auth_blocked("Repeated authentication attempts did not establish a session")
             elif proposal.action == ExplorationAction.OPEN_LINK:
                 after_path = urlparse(after_url).path.lower()
