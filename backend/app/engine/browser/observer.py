@@ -508,14 +508,91 @@ class PageObserver:
                 if (headings.length >= 6) break;
             }
 
-            // 9. Dialogs
-            const dialogNodes = document.querySelectorAll("dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true']");
+            // 9. Dialogs & Interface Obstructions
+            const dialogSelectors = "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true'], .modal:not([style*='display: none']), [class*='modal']:not([style*='display: none']):not(body):not(html), [class*='dialog']:not([style*='display: none']):not(body):not(html)";
+            const dialogNodes = document.querySelectorAll(dialogSelectors);
             const dialogs = [];
+            const seenDialogEls = new Set();
             for (const d of dialogNodes) {
                 if (!isVisible(d)) continue;
+                if (seenDialogEls.has(d)) continue;
+                const style = window.getComputedStyle(d);
+                const isDialogTag = d.tagName.toLowerCase() === 'dialog';
+                const hasDialogRole = d.getAttribute('role') === 'dialog' || d.getAttribute('role') === 'alertdialog';
+                const isAriaModal = d.getAttribute('aria-modal') === 'true';
+                const isOverlay = style.position === 'fixed' || style.position === 'absolute';
+                if (!isDialogTag && !hasDialogRole && !isAriaModal && !isOverlay) continue;
+
+                seenDialogEls.add(d);
+                const bbox = getBbox(d);
+                const ariaLabel = d.getAttribute('aria-label') || '';
+                const headingEl = d.querySelector('h1, h2, h3, h4, h5, [role="heading"], [class*="title"], [class*="header"]');
+                const title = ariaLabel || (headingEl ? (headingEl.innerText || '').trim() : '') || d.getAttribute('title') || '';
+                const descEl = d.querySelector('p, [class*="desc"], [class*="content"], [class*="text"]');
+                const description = descEl ? (descEl.innerText || '').trim().slice(0, 300) : '';
+
+                // Extract interactive buttons inside the dialog
+                const dButtons = [];
+                d.querySelectorAll('button, [role="button"], a[href], input[type="submit"], input[type="button"]').forEach(btn => {
+                    if (!isVisible(btn)) return;
+                    const btnName = inferName(btn, btn.tagName.toLowerCase());
+                    const ariaL = btn.getAttribute('aria-label') || '';
+                    const textContent = (btn.innerText || '').trim();
+                    const selector = buildSelector(btn);
+                    dButtons.push({
+                        name: btnName || textContent || ariaL,
+                        text: textContent,
+                        aria_label: ariaL,
+                        role: btn.getAttribute('role') || btn.tagName.toLowerCase(),
+                        selector: selector,
+                        tag: btn.tagName.toLowerCase(),
+                    });
+                });
+
+                // Extract inputs inside dialog
+                const dInputs = [];
+                d.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(inp => {
+                    if (!isVisible(inp)) return;
+                    dInputs.push({
+                        name: inp.getAttribute('name') || '',
+                        id: inp.id || '',
+                        label: getLabel(inp),
+                        type: inp.getAttribute('type') || inp.tagName.toLowerCase(),
+                        required: Boolean(inp.required),
+                        placeholder: inp.getAttribute('placeholder') || '',
+                        selector: buildSelector(inp),
+                        value: inp.value || '',
+                    });
+                });
+
+                // Determine if obstructing viewport
+                const vw = window.innerWidth || 1024;
+                const vh = window.innerHeight || 768;
+                const coverage = bbox ? ((bbox.width * bbox.height) / (vw * vh)) : 0;
+                const isModal = isDialogTag || isAriaModal || style.position === 'fixed' || hasDialogRole;
+                const isObstructing = isModal || coverage > 0.25;
+
+                // Check dismissibility
+                const dismissKeywords = ['close', 'dismiss', 'cancel', 'got it', 'not now', 'maybe later', 'skip', 'later', 'no thanks', '✕', '×'];
+                const canDismiss = dButtons.some(b => {
+                    const combined = (b.name + ' ' + b.text + ' ' + b.aria_label).toLowerCase();
+                    return dismissKeywords.some(kw => combined.includes(kw));
+                });
+
                 dialogs.push({
-                    text: (d.innerText || '').trim().slice(0, 300),
-                    bounding_box: getBbox(d),
+                    accessible_name: title,
+                    title: title,
+                    description: description,
+                    role: d.getAttribute('role') || (isDialogTag ? 'dialog' : 'modal'),
+                    is_modal: isModal,
+                    aria_modal: isAriaModal,
+                    selector: buildSelector(d),
+                    text: (d.innerText || '').trim().slice(0, 800),
+                    bounding_box: bbox,
+                    is_obstructing: isObstructing,
+                    buttons: dButtons,
+                    inputs: dInputs,
+                    can_dismiss: canDismiss,
                 });
                 if (dialogs.length >= 5) break;
             }
@@ -1168,20 +1245,54 @@ class PageObserver:
             return []
 
     async def _observe_dialogs(self) -> list[dict]:
-        """Extract visible modal dialogs and alerts."""
+        """Extract visible modal dialogs, alerts, and obstructions."""
         results = []
         frames = await self._get_frames()
         for frame in frames:
             try:
                 modals = await frame.query_selector_all(
-                    "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true'], .modal:not([style*='display: none'])"
+                    "dialog[open], [role='dialog'], [role='alertdialog'], [aria-modal='true'], .modal:not([style*='display: none']), [class*='modal']:not([style*='display: none'])"
                 )
                 for m in modals:
                     try:
                         if await m.is_visible():
-                            txt = (await m.inner_text()).strip()[:300]
+                            txt = (await m.inner_text()).strip()[:800]
                             box = await self._get_bbox(m)
-                            results.append({"text": txt, "bounding_box": box})
+                            aria_label = await m.get_attribute("aria-label") or ""
+                            role = await m.get_attribute("role") or "dialog"
+                            is_aria_modal = (await m.get_attribute("aria-modal")) == "true"
+                            buttons = []
+                            for b in await m.query_selector_all("button, [role='button'], a[href]"):
+                                try:
+                                    if await b.is_visible():
+                                        b_txt = (await b.inner_text()).strip()
+                                        b_aria = await b.get_attribute("aria-label") or ""
+                                        buttons.append({
+                                            "name": b_txt or b_aria,
+                                            "text": b_txt,
+                                            "aria_label": b_aria,
+                                            "role": await b.get_attribute("role") or "button",
+                                            "selector": await self._build_selector(b) if hasattr(self, "_build_selector") else None,
+                                        })
+                                except Exception:
+                                    continue
+                            dismiss_keywords = ["close", "dismiss", "cancel", "got it", "not now", "maybe later", "skip", "later", "no thanks", "✕", "×"]
+                            can_dismiss = any(
+                                any(kw in (b["name"] + " " + b["text"] + " " + b["aria_label"]).lower() for kw in dismiss_keywords)
+                                for b in buttons
+                            )
+                            results.append({
+                                "accessible_name": aria_label or txt.split("\n")[0][:80],
+                                "title": aria_label or txt.split("\n")[0][:80],
+                                "role": role,
+                                "is_modal": True,
+                                "aria_modal": is_aria_modal,
+                                "text": txt,
+                                "bounding_box": box,
+                                "is_obstructing": True,
+                                "buttons": buttons,
+                                "can_dismiss": can_dismiss,
+                            })
                     except Exception:
                         continue
             except Exception:
