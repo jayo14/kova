@@ -132,7 +132,7 @@ def _is_allowed_origin(origin: str | None) -> bool:
     clean = origin.rstrip("/")
     if clean in [o.rstrip("/") for o in settings.cors_origins_list]:
         return True
-    if re.match(r"^https://([a-zA-Z0-9_-]+\.)*(kova\.app|vercel\.app|rumptycloud\.app)$", clean):
+    if re.match(r"^https://([a-zA-Z0-9_-]+\.)*(kova\.app|vercel\.app|rumptycloud\.app|rumptycloud\.com)$", clean):
         return True
     return False
 
