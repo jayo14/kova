@@ -414,12 +414,20 @@ async def execute_authenticate(
         return False, "Failed submitting authentication form"
 
     # Allow brief settling for navigation or SPA redirection
+    current_url = getattr(page, "url", None)
     try:
         if hasattr(page, "wait_for_load_state"):
             await page.wait_for_load_state("networkidle", timeout=3000)
     except Exception:
         pass
-    await asyncio.sleep(1.0)
+
+    # Poll up to 6 seconds for client-side SPA navigation / auth redirect
+    if current_url:
+        for _ in range(30):
+            await asyncio.sleep(0.2)
+            new_url = getattr(page, "url", current_url)
+            if new_url != current_url:
+                break
 
     return True, "Submitted credentials for authentication"
 

@@ -331,10 +331,14 @@ class AuthStrategyEvaluator:
         """Converts the selected authentication strategy into a targeted epistemic action."""
         if strategy.method_type == "self_registration":
             if strategy.target_url:
-                # Need to navigate to the registration form
+                target = dict(strategy.element or {})
+                target["url"] = strategy.target_url
+                target["href"] = strategy.target_url
+                target["text"] = (strategy.element or {}).get("name") or (strategy.element or {}).get("text") or strategy.label
+                target["selector"] = (strategy.element or {}).get("selector") or strategy.selector
                 return AgentActionProposal(
                     action=ExplorationAction.OPEN_LINK,
-                    target={"url": strategy.target_url, "selector": strategy.selector, "text": strategy.label},
+                    target=target,
                     reason="navigate to native self-registration to acquire workspace access",
                     confidence=0.85,
                 )
@@ -357,9 +361,14 @@ class AuthStrategyEvaluator:
 
         elif strategy.method_type == "native_login":
             if strategy.target_url:
+                target = dict(strategy.element or {})
+                target["url"] = strategy.target_url
+                target["href"] = strategy.target_url
+                target["text"] = (strategy.element or {}).get("name") or (strategy.element or {}).get("text") or strategy.label
+                target["selector"] = (strategy.element or {}).get("selector") or strategy.selector
                 return AgentActionProposal(
                     action=ExplorationAction.OPEN_LINK,
-                    target={"url": strategy.target_url, "selector": strategy.selector, "text": strategy.label},
+                    target=target,
                     reason="navigate to sign-in form to authenticate",
                     confidence=0.85,
                 )
@@ -372,9 +381,13 @@ class AuthStrategyEvaluator:
                 )
 
         elif strategy.method_type == "oauth":
+            target = dict(strategy.element or {})
+            target["provider"] = strategy.provider
+            target["text"] = (strategy.element or {}).get("name") or (strategy.element or {}).get("text") or strategy.label
+            target["selector"] = (strategy.element or {}).get("selector") or strategy.selector
             return AgentActionProposal(
                 action=ExplorationAction.CLICK_CONTROL,
-                target={"text": strategy.label, "selector": strategy.selector, "provider": strategy.provider},
+                target=target,
                 reason=f"investigate {strategy.provider.capitalize()} OAuth external authentication provider",
                 confidence=0.4,
             )

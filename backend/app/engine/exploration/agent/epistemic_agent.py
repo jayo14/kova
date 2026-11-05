@@ -400,10 +400,17 @@ class EpistemicExplorationAgent:
             # Evaluate authentication verification outcomes
             if is_auth_investigation:
                 self._update_understanding_from_obs(after_obs, after_node)
-                is_now_auth = self.understanding.is_currently_authenticated or any(
-                    k in after_url.lower() for k in ("/dashboard", "/workspace", "/app", "/console", "/account", "/home")
+                after_path = urlparse(after_url).path.lower()
+                is_after_auth_area = any(p in after_path for p in ("/login", "/register", "/signup", "/signin", "/sign-in", "/auth"))
+
+                is_now_auth = (
+                    not is_after_auth_area
+                    and (
+                        self.understanding.is_currently_authenticated
+                        or any(k in after_url.lower() for k in ("/dashboard", "/workspace", "/app", "/console", "/account", "/home"))
+                    )
                 )
-                if not is_now_auth and hasattr(self.page, "evaluate"):
+                if not is_now_auth and not is_after_auth_area and hasattr(self.page, "evaluate"):
                     try:
                         storage_auth = await self.page.evaluate("""() => {
                             return Object.keys(localStorage).some(k => k.includes('token') || k.includes('user') || k.includes('auth')) ||
@@ -426,23 +433,27 @@ class EpistemicExplorationAgent:
                     strategy_type = "native_login"
                     provider = None
 
-                if is_now_auth:
-                    self.understanding.is_currently_authenticated = True
-                    self.understanding.record_auth_attempt(
-                        strategy_type,
-                        provider,
-                        success=True,
-                        outcome=f"Access granted: Reached {after_url}",
-                    )
-                    await self._emit_progress(f"Application access verified: Successfully entered application workspace at {after_url}")
-                else:
-                    self.understanding.record_auth_attempt(
-                        strategy_type,
-                        provider,
-                        success=False,
-                        outcome=f"Did not grant application access (remained at {after_url})",
-                    )
-                    await self._emit_progress(f"Application access not established: Remained at {after_url}")
+                # Only evaluate credential/auth verification on authentication submissions or OAuth clicks
+                if proposal.action == ExplorationAction.AUTHENTICATE or strategy_type == "oauth":
+                    if is_now_auth:
+                        self.understanding.is_currently_authenticated = True
+                        self.understanding.record_auth_attempt(
+                            strategy_type,
+                            provider,
+                            success=True,
+                            outcome=f"Access granted: Reached {after_url}",
+                        )
+                        await self._emit_progress(f"Application access verified: Successfully entered application workspace at {after_url}")
+                    else:
+                        self.understanding.record_auth_attempt(
+                            strategy_type,
+                            provider,
+                            success=False,
+                            outcome=f"Did not grant application access (remained at {after_url})",
+                        )
+                        await self._emit_progress(f"Application access not established: Remained at {after_url}")
+                elif proposal.action == ExplorationAction.OPEN_LINK and is_after_auth_area:
+                    await self._emit_progress(f"Navigated to authentication surface: {after_url}")
 
             await self._emit(
                 "exploration.agent.act",
@@ -584,12 +595,15 @@ class EpistemicExplorationAgent:
         if url_after != url_before:
             outcome = f"Navigated from {url_before} to {url_after}"
             self.understanding.confirm_capability(name, proposal.model_dump(mode="json"), outcome)
-            if "login" in url_before.lower() and "login" not in url_after.lower():
-                self.understanding.is_currently_authenticated = True
-                self.understanding.answer_question("Can we authenticate with project credentials?", "Authentication succeeded; redirected to application workspace")
-            elif "register" in url_before.lower() and "register" not in url_after.lower():
-                self.understanding.is_currently_authenticated = True
-                self.understanding.answer_question("Can a new user register for this application?", "Registration succeeded; reached application workspace")
+            after_path = urlparse(url_after).path.lower()
+            is_after_auth_area = any(p in after_path for p in ("/login", "/register", "/signup", "/signin", "/sign-in", "/auth"))
+            if not is_after_auth_area:
+                if "login" in url_before.lower():
+                    self.understanding.is_currently_authenticated = True
+                    self.understanding.answer_question("Can we authenticate with project credentials?", "Authentication succeeded; redirected to application workspace")
+                elif "register" in url_before.lower() or "signup" in url_before.lower():
+                    self.understanding.is_currently_authenticated = True
+                    self.understanding.answer_question("Can a new user register for this application?", "Registration succeeded; reached application workspace")
 
     async def _propose(
         self, observation: dict[str, Any], node: Any
