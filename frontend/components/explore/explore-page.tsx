@@ -865,9 +865,9 @@ export function ExplorePage() {
           <aside className="w-full lg:w-84 h-[480px] lg:h-full max-h-[calc(100vh-140px)] border-t lg:border-t-0 lg:border-l border-border bg-card/50 p-4 lg:p-5 flex flex-col justify-between overflow-hidden shrink-0">
             <div className="flex flex-col min-h-0 flex-1 overflow-hidden">
               <AgentStatus state={state.state} url={state.url} className="mb-4 shrink-0" />
-              <ScrollArea className="flex-1 min-h-0 pr-2">
+              <div className="flex-1 min-h-0 pr-2 overflow-y-auto">
                 <AgentActivity activities={state.activities} />
-              </ScrollArea>
+              </div>
             </div>
 
             <div className="pt-3 border-t border-border/60 mt-3 text-center shrink-0">
