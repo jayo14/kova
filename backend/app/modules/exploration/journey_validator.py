@@ -928,8 +928,17 @@ def deduplicate_and_rank_journeys(
         return blocked_missions[:max_results]
 
     # Prefer meaningful workflows over navigation-only journeys when available.
+    # Navigation-only missions are rejected from runnable results but retained as
+    # blocked entries for transparency.
     functional = [m for m in validated if not is_navigation_only_workflow(m)]
     if functional:
+        for m in validated:
+            if is_navigation_only_workflow(m):
+                m.runnable = False
+                m.recommended = False
+                if m.validation_status != "rejected_by_quality_gate":
+                    m.validation_status = "rejected_navigation_only"
+                blocked_missions.append(m)
         validated = functional
 
     # Score each validated journey
