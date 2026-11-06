@@ -124,25 +124,38 @@ logger = logging.getLogger(__name__)
 
 import re
 
+# Shared CORS origin pattern: allows subdomains of kova.app, vercel.app,
+# rumptycloud.app and rumptycloud.com. Anchored so it cannot match look-alike
+# domains such as evil.com/kova.app.
+_CORS_ORIGIN_PATTERN = (
+    r"https://([a-zA-Z0-9_-]+\.)*"
+    r"(kova\.app|vercel\.app|rumptycloud\.app|rumptycloud\.com)$"
+)
+
+
 def _is_allowed_origin(origin: str | None) -> bool:
     if not origin:
         return False
-    if not settings.is_production:
-        return True
     clean = origin.rstrip("/")
     if clean in [o.rstrip("/") for o in settings.cors_origins_list]:
         return True
-    if re.match(r"^https://([a-zA-Z0-9_-]+\.)*(kova\.app|vercel\.app|rumptycloud\.app|rumptycloud\.com)$", clean):
+    if re.match(_CORS_ORIGIN_PATTERN, clean):
         return True
+    # In development, also allow localhost origins
+    if not settings.is_production:
+        if re.match(r"https?://(localhost|127\.0\.0\.1)(:\d+)?$", clean):
+            return True
     return False
 
 
-# CORS: restrict in production with regex, allow all in development
+# CORS: restrict origins in all environments. allow_origin_regex is used
+# instead of allow_origins=["*"] because a wildcard origin is incompatible
+# with allow_credentials=True and causes browsers to drop CORS headers.
 if settings.is_production:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
-        allow_origin_regex=r"https://.*(kova\.app|vercel\.app|rumptycloud\.app|rumptycloud\.com).*",
+        allow_origin_regex=_CORS_ORIGIN_PATTERN,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -151,7 +164,7 @@ if settings.is_production:
 else:
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origin_regex=r"https?://(.+)",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
